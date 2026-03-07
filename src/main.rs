@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod engine;
 mod exec;
 mod platform;
 mod runtime;
@@ -34,18 +35,7 @@ fn main() {
 }
 
 fn cmd_generate(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    if config.verbose {
-        eprintln!("orchfile: {}", config.orchfile.display());
-        eprintln!("runtime:  {}", config.runtime);
-        eprintln!("platform: {}", config.platform);
-    }
-
-    // Phase 2 will implement the full pipeline:
-    // 1. Call orch parse
-    // 2. Deserialize JSON
-    // 3. Runtime check + prepare + exec_set
-    // 4. Platform generate + install
-    eprintln!("generate: not yet implemented");
+    engine::generate(config)?;
     Ok(())
 }
 
