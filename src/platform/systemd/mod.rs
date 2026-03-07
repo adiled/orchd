@@ -1,4 +1,5 @@
 pub mod generate;
+pub mod lifecycle;
 
 use std::path::PathBuf;
 

@@ -145,6 +145,78 @@ pub fn generate(config: &Config) -> Result<(), EngineError> {
     Ok(())
 }
 
+/// Generate and start services.
+/// If `no_generate` is false, runs generate first.
+pub fn up(
+    config: &Config,
+    services: &[String],
+    no_generate: bool,
+) -> Result<(), EngineError> {
+    if !no_generate {
+        generate(config)?;
+    }
+
+    if !config.quiet {
+        if services.is_empty() {
+            eprintln!("starting all services...");
+        } else {
+            eprintln!("starting: {}", services.join(", "));
+        }
+    }
+
+    crate::platform::systemd::lifecycle::start(services, config)?;
+
+    if !config.quiet {
+        eprintln!("started");
+    }
+
+    Ok(())
+}
+
+/// Stop services.
+pub fn down(config: &Config, services: &[String]) -> Result<(), EngineError> {
+    if !config.quiet {
+        if services.is_empty() {
+            eprintln!("stopping all services...");
+        } else {
+            eprintln!("stopping: {}", services.join(", "));
+        }
+    }
+
+    crate::platform::systemd::lifecycle::stop(services, config)?;
+
+    if !config.quiet {
+        eprintln!("stopped");
+    }
+
+    Ok(())
+}
+
+/// Restart services.
+pub fn restart(config: &Config, services: &[String]) -> Result<(), EngineError> {
+    if !config.quiet {
+        if services.is_empty() {
+            eprintln!("restarting all services...");
+        } else {
+            eprintln!("restarting: {}", services.join(", "));
+        }
+    }
+
+    crate::platform::systemd::lifecycle::restart(services, config)?;
+
+    if !config.quiet {
+        eprintln!("restarted");
+    }
+
+    Ok(())
+}
+
+/// Show status of managed services.
+pub fn status(config: &Config, as_json: bool) -> Result<(), EngineError> {
+    crate::platform::systemd::lifecycle::status(config, as_json)?;
+    Ok(())
+}
+
 /// Call `orch parse <orchfile> [overlays...] [--arg key=value ...]` and return stdout JSON.
 fn call_orch_parse(config: &Config) -> Result<String, EngineError> {
     let mut cmd = Command::new(&config.orch_bin);
