@@ -3,40 +3,31 @@ pub mod bare;
 use crate::config::Config;
 use crate::exec::ExecSet;
 use crate::types::Service;
-use std::fmt;
 
 /// Errors from runtime operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     /// A container-mode service was passed to a host-only runtime.
+    #[error("service '{service}' has mode '{mode}' which is not supported by this runtime")]
     UnsupportedMode { service: String, mode: String },
     /// The runtime's prerequisites are not met.
+    #[allow(dead_code)]
+    #[error("prerequisite missing: {0}")]
     PrerequisiteMissing(String),
     /// A required binary or tool is not found.
+    #[allow(dead_code)]
+    #[error("binary not found: {0}")]
     BinaryNotFound(String),
     /// General error.
+    #[error("{0}")]
     Other(String),
 }
-
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RuntimeError::UnsupportedMode { service, mode } => {
-                write!(f, "service '{}' has mode '{}' which is not supported by this runtime", service, mode)
-            }
-            RuntimeError::PrerequisiteMissing(msg) => write!(f, "prerequisite missing: {}", msg),
-            RuntimeError::BinaryNotFound(bin) => write!(f, "binary not found: {}", bin),
-            RuntimeError::Other(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl std::error::Error for RuntimeError {}
 
 /// A runtime knows how to prepare and produce execution commands for services.
 ///
 /// Runtimes are stateless -- they inspect the system and produce ExecSets.
 /// They do NOT start/stop services (that's the platform's job).
+#[allow(dead_code)]
 pub trait Runtime {
     /// Human-readable name for this runtime (e.g., "bare", "containerd").
     fn name(&self) -> &str;

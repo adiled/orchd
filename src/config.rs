@@ -10,6 +10,7 @@ pub struct Config {
     /// Runtime name: bare, containerd, podman, apple.
     pub runtime: String,
     /// Platform name: systemd, launchd.
+    #[allow(dead_code)]
     pub platform: String,
     /// State directory for generated artifacts.
     pub state_dir: PathBuf,

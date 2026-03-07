@@ -3,50 +3,37 @@ pub mod systemd;
 use crate::config::Config;
 use crate::exec::ExecSet;
 use crate::types::Service;
-use std::fmt;
 
 /// Errors from platform operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PlatformError {
     /// Platform prerequisites not met.
+    #[error("prerequisite missing: {0}")]
     PrerequisiteMissing(String),
     /// Failed to generate artifacts.
+    #[allow(dead_code)]
+    #[error("generation failed: {0}")]
     GenerationFailed(String),
     /// Failed to install artifacts (symlink, reload, etc.).
+    #[error("install failed: {0}")]
     InstallFailed(String),
     /// Failed lifecycle operation (start, stop, etc.).
+    #[error("lifecycle failed: {0}")]
     LifecycleFailed(String),
     /// I/O error.
-    Io(std::io::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
     /// General error.
+    #[allow(dead_code)]
+    #[error("{0}")]
     Other(String),
-}
-
-impl fmt::Display for PlatformError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PlatformError::PrerequisiteMissing(msg) => write!(f, "prerequisite missing: {}", msg),
-            PlatformError::GenerationFailed(msg) => write!(f, "generation failed: {}", msg),
-            PlatformError::InstallFailed(msg) => write!(f, "install failed: {}", msg),
-            PlatformError::LifecycleFailed(msg) => write!(f, "lifecycle failed: {}", msg),
-            PlatformError::Io(err) => write!(f, "I/O error: {}", err),
-            PlatformError::Other(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl std::error::Error for PlatformError {}
-
-impl From<std::io::Error> for PlatformError {
-    fn from(err: std::io::Error) -> Self {
-        PlatformError::Io(err)
-    }
 }
 
 /// A platform knows how to install and manage services on a specific init system.
 ///
 /// Platforms consume ExecSets (from runtimes) and produce native artifacts
 /// (systemd units, launchd plists, etc.).
+#[allow(dead_code)]
 pub trait Platform {
     /// Human-readable name (e.g., "systemd", "launchd").
     fn name(&self) -> &str;

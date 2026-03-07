@@ -5,6 +5,7 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 pub struct OrchFile {
     pub version: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub args: HashMap<String, String>,
     #[serde(default)]
@@ -45,12 +46,14 @@ impl Default for RecreatePolicy {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct PortMapping {
     pub host: u16,
     pub container: u16,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct VolumeMount {
     pub source: String,
@@ -100,16 +103,21 @@ pub struct Service {
     pub run_command: Option<String>,
 
     // Container-only
+    #[allow(dead_code)]
     pub entrypoint: Option<String>,
+    #[allow(dead_code)]
     pub cmd: Option<String>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub publish: Vec<PortMapping>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub volumes: Vec<VolumeMount>,
 
     // Host-only
     pub user: Option<String>,
     pub stop_command: Option<String>,
+    #[allow(dead_code)]
     pub reload_command: Option<String>,
 
     // Common
@@ -131,6 +139,7 @@ pub struct Service {
     pub oneshot: bool,
     #[serde(default)]
     pub disabled: bool,
+    #[allow(dead_code)]
     #[serde(default)]
     pub recreate: RecreatePolicy,
 
@@ -151,6 +160,7 @@ impl Service {
     }
 
     /// Returns true if this service runs in a container.
+    #[allow(dead_code)]
     pub fn is_container(&self) -> bool {
         self.mode == ServiceMode::Container
     }

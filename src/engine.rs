@@ -8,37 +8,16 @@ use crate::runtime;
 use crate::types::OrchFile;
 
 /// Errors from the engine pipeline.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum EngineError {
+    #[error("orch parse failed: {0}")]
     OrchParse(String),
+    #[error("JSON deserialization failed: {0}")]
     JsonDeserialize(String),
-    Runtime(crate::runtime::RuntimeError),
-    Platform(crate::platform::PlatformError),
-}
-
-impl std::fmt::Display for EngineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EngineError::OrchParse(msg) => write!(f, "orch parse failed: {}", msg),
-            EngineError::JsonDeserialize(msg) => write!(f, "JSON deserialization failed: {}", msg),
-            EngineError::Runtime(err) => write!(f, "runtime error: {}", err),
-            EngineError::Platform(err) => write!(f, "platform error: {}", err),
-        }
-    }
-}
-
-impl std::error::Error for EngineError {}
-
-impl From<crate::runtime::RuntimeError> for EngineError {
-    fn from(err: crate::runtime::RuntimeError) -> Self {
-        EngineError::Runtime(err)
-    }
-}
-
-impl From<crate::platform::PlatformError> for EngineError {
-    fn from(err: crate::platform::PlatformError) -> Self {
-        EngineError::Platform(err)
-    }
+    #[error("runtime error: {0}")]
+    Runtime(#[from] crate::runtime::RuntimeError),
+    #[error("platform error: {0}")]
+    Platform(#[from] crate::platform::PlatformError),
 }
 
 /// Run the full generate pipeline:
