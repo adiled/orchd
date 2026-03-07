@@ -1,5 +1,6 @@
 pub mod bare;
 
+use crate::config::Config;
 use crate::exec::ExecSet;
 use crate::types::Service;
 use std::fmt;
@@ -55,4 +56,15 @@ pub trait Runtime {
     /// Clean up runtime-specific artifacts for a service.
     /// Called during `orchd clean`.
     fn cleanup(&self, service: &Service) -> Result<(), RuntimeError>;
+}
+
+/// Create a runtime by name, using the given config for runtime-specific settings.
+pub fn create_runtime(name: &str, config: &Config) -> Result<Box<dyn Runtime>, RuntimeError> {
+    match name {
+        "bare" => Ok(Box::new(bare::BareRuntime::new(config.data_dir.clone()))),
+        _ => Err(RuntimeError::Other(format!(
+            "unknown runtime '{}'. Available: bare",
+            name
+        ))),
+    }
 }
