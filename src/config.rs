@@ -31,40 +31,73 @@ pub struct Config {
 }
 
 impl Config {
-    /// Build config by merging CLI args > environment > defaults.
+    /// Build config by merging CLI args > environment > .orchrc > defaults.
+    ///
+    /// `.orchrc` is a KEY=VALUE file searched in project_dir then HOME.
+    /// Supported keys: `runtime`, `platform`, `namespace`, `state_dir`,
+    /// `data_dir`, `orch_bin`, `orchfile`.
     pub fn load(cli: &crate::cli::Cli) -> Self {
         let project_dir = cli.project_dir.clone().unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         });
 
-        let orchfile = cli.orchfile.clone().unwrap_or_else(|| project_dir.join("Orchfile"));
+        // Load .orchrc (project_dir first, then home)
+        let rc = load_orchrc(&project_dir);
+
+        let orchfile = cli.orchfile.clone().unwrap_or_else(|| {
+            rc.get("orchfile")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| project_dir.join("Orchfile"))
+        });
 
         let state_dir = cli.state_dir.clone().unwrap_or_else(|| {
             std::env::var("ORCH_STATE_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    dirs_or_home().join(".orch")
+                    rc.get("state_dir")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| dirs_or_home().join(".orch"))
                 })
         });
 
-        let data_dir = cli.data_dir.clone().unwrap_or_else(|| state_dir.join("data"));
+        let data_dir = cli.data_dir.clone().unwrap_or_else(|| {
+            rc.get("data_dir")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| state_dir.join("data"))
+        });
 
         let orch_bin = cli.orch_bin.clone().unwrap_or_else(|| {
             std::env::var("ORCH_BIN")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("orch"))
+                .unwrap_or_else(|_| {
+                    rc.get("orch_bin")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("orch"))
+                })
         });
 
         let runtime = cli.runtime.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_RUNTIME").unwrap_or_else(|_| "bare".to_string())
+            std::env::var("ORCH_RUNTIME").unwrap_or_else(|_| {
+                rc.get("runtime")
+                    .cloned()
+                    .unwrap_or_else(|| "bare".to_string())
+            })
         });
 
         let platform = cli.platform.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_PLATFORM").unwrap_or_else(|_| detect_platform())
+            std::env::var("ORCH_PLATFORM").unwrap_or_else(|_| {
+                rc.get("platform")
+                    .cloned()
+                    .unwrap_or_else(detect_platform)
+            })
         });
 
         let namespace = cli.namespace.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_NAMESPACE").unwrap_or_else(|_| "orch".to_string())
+            std::env::var("ORCH_NAMESPACE").unwrap_or_else(|_| {
+                rc.get("namespace")
+                    .cloned()
+                    .unwrap_or_else(|| "orch".to_string())
+            })
         });
 
         Config {
@@ -97,6 +130,45 @@ impl Config {
     pub fn target_name(&self) -> String {
         format!("{}.target", self.namespace)
     }
+}
+
+/// Load `.orchrc` key-value config file.
+///
+/// Search order: `project_dir/.orchrc`, then `$HOME/.orchrc`.
+/// First file found wins (no merging between files).
+/// Format: `KEY=VALUE` per line, `#` comments, blank lines ignored.
+fn load_orchrc(project_dir: &std::path::Path) -> std::collections::HashMap<String, String> {
+    let candidates = [
+        project_dir.join(".orchrc"),
+        dirs_or_home().join(".orchrc"),
+    ];
+
+    for path in &candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return parse_orchrc(&content);
+        }
+    }
+
+    std::collections::HashMap::new()
+}
+
+/// Parse `.orchrc` content into key-value pairs.
+fn parse_orchrc(content: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(pos) = line.find('=') {
+            let key = line[..pos].trim().to_string();
+            let value = line[pos + 1..].trim().to_string();
+            if !key.is_empty() {
+                map.insert(key, value);
+            }
+        }
+    }
+    map
 }
 
 /// Auto-detect platform based on available init system.
@@ -264,5 +336,76 @@ mod tests {
         // On this Debian 12 LXC, /run/systemd/system exists
         let platform = detect_platform();
         assert_eq!(platform, "systemd");
+    }
+
+    // --- parse_orchrc ---
+
+    #[test]
+    fn test_parse_orchrc__basic_key_value() {
+        let content = "runtime=bare\nnamespace=myapp\n";
+        let rc = parse_orchrc(content);
+        assert_eq!(rc.get("runtime").unwrap(), "bare");
+        assert_eq!(rc.get("namespace").unwrap(), "myapp");
+    }
+
+    #[test]
+    fn test_parse_orchrc__comments_and_blanks_ignored() {
+        let content = "# comment\n\nruntime=bare\n  # another comment\n";
+        let rc = parse_orchrc(content);
+        assert_eq!(rc.len(), 1);
+        assert_eq!(rc.get("runtime").unwrap(), "bare");
+    }
+
+    #[test]
+    fn test_parse_orchrc__value_with_equals() {
+        let content = "orch_bin=/usr/local/bin/orch\n";
+        let rc = parse_orchrc(content);
+        assert_eq!(rc.get("orch_bin").unwrap(), "/usr/local/bin/orch");
+    }
+
+    #[test]
+    fn test_parse_orchrc__whitespace_trimmed() {
+        let content = "  runtime = bare  \n";
+        let rc = parse_orchrc(content);
+        assert_eq!(rc.get("runtime").unwrap(), "bare");
+    }
+
+    #[test]
+    fn test_parse_orchrc__empty_content() {
+        let rc = parse_orchrc("");
+        assert!(rc.is_empty());
+    }
+
+    #[test]
+    fn test_load__orchrc_sets_namespace() {
+        let tmp = std::env::temp_dir().join("orchd-test-orchrc");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join(".orchrc"), "namespace=from-rc\n").unwrap();
+
+        let mut cli = stub_cli();
+        cli.project_dir = Some(tmp.clone());
+        cli.namespace = None;
+        unsafe { std::env::remove_var("ORCH_NAMESPACE") };
+        let config = Config::load(&cli);
+        assert_eq!(config.namespace, "from-rc");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load__cli_overrides_orchrc() {
+        let tmp = std::env::temp_dir().join("orchd-test-orchrc-override");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join(".orchrc"), "namespace=from-rc\n").unwrap();
+
+        let mut cli = stub_cli();
+        cli.project_dir = Some(tmp.clone());
+        cli.namespace = Some("from-cli".to_string());
+        let config = Config::load(&cli);
+        assert_eq!(config.namespace, "from-cli");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
