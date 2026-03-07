@@ -1,0 +1,29 @@
+# Minimal Orchfile for integration tests.
+# Two host services with varying features.
+
+ARG DATA_DIR=/tmp/orchd-integ-data
+
+SERVICE postgres
+  MODE host
+  RUN_COMMAND /usr/bin/pg_ctlcluster 15 main start --foreground
+  STOP_COMMAND /usr/bin/pg_ctlcluster 15 main stop
+  USER postgres
+  ENV PGDATA=${DATA_DIR}/postgres
+  HEALTHCHECK pg_isready -h 127.0.0.1 -p 5432
+  READINESS_TIMEOUT 30s
+  RESTART on_failure
+  RESTART_DELAY 5s
+
+SERVICE redis
+  MODE host
+  RUN_COMMAND /usr/bin/redis-server --port 6379
+  STOP_COMMAND /usr/bin/redis-cli shutdown
+  HEALTHCHECK redis-cli ping
+  READINESS_TIMEOUT 10s
+  AFTER postgres
+  RESTART on_failure
+
+SERVICE disabled-svc
+  MODE host
+  RUN_COMMAND /bin/true
+  DISABLED

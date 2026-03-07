@@ -129,11 +129,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "orch"
+version = "0.2.0"
+source = "git+https://github.com/adiled/orch.git?branch=main#d1b93918236916b02b7eb1017a392e93de75f860"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "orchd"
 version = "0.1.0"
 dependencies = [
  "clap",
- "serde",
+ "orch",
  "serde_json",
  "thiserror",
 ]
