@@ -506,3 +506,131 @@ fn write_vars_overlay(config: &Config) -> Result<std::path::PathBuf, EngineError
 
     Ok(path)
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    // --- parse_duration_secs ---
+
+    #[test]
+    fn test_parse_duration_secs__seconds_suffix() {
+        assert_eq!(parse_duration_secs("30s"), 30);
+    }
+
+    #[test]
+    fn test_parse_duration_secs__minutes_suffix() {
+        assert_eq!(parse_duration_secs("2m"), 120);
+    }
+
+    #[test]
+    fn test_parse_duration_secs__plain_number() {
+        assert_eq!(parse_duration_secs("45"), 45);
+    }
+
+    #[test]
+    fn test_parse_duration_secs__invalid_falls_back_to_60() {
+        assert_eq!(parse_duration_secs("abc"), 60);
+    }
+
+    #[test]
+    fn test_parse_duration_secs__empty_falls_back_to_60() {
+        assert_eq!(parse_duration_secs(""), 60);
+    }
+
+    #[test]
+    fn test_parse_duration_secs__whitespace_trimmed() {
+        assert_eq!(parse_duration_secs("  10s  "), 10);
+    }
+
+    // --- EngineError Display ---
+
+    #[test]
+    fn test_engine_error_display__orch_parse() {
+        let err = EngineError::OrchParse("file not found".to_string());
+        assert_eq!(format!("{}", err), "orch parse failed: file not found");
+    }
+
+    #[test]
+    fn test_engine_error_display__json_deserialize() {
+        let err = EngineError::JsonDeserialize("unexpected token".to_string());
+        assert_eq!(
+            format!("{}", err),
+            "JSON deserialization failed: unexpected token"
+        );
+    }
+
+    #[test]
+    fn test_engine_error_display__runtime_wraps_inner() {
+        let inner = crate::runtime::RuntimeError::Other("boom".to_string());
+        let err = EngineError::Runtime(inner);
+        assert_eq!(format!("{}", err), "runtime error: boom");
+    }
+
+    #[test]
+    fn test_engine_error_display__platform_wraps_inner() {
+        let inner = crate::platform::PlatformError::LifecycleFailed("start failed".to_string());
+        let err = EngineError::Platform(inner);
+        assert_eq!(
+            format!("{}", err),
+            "platform error: lifecycle failed: start failed"
+        );
+    }
+
+    // --- From conversions ---
+
+    #[test]
+    fn test_engine_error_from_runtime_error() {
+        let inner = crate::runtime::RuntimeError::UnsupportedMode {
+            service: "web".to_string(),
+            mode: "container".to_string(),
+        };
+        let err: EngineError = inner.into();
+        assert!(matches!(err, EngineError::Runtime(_)));
+    }
+
+    #[test]
+    fn test_engine_error_from_platform_error() {
+        let inner = crate::platform::PlatformError::InstallFailed("symlink error".to_string());
+        let err: EngineError = inner.into();
+        assert!(matches!(err, EngineError::Platform(_)));
+    }
+
+    // --- write_vars_overlay ---
+
+    #[test]
+    fn test_write_vars_overlay__creates_file_with_arg_declarations() {
+        let tmp = std::env::temp_dir().join("orchd-test-vars-overlay");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let cli = crate::cli::Cli {
+            command: crate::cli::Commands::Generate { force: false },
+            orchfile: None,
+            overlay: vec![],
+            runtime: None,
+            platform: None,
+            state_dir: Some(tmp.clone()),
+            project_dir: Some(std::path::PathBuf::from("/srv/project")),
+            data_dir: Some(std::path::PathBuf::from("/srv/data")),
+            orch_bin: None,
+            namespace: None,
+            args: vec![],
+            verbose: false,
+            quiet: false,
+        };
+        let config = Config::load(&cli);
+
+        let path = write_vars_overlay(&config).unwrap();
+        assert!(path.exists());
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("ARG ORCH_DATA=/srv/data"));
+        assert!(content.contains("ARG ORCH_PROJECT=/srv/project"));
+        assert!(content.contains("ARG ORCH_STATE_DIR="));
+        assert!(content.contains("ARG ORCH_CONTAINERS_DIR="));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}

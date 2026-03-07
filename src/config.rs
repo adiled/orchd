@@ -116,3 +116,153 @@ fn dirs_or_home() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/root"))
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, Commands};
+
+    fn stub_cli() -> Cli {
+        Cli {
+            command: Commands::Generate { force: false },
+            orchfile: None,
+            overlay: vec![],
+            runtime: None,
+            platform: None,
+            state_dir: None,
+            project_dir: None,
+            data_dir: None,
+            orch_bin: None,
+            namespace: None,
+            args: vec![],
+            verbose: false,
+            quiet: false,
+        }
+    }
+
+    #[test]
+    fn test_load__defaults_runtime_to_bare() {
+        let cli = stub_cli();
+        // Clear env to ensure defaults
+        unsafe { std::env::remove_var("ORCH_RUNTIME") };
+        let config = Config::load(&cli);
+        assert_eq!(config.runtime, "bare");
+    }
+
+    #[test]
+    fn test_load__defaults_namespace_to_orch() {
+        let cli = stub_cli();
+        unsafe { std::env::remove_var("ORCH_NAMESPACE") };
+        let config = Config::load(&cli);
+        assert_eq!(config.namespace, "orch");
+    }
+
+    #[test]
+    fn test_load__cli_runtime_overrides_default() {
+        let mut cli = stub_cli();
+        cli.runtime = Some("containerd".to_string());
+        let config = Config::load(&cli);
+        assert_eq!(config.runtime, "containerd");
+    }
+
+    #[test]
+    fn test_load__cli_namespace_overrides_default() {
+        let mut cli = stub_cli();
+        cli.namespace = Some("myproject".to_string());
+        let config = Config::load(&cli);
+        assert_eq!(config.namespace, "myproject");
+    }
+
+    #[test]
+    fn test_load__cli_state_dir_overrides_default() {
+        let mut cli = stub_cli();
+        cli.state_dir = Some(PathBuf::from("/tmp/test-state"));
+        let config = Config::load(&cli);
+        assert_eq!(config.state_dir, PathBuf::from("/tmp/test-state"));
+    }
+
+    #[test]
+    fn test_load__data_dir_defaults_to_state_dir_data() {
+        let mut cli = stub_cli();
+        cli.state_dir = Some(PathBuf::from("/tmp/test-state"));
+        let config = Config::load(&cli);
+        assert_eq!(config.data_dir, PathBuf::from("/tmp/test-state/data"));
+    }
+
+    #[test]
+    fn test_load__cli_data_dir_overrides_default() {
+        let mut cli = stub_cli();
+        cli.state_dir = Some(PathBuf::from("/tmp/test-state"));
+        cli.data_dir = Some(PathBuf::from("/mnt/data"));
+        let config = Config::load(&cli);
+        assert_eq!(config.data_dir, PathBuf::from("/mnt/data"));
+    }
+
+    #[test]
+    fn test_load__verbose_and_quiet_from_cli() {
+        let mut cli = stub_cli();
+        cli.verbose = true;
+        cli.quiet = true;
+        let config = Config::load(&cli);
+        assert!(config.verbose);
+        assert!(config.quiet);
+    }
+
+    #[test]
+    fn test_load__overlays_passed_through() {
+        let mut cli = stub_cli();
+        cli.overlay = vec![PathBuf::from("a.orch"), PathBuf::from("b.orch")];
+        let config = Config::load(&cli);
+        assert_eq!(config.overlays.len(), 2);
+        assert_eq!(config.overlays[0], PathBuf::from("a.orch"));
+    }
+
+    #[test]
+    fn test_load__args_passed_through() {
+        let mut cli = stub_cli();
+        cli.args = vec!["FOO=bar".to_string(), "BAZ=qux".to_string()];
+        let config = Config::load(&cli);
+        assert_eq!(config.args.len(), 2);
+        assert_eq!(config.args[0], "FOO=bar");
+    }
+
+    #[test]
+    fn test_unit_name__formats_correctly() {
+        let mut cli = stub_cli();
+        cli.namespace = Some("orch".to_string());
+        let config = Config::load(&cli);
+        assert_eq!(config.unit_name("postgres"), "orch-postgres.service");
+    }
+
+    #[test]
+    fn test_unit_name__custom_namespace() {
+        let mut cli = stub_cli();
+        cli.namespace = Some("myapp".to_string());
+        let config = Config::load(&cli);
+        assert_eq!(config.unit_name("redis"), "myapp-redis.service");
+    }
+
+    #[test]
+    fn test_target_name__formats_correctly() {
+        let mut cli = stub_cli();
+        cli.namespace = Some("orch".to_string());
+        let config = Config::load(&cli);
+        assert_eq!(config.target_name(), "orch.target");
+    }
+
+    #[test]
+    fn test_units_dir__is_under_state_dir() {
+        let mut cli = stub_cli();
+        cli.state_dir = Some(PathBuf::from("/tmp/test-state"));
+        let config = Config::load(&cli);
+        assert_eq!(config.units_dir(), PathBuf::from("/tmp/test-state/units"));
+    }
+
+    #[test]
+    fn test_detect_platform__returns_systemd_on_linux() {
+        // On this Debian 12 LXC, /run/systemd/system exists
+        let platform = detect_platform();
+        assert_eq!(platform, "systemd");
+    }
+}
