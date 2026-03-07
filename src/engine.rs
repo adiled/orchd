@@ -21,13 +21,22 @@ pub enum EngineError {
 }
 
 /// Run the full generate pipeline:
-/// 1. Call `orch parse` to get JSON
-/// 2. Deserialize into OrchFile
-/// 3. Create runtime, check prerequisites
-/// 4. For each enabled service: runtime.prepare() + runtime.exec_set()
-/// 5. Platform generate_all() + install()
-pub fn generate(config: &Config) -> Result<(), EngineError> {
-    // 1. Call orch parse
+/// 1. Check mtime (skip if up-to-date unless `force`)
+/// 2. Call `orch parse` to get JSON
+/// 3. Deserialize into OrchFile
+/// 4. Create runtime, check prerequisites
+/// 5. For each enabled service: runtime.prepare() + runtime.exec_set()
+/// 6. Platform generate_all() + install()
+pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
+    // 1. Skip if artifacts are newer than Orchfile (unless --force)
+    if !force && is_up_to_date(config) {
+        if !config.quiet {
+            eprintln!("artifacts up to date, skipping generate (use --force to override)");
+        }
+        return Ok(());
+    }
+
+    // 2. Call orch parse
     let json = call_orch_parse(config)?;
 
     // 2. Deserialize
@@ -132,7 +141,7 @@ pub fn up(
     no_generate: bool,
 ) -> Result<(), EngineError> {
     if !no_generate {
-        generate(config)?;
+        generate(config, false)?;
     }
 
     if !config.quiet {
@@ -377,6 +386,65 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     }
 
     Ok(())
+}
+
+/// Check if generated artifacts are newer than all input files (Orchfile + overlays).
+/// Returns true if no regeneration is needed.
+fn is_up_to_date(config: &Config) -> bool {
+    let units_dir = config.units_dir();
+    if !units_dir.exists() {
+        return false;
+    }
+
+    // Find the newest input mtime (Orchfile + overlays)
+    let mut newest_input = match std::fs::metadata(&config.orchfile) {
+        Ok(m) => match m.modified() {
+            Ok(t) => t,
+            Err(_) => return false,
+        },
+        Err(_) => return false,
+    };
+
+    for overlay in &config.overlays {
+        if let Ok(m) = std::fs::metadata(overlay) {
+            if let Ok(t) = m.modified() {
+                if t > newest_input {
+                    newest_input = t;
+                }
+            }
+        }
+    }
+
+    // Find the oldest generated unit file mtime
+    let entries = match std::fs::read_dir(&units_dir) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+
+    let mut has_units = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("service")
+            || path.extension().and_then(|e| e.to_str()) == Some("target")
+        {
+            has_units = true;
+            match std::fs::metadata(&path) {
+                Ok(m) => match m.modified() {
+                    Ok(t) => {
+                        if t < newest_input {
+                            // At least one unit is older than input
+                            return false;
+                        }
+                    }
+                    Err(_) => return false,
+                },
+                Err(_) => return false,
+            }
+        }
+    }
+
+    // If no units found, not up to date
+    has_units
 }
 
 /// Poll a healthcheck command until it succeeds or timeout is reached.

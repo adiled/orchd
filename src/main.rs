@@ -15,7 +15,7 @@ fn main() {
     let config = Config::load(&cli);
 
     let result = match &cli.command {
-        Commands::Generate { force: _ } => engine::generate(&config).map_err(boxed),
+        Commands::Generate { force } => engine::generate(&config, *force).map_err(boxed),
         Commands::Up {
             services,
             no_generate,
