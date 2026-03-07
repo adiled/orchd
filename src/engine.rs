@@ -633,4 +633,133 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // --- Integration: orch parse → bare runtime → systemd generate ---
+
+    /// Full pipeline integration test: parse fixture Orchfile via real `orch` binary,
+    /// run through bare runtime + systemd generator, assert unit file contents.
+    ///
+    /// Requires: `orch` binary in PATH, systemd available.
+    /// Run with: `cargo test -- --ignored`
+    #[test]
+    #[ignore]
+    fn test_integration__full_generate_pipeline() {
+        use std::path::PathBuf;
+
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/Orchfile");
+        assert!(fixture.exists(), "fixture Orchfile not found at {:?}", fixture);
+
+        let tmp = std::env::temp_dir().join("orchd-integ-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let state_dir = tmp.join("state");
+        let data_dir = tmp.join("data");
+
+        let cli = crate::cli::Cli {
+            command: crate::cli::Commands::Generate { force: false },
+            orchfile: Some(fixture),
+            overlay: vec![],
+            runtime: Some("bare".to_string()),
+            platform: Some("systemd".to_string()),
+            state_dir: Some(state_dir.clone()),
+            project_dir: Some(tmp.clone()),
+            data_dir: Some(data_dir.clone()),
+            orch_bin: None, // defaults to "orch" in PATH
+            namespace: Some("integ".to_string()),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+        let config = Config::load(&cli);
+
+        // Step 1: call_orch_parse should succeed and return valid JSON
+        let json = call_orch_parse(&config)
+            .expect("orch parse should succeed on fixture Orchfile");
+
+        let orchfile: crate::types::OrchFile = serde_json::from_str(&json)
+            .expect("JSON should deserialize into OrchFile");
+
+        assert_eq!(orchfile.version, "0.2.0");
+        assert_eq!(orchfile.services.len(), 3);
+
+        // Verify services parsed correctly
+        let postgres = &orchfile.services[0];
+        assert_eq!(postgres.name, "postgres");
+        assert!(postgres.is_host());
+        assert!(!postgres.disabled);
+        assert!(postgres.run_command.as_deref().unwrap().contains("pg_ctlcluster"));
+        assert!(postgres.stop_command.is_some());
+        assert_eq!(postgres.user.as_deref(), Some("postgres"));
+
+        let redis = &orchfile.services[1];
+        assert_eq!(redis.name, "redis");
+        assert!(redis.after.contains(&"postgres".to_string()));
+
+        let disabled = &orchfile.services[2];
+        assert_eq!(disabled.name, "disabled-svc");
+        assert!(disabled.disabled);
+
+        // Step 2: bare runtime should produce ExecSets for enabled services
+        let rt = crate::runtime::create_runtime("bare", &config)
+            .expect("bare runtime should create");
+        rt.check().expect("bare runtime check should pass");
+
+        let mut exec_sets = Vec::new();
+        for (idx, svc) in orchfile.services.iter().enumerate() {
+            if svc.disabled {
+                continue;
+            }
+            rt.prepare(svc).expect(&format!("prepare {} should succeed", svc.name));
+            let es = rt.exec_set(svc).expect(&format!("exec_set {} should succeed", svc.name));
+            assert!(!es.start.is_empty(), "{} start command should not be empty", svc.name);
+            exec_sets.push((idx, es));
+        }
+        assert_eq!(exec_sets.len(), 2, "should have 2 enabled services");
+
+        // Step 3: systemd generator should produce unit files
+        let platform = crate::platform::systemd::SystemdPlatform::new();
+        platform.check().expect("systemd platform check should pass");
+
+        let generated = platform.generate_all(&orchfile.services, &exec_sets, &config)
+            .expect("generate_all should succeed");
+
+        // Should generate: 2 service units + ready gates + target
+        assert!(generated.len() >= 3, "should generate at least 3 files, got {}", generated.len());
+
+        // Verify postgres unit file content
+        let pg_unit_path = config.units_dir().join("integ-postgres.service");
+        assert!(pg_unit_path.exists(), "postgres unit file should exist");
+        let pg_content = std::fs::read_to_string(&pg_unit_path).unwrap();
+        assert!(pg_content.contains("[Unit]"));
+        assert!(pg_content.contains("[Service]"));
+        assert!(pg_content.contains("ExecStart="));
+        assert!(pg_content.contains("pg_ctlcluster"));
+        assert!(pg_content.contains("User=postgres"));
+        assert!(pg_content.contains("ExecStop="));
+
+        // Verify redis unit depends on postgres
+        let redis_unit_path = config.units_dir().join("integ-redis.service");
+        assert!(redis_unit_path.exists(), "redis unit file should exist");
+        let redis_content = std::fs::read_to_string(&redis_unit_path).unwrap();
+        assert!(redis_content.contains("After="), "redis should have After= dependency");
+
+        // Verify target file exists
+        let target_path = config.units_dir().join("integ.target");
+        assert!(target_path.exists(), "target file should exist");
+
+        // Services reference the target via WantedBy (reverse dependency)
+        assert!(pg_content.contains("WantedBy=integ.target"),
+            "postgres unit should reference integ.target via WantedBy");
+        assert!(redis_content.contains("WantedBy=integ.target"),
+            "redis unit should reference integ.target via WantedBy");
+
+        // disabled-svc should NOT have a unit file generated
+        let disabled_unit_path = config.units_dir().join("integ-disabled-svc.service");
+        assert!(!disabled_unit_path.exists(), "disabled service should not have a unit file");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
