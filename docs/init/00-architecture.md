@@ -10,7 +10,7 @@ orchd is the execution engine for the [Orch specification](https://github.com/ad
 |------|---------------|----------|
 | **orch** | Specification + parser. Orchfile --> JSON. Owns the grammar, merge semantics, and constraint validation. | Rust |
 | **orchd** | Execution engine. JSON --> running services. Owns runtime/platform pluggability, unit generation, and lifecycle management. | Rust |
-| **your-project** (or any project) | Project-specific configuration. Orchfile, overlays, init scripts, data seeding. Consumes orch + orchd. | Any |
+| **your-project** | Project-specific configuration. Orchfile, overlays, init scripts, data seeding. Consumes orch + orchd. | Any |
 
 The interface between orch and orchd is the **JSON schema** produced by `orch parse`. orchd calls `orch parse` as a subprocess, captures JSON on stdout, and deserializes via serde. This is the only contract.
 

@@ -126,18 +126,18 @@ orchd is built in phases, each delivering a usable increment. The first mileston
 
 ## Phase 7: Project Validation
 
-**Goal:** Project development services running on this LXC via orchd.
+**Goal:** Development services running on this LXC via orchd.
 
 **Tasks:**
-1. Write `bare.orch` overlay for your-project:
+1. Write `bare.orch` overlay for the project:
    - postgres, redis, nginx --> RUN with host paths/ports
    - localstack --> DISABLED (or bare command if feasible)
-2. Write `.orchrc` for myapp project
+2. Write `.orchrc` for the project
 3. Install prerequisites on this LXC (postgres, redis, nginx, python, etc.)
 4. Run `orchd up` -- verify all services start
 5. Run `orchd health` -- verify healthchecks pass
 6. Run `orchd status` -- verify status table
-7. Document the setup in your-project
+7. Document the setup in the project repo
 
 **Dependencies:** Phase 5, host software installation
 **Deliverable:** Project stack running on this LXC via `orchd up`
@@ -159,8 +159,8 @@ orchd is built in phases, each delivering a usable increment. The first mileston
 
 - **containerd runtime** -- for Linux environments where containers are available
 - **podman runtime** -- OCI container alternative
-- **apple runtime** -- extract from your-project osx-port
-- **launchd platform** -- extract from your-project osx-port
+- **apple runtime** -- extract from existing macOS port
+- **launchd platform** -- extract from existing macOS port
 - **Workspace merge** -- merge orchd into orch Cargo workspace
 - **Parallel healthchecks** -- async polling with tokio
 - **Watch mode** -- `orchd watch` regenerates on Orchfile changes

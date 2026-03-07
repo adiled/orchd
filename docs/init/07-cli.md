@@ -2,7 +2,7 @@
 
 ## Overview
 
-orchd provides a single binary with subcommands modeled after familiar patterns (`docker compose`, `systemctl`, your-project `walk`). Built with `clap` derive API.
+orchd provides a single binary with subcommands modeled after familiar patterns (`docker compose`, `systemctl`). Built with `clap` derive API.
 
 ## Subcommands
 

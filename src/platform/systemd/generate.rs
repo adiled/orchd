@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn test_generate_service_unit__with_environment() {
         let config = test_config();
-        let mut svc = simple_host_service("django", "python manage.py runserver");
+        let mut svc = simple_host_service("webapp", "python manage.py runserver");
         svc.env.insert("DJANGO_SETTINGS_MODULE".to_string(), "myapp.settings.dev".to_string());
         svc.env.insert("DEBUG".to_string(), "true".to_string());
         let exec = simple_exec_set("python manage.py runserver");

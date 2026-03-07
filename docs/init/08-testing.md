@@ -51,7 +51,7 @@ tests/
   fixtures/
     minimal.json          # Single host service
     container_service.json # Single container service
-    full_myapp.json      # Full myapp stack (all service types)
+    full_stack.json       # Full project stack (all service types)
     dependencies.json     # Services with complex REQUIRES/AFTER chains
     oneshot.json          # Oneshot services
     disabled.json         # Mix of enabled and disabled services
@@ -83,7 +83,7 @@ fn test_generate_simple_host_service() {
         name: "django".into(),
         mode: ServiceMode::Host,
         run_command: Some("python manage.py runserver 0.0.0.0:9090".into()),
-        workdir: Some("backend/myapp".into()),
+        workdir: Some("backend/app".into()),
         restart: RestartConfig {
             policy: RestartPolicy::OnFailure,
             delay: Some("2s".into()),
@@ -105,7 +105,7 @@ fn test_generate_simple_host_service() {
     assert!(unit.contains("RestartSec=2"));
     assert!(unit.contains("ExecStart=/bin/bash -c"));
     assert!(unit.contains("python manage.py runserver"));
-    assert!(unit.contains("WorkingDirectory=/project/backend/myapp"));
+    assert!(unit.contains("WorkingDirectory=/project/backend/app"));
 }
 ```
 

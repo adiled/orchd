@@ -161,4 +161,4 @@ To add a new platform, implement the `Platform` trait and register it in the eng
 | Platform | Status | Description |
 |----------|--------|-------------|
 | **systemd** | Phase 2-3 | Linux service manager. Full cgroup v2 resource enforcement. |
-| **launchd** | Deferred | macOS service manager. To be extracted from your-project osx-port. |
+| **launchd** | Deferred | macOS service manager. To be extracted from existing macOS port. |

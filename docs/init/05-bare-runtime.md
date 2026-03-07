@@ -176,7 +176,7 @@ During `orchd generate`, the bare runtime validates:
 
 Validation 3 is advisory because orchd doesn't know what binary a `RUN python ...` command needs -- that's the user's responsibility. But for well-known services (postgres, redis, nginx), the runtime can check `which postgres` and warn.
 
-## Example: Full Bare Overlay for myapp
+## Example: Full Bare Overlay
 
 ```
 # bare.orch -- converts all container services to host-mode for LXC/bare
