@@ -179,6 +179,40 @@ fn print_status_json(statuses: &[ServiceStatus]) {
     println!("\n]");
 }
 
+/// Tail logs for a service via journalctl.
+/// This replaces the current process (exec) so the user gets live output.
+pub fn logs(
+    service: &str,
+    follow: bool,
+    lines: u32,
+    config: &Config,
+) -> Result<(), PlatformError> {
+    let unit_name = config.unit_name(service);
+    let mut args = vec!["-u", &unit_name, "--no-pager"];
+
+    let lines_str = lines.to_string();
+    args.push("-n");
+    args.push(&lines_str);
+
+    if follow {
+        args.push("-f");
+    }
+
+    let status = Command::new("journalctl")
+        .args(&args)
+        .status()
+        .map_err(|e| PlatformError::LifecycleFailed(format!("journalctl: {}", e)))?;
+
+    if !status.success() {
+        return Err(PlatformError::LifecycleFailed(format!(
+            "journalctl exited with code {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
+
+    Ok(())
+}
+
 /// Run a systemctl command, returning error on failure.
 fn systemctl(args: &[&str]) -> Result<(), PlatformError> {
     let output = Command::new("systemctl")
