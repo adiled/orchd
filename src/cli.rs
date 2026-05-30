@@ -43,6 +43,14 @@ pub struct Cli {
     #[arg(long)]
     pub namespace: Option<String>,
 
+    /// Use user scope (~/.config/systemd/user, ~/Library/LaunchAgents). Default.
+    #[arg(long, conflicts_with = "system")]
+    pub user: bool,
+
+    /// Use system scope (/etc/systemd/system; root).
+    #[arg(long, conflicts_with = "user")]
+    pub system: bool,
+
     /// Pass-through arg to orch parse (repeatable, format: key=value)
     #[arg(long = "arg", action = clap::ArgAction::Append)]
     pub args: Vec<String>,

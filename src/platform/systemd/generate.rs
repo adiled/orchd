@@ -303,6 +303,7 @@ mod tests {
             overlays: Vec::new(),
             runtime: "bare".to_string(),
             platform: "systemd".to_string(),
+            scope: crate::config::Scope::System,
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),

@@ -1,5 +1,19 @@
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope { System, User }
+
+impl Scope {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "system" => Some(Scope::System),
+            "user"   => Some(Scope::User),
+            _ => None,
+        }
+    }
+    pub fn is_user(self) -> bool { matches!(self, Scope::User) }
+}
+
 /// orchd configuration, merged from CLI > env > .orchrc > defaults.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -12,6 +26,8 @@ pub struct Config {
     /// Platform name: systemd, launchd.
     #[allow(dead_code)]
     pub platform: String,
+    /// Scope: System (default, /etc/systemd/system) or User (~/.config/systemd/user, launchd LaunchAgents).
+    pub scope: Scope,
     /// State directory for generated artifacts.
     pub state_dir: PathBuf,
     /// Project root directory.
@@ -100,11 +116,23 @@ impl Config {
             })
         });
 
+        let scope = if cli.user {
+            Scope::User
+        } else if cli.system {
+            Scope::System
+        } else {
+            std::env::var("ORCH_SCOPE").ok()
+                .or_else(|| rc.get("scope").cloned())
+                .and_then(|s| Scope::from_str(&s))
+                .unwrap_or(Scope::System)
+        };
+
         Config {
             orchfile,
             overlays: cli.overlay.clone(),
             runtime,
             platform,
+            scope,
             state_dir,
             project_dir,
             data_dir,
@@ -171,12 +199,12 @@ fn parse_orchrc(content: &str) -> std::collections::HashMap<String, String> {
     map
 }
 
-/// Auto-detect platform based on available init system.
+/// Auto-detect platform based on OS / available init system.
 fn detect_platform() -> String {
-    if std::path::Path::new("/run/systemd/system").exists() {
-        "systemd".to_string()
-    } else if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
         "launchd".to_string()
+    } else if std::path::Path::new("/run/systemd/system").exists() {
+        "systemd".to_string()
     } else {
         "systemd".to_string()
     }
@@ -207,6 +235,8 @@ mod tests {
             data_dir: None,
             orch_bin: None,
             namespace: None,
+            user: false,
+            system: false,
             args: vec![],
             verbose: false,
             quiet: false,

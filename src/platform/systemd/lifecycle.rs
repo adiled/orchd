@@ -3,39 +3,38 @@ use std::process::Command;
 use crate::config::Config;
 use crate::platform::PlatformError;
 
+fn scope_flag(config: &Config) -> Option<&'static str> {
+    if config.scope.is_user() { Some("--user") } else { None }
+}
+
 /// Start services via systemctl.
 /// If `services` is empty, starts the orch target (all managed services).
 pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> {
     if services.is_empty() {
-        systemctl(&["start", &config.target_name()])
+        systemctl(&["start", &config.target_name()], config)
     } else {
         let unit_names: Vec<String> = services.iter().map(|s| config.unit_name(s)).collect();
         let args: Vec<&str> = std::iter::once("start")
             .chain(unit_names.iter().map(|s| s.as_str()))
             .collect();
-        systemctl(&args)
+        systemctl(&args, config)
     }
 }
 
-/// Stop services via systemctl.
-/// If `services` is empty, stops the orch target (all managed services).
 pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
     if services.is_empty() {
-        systemctl(&["stop", &config.target_name()])
+        systemctl(&["stop", &config.target_name()], config)
     } else {
         let unit_names: Vec<String> = services.iter().map(|s| config.unit_name(s)).collect();
         let args: Vec<&str> = std::iter::once("stop")
             .chain(unit_names.iter().map(|s| s.as_str()))
             .collect();
-        systemctl(&args)
+        systemctl(&args, config)
     }
 }
 
-/// Restart services via systemctl.
-/// If `services` is empty, restarts the orch target (all managed services).
 pub fn restart(services: &[String], config: &Config) -> Result<(), PlatformError> {
     if services.is_empty() {
-        // restart target doesn't propagate well — stop then start
         stop(services, config)?;
         start(services, config)
     } else {
@@ -43,7 +42,7 @@ pub fn restart(services: &[String], config: &Config) -> Result<(), PlatformError
         let args: Vec<&str> = std::iter::once("restart")
             .chain(unit_names.iter().map(|s| s.as_str()))
             .collect();
-        systemctl(&args)
+        systemctl(&args, config)
     }
 }
 
@@ -95,7 +94,7 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
             .unwrap_or(&filename)
             .to_string();
 
-        let status = query_unit_status(&filename)?;
+        let status = query_unit_status(&filename, config)?;
         statuses.push(ServiceStatus {
             name: service_name,
             active_state: status.0,
@@ -115,9 +114,10 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
     Ok(())
 }
 
-/// Query systemctl show for a single unit, returning (ActiveState, SubState, MainPID).
-fn query_unit_status(unit_name: &str) -> Result<(String, String, Option<u32>), PlatformError> {
-    let output = Command::new("systemctl")
+fn query_unit_status(unit_name: &str, config: &Config) -> Result<(String, String, Option<u32>), PlatformError> {
+    let mut cmd = Command::new("systemctl");
+    if let Some(f) = scope_flag(config) { cmd.arg(f); }
+    let output = cmd
         .args(["show", unit_name, "--property=ActiveState,SubState,MainPID"])
         .output()
         .map_err(|e| PlatformError::LifecycleFailed(format!("systemctl show: {}", e)))?;
@@ -188,15 +188,12 @@ pub fn logs(
     config: &Config,
 ) -> Result<(), PlatformError> {
     let unit_name = config.unit_name(service);
-    let mut args = vec!["-u", &unit_name, "--no-pager"];
-
-    let lines_str = lines.to_string();
-    args.push("-n");
-    args.push(&lines_str);
-
-    if follow {
-        args.push("-f");
-    }
+    let mut args: Vec<String> = Vec::new();
+    if config.scope.is_user() { args.push("--user".to_string()); }
+    args.push("-u".to_string()); args.push(unit_name.clone());
+    args.push("--no-pager".to_string());
+    args.push("-n".to_string()); args.push(lines.to_string());
+    if follow { args.push("-f".to_string()); }
 
     let status = Command::new("journalctl")
         .args(&args)
@@ -213,9 +210,10 @@ pub fn logs(
     Ok(())
 }
 
-/// Run a systemctl command, returning error on failure.
-fn systemctl(args: &[&str]) -> Result<(), PlatformError> {
-    let output = Command::new("systemctl")
+fn systemctl(args: &[&str], config: &Config) -> Result<(), PlatformError> {
+    let mut cmd = Command::new("systemctl");
+    if let Some(f) = scope_flag(config) { cmd.arg(f); }
+    let output = cmd
         .args(args)
         .output()
         .map_err(|e| {

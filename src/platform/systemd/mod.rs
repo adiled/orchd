@@ -12,18 +12,25 @@ use generate::{
     generate_ready_gate, generate_service_unit, generate_target, services_needing_ready_gates,
 };
 
-/// The systemd platform generates .service unit files and manages their lifecycle.
 pub struct SystemdPlatform;
 
 impl SystemdPlatform {
-    pub fn new() -> Self {
-        SystemdPlatform
-    }
+    pub fn new() -> Self { SystemdPlatform }
 
-    /// Return the systemd directory where units are symlinked.
-    fn systemd_dir(&self) -> PathBuf {
-        // TODO: support user scope via ORCH_SYSTEMD_SCOPE
-        PathBuf::from("/etc/systemd/system")
+    /// Directory where units are symlinked, by scope.
+    fn systemd_dir(&self, config: &Config) -> PathBuf {
+        if config.scope.is_user() {
+            let xdg = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    let home = std::env::var_os("HOME")
+                        .map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+                    home.join(".config")
+                });
+            xdg.join("systemd").join("user")
+        } else {
+            PathBuf::from("/etc/systemd/system")
+        }
     }
 }
 
@@ -40,6 +47,7 @@ impl Platform for SystemdPlatform {
         }
         Ok(())
     }
+
 
     fn generate(
         &self,
@@ -84,7 +92,10 @@ impl Platform for SystemdPlatform {
 
     fn install(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
-        let systemd_dir = self.systemd_dir();
+        let systemd_dir = self.systemd_dir(config);
+        std::fs::create_dir_all(&systemd_dir).map_err(|e| {
+            PlatformError::InstallFailed(format!("create {}: {}", systemd_dir.display(), e))
+        })?;
 
         // Symlink each unit file into the systemd directory
         if let Ok(entries) = std::fs::read_dir(&units_dir) {
@@ -106,24 +117,19 @@ impl Platform for SystemdPlatform {
             }
         }
 
-        // daemon-reload
-        let status = std::process::Command::new("systemctl")
-            .arg("daemon-reload")
-            .status()
+        let mut cmd = std::process::Command::new("systemctl");
+        if config.scope.is_user() { cmd.arg("--user"); }
+        let status = cmd.arg("daemon-reload").status()
             .map_err(|e| PlatformError::InstallFailed(format!("systemctl daemon-reload: {}", e)))?;
-
         if !status.success() {
-            return Err(PlatformError::InstallFailed(
-                "systemctl daemon-reload failed".to_string(),
-            ));
+            return Err(PlatformError::InstallFailed("systemctl daemon-reload failed".into()));
         }
-
         Ok(())
     }
 
     fn clean(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
-        let systemd_dir = self.systemd_dir();
+        let systemd_dir = self.systemd_dir(config);
 
         // Remove symlinks from systemd directory
         if let Ok(entries) = std::fs::read_dir(&units_dir) {
@@ -138,11 +144,9 @@ impl Platform for SystemdPlatform {
         // Remove generated units
         let _ = std::fs::remove_dir_all(&units_dir);
 
-        // daemon-reload
-        let _ = std::process::Command::new("systemctl")
-            .arg("daemon-reload")
-            .status();
-
+        let mut cmd = std::process::Command::new("systemctl");
+        if config.scope.is_user() { cmd.arg("--user"); }
+        let _ = cmd.arg("daemon-reload").status();
         Ok(())
     }
 }

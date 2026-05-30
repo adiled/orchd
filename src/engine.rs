@@ -3,6 +3,7 @@ use std::process::Command;
 use crate::config::Config;
 use crate::exec::ExecSet;
 use crate::platform::Platform;
+use crate::platform::launchd::LaunchdPlatform;
 use crate::platform::systemd::SystemdPlatform;
 use crate::runtime;
 use crate::types::OrchFile;
@@ -112,22 +113,31 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
     }
 
     // 5. Platform generate + install
-    let platform = SystemdPlatform::new();
-    platform.check()?;
-
-    let generated = platform.generate_all(&orchfile.services, &exec_sets, config)?;
-
-    if !config.quiet {
-        for path in &generated {
-            eprintln!("  wrote: {}", path);
+    let generated = match config.platform.as_str() {
+        "launchd" => {
+            let platform = LaunchdPlatform::new();
+            platform.check()?;
+            let g = platform.generate_all(&orchfile.services, &exec_sets, config)?;
+            if !config.quiet {
+                for path in &g { eprintln!("  wrote: {}", path); }
+            }
+            platform.install(config)?;
+            g
         }
-    }
-
-    // Install (symlink + daemon-reload)
-    platform.install(config)?;
+        _ => {
+            let platform = SystemdPlatform::new();
+            platform.check()?;
+            let g = platform.generate_all(&orchfile.services, &exec_sets, config)?;
+            if !config.quiet {
+                for path in &g { eprintln!("  wrote: {}", path); }
+            }
+            platform.install(config)?;
+            g
+        }
+    };
 
     if !config.quiet {
-        eprintln!("installed {} units, daemon-reload done", generated.len());
+        eprintln!("installed {} units", generated.len());
     }
 
     Ok(())
@@ -152,7 +162,10 @@ pub fn up(
         }
     }
 
-    crate::platform::systemd::lifecycle::start(services, config)?;
+    match config.platform.as_str() {
+        "launchd" => crate::platform::launchd::lifecycle::start(services, config)?,
+        _ => crate::platform::systemd::lifecycle::start(services, config)?,
+    }
 
     if !config.quiet {
         eprintln!("started");
@@ -171,7 +184,10 @@ pub fn down(config: &Config, services: &[String]) -> Result<(), EngineError> {
         }
     }
 
-    crate::platform::systemd::lifecycle::stop(services, config)?;
+    match config.platform.as_str() {
+        "launchd" => crate::platform::launchd::lifecycle::stop(services, config)?,
+        _ => crate::platform::systemd::lifecycle::stop(services, config)?,
+    }
 
     if !config.quiet {
         eprintln!("stopped");
@@ -190,7 +206,10 @@ pub fn restart(config: &Config, services: &[String]) -> Result<(), EngineError> 
         }
     }
 
-    crate::platform::systemd::lifecycle::restart(services, config)?;
+    match config.platform.as_str() {
+        "launchd" => crate::platform::launchd::lifecycle::restart(services, config)?,
+        _ => crate::platform::systemd::lifecycle::restart(services, config)?,
+    }
 
     if !config.quiet {
         eprintln!("restarted");
@@ -201,13 +220,19 @@ pub fn restart(config: &Config, services: &[String]) -> Result<(), EngineError> 
 
 /// Show status of managed services.
 pub fn status(config: &Config, as_json: bool) -> Result<(), EngineError> {
-    crate::platform::systemd::lifecycle::status(config, as_json)?;
+    match config.platform.as_str() {
+        "launchd" => crate::platform::launchd::lifecycle::status(config, as_json)?,
+        _ => crate::platform::systemd::lifecycle::status(config, as_json)?,
+    }
     Ok(())
 }
 
 /// Tail logs for a service.
 pub fn logs(config: &Config, service: &str, follow: bool, lines: u32) -> Result<(), EngineError> {
-    crate::platform::systemd::lifecycle::logs(service, follow, lines, config)?;
+    match config.platform.as_str() {
+        "launchd" => crate::platform::launchd::lifecycle::logs(service, follow, lines, config)?,
+        _ => crate::platform::systemd::lifecycle::logs(service, follow, lines, config)?,
+    }
     Ok(())
 }
 
@@ -365,14 +390,25 @@ pub fn health(config: &Config, timeout_str: &str, verbose: bool) -> Result<(), E
 /// Remove all generated artifacts and stop services.
 pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     // Stop all services first (ignore errors — they might not be running)
-    let _ = crate::platform::systemd::lifecycle::stop(&[], config);
+    match config.platform.as_str() {
+        "launchd" => { let _ = crate::platform::launchd::lifecycle::stop(&[], config); }
+        _ => { let _ = crate::platform::systemd::lifecycle::stop(&[], config); }
+    }
 
     // Platform clean (remove units, unlink, daemon-reload)
-    let platform = crate::platform::systemd::SystemdPlatform::new();
-    platform.clean(config)?;
+    match config.platform.as_str() {
+        "launchd" => {
+            let platform = crate::platform::launchd::LaunchdPlatform::new();
+            platform.clean(config)?;
+        }
+        _ => {
+            let platform = crate::platform::systemd::SystemdPlatform::new();
+            platform.clean(config)?;
+        }
+    }
 
     if !config.quiet {
-        eprintln!("removed generated units and symlinks");
+        eprintln!("removed generated units");
     }
 
     // Remove data directories unless --keep-data
@@ -684,6 +720,8 @@ mod tests {
             data_dir: Some(std::path::PathBuf::from("/srv/data")),
             orch_bin: None,
             namespace: None,
+            user: false,
+            system: false,
             args: vec![],
             verbose: false,
             quiet: false,
@@ -736,6 +774,8 @@ mod tests {
             data_dir: Some(data_dir.clone()),
             orch_bin: None, // defaults to "orch" in PATH
             namespace: Some("integ".to_string()),
+            user: false,
+            system: false,
             args: vec![],
             verbose: false,
             quiet: true,

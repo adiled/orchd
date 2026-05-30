@@ -1,3 +1,4 @@
+pub mod launchd;
 pub mod systemd;
 
 use crate::config::Config;
