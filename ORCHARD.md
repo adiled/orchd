@@ -196,23 +196,39 @@ orch parse base.orch staging.orch --arg env=staging \
 orchd sees none of this. It transformed Spec into Sown and Sown into Artifacts; the
 grower arranged the orchard.
 
-## Today to target
+## Status
 
-The mechanism already exists inside the monolithic `generate`/`up`; the work is to
-expose the seams, not to invent new logic.
+The rows ship as real subcommands. `sow` and `plant` are pure pipes; `tend` is
+the side-effecting activator. The porcelain (`generate`/`up`) still exists
+unchanged and remains the common path.
 
-| Concern | Today | Target |
-|---------|-------|--------|
-| runtime transform | `runtime::exec_set` inside `engine::generate` | `orchd sow` (pipe) |
-| platform transform | `platform::generate_all` inside `engine::generate` | `orchd plant` (pipe) |
-| activation | `platform::install` + `lifecycle::start` | `orchd tend` |
-| image pull | eager `runtime::prepare` at generate | a `pre_start` command run at tend |
-| common path | `generate` / `up` (monolith) | `grow` (walk over rows) |
-| composition / manifests | implicit (flags + prefix scan) | the grower's policy, over the rows' JSON |
+| Concern | Implementation | Row |
+|---------|----------------|-----|
+| runtime transform | `runtime::exec_set` | `orchd sow` (pure pipe, shipped) |
+| platform transform | `platform` generators | `orchd plant` (pure pipe, shipped) |
+| activation | write + `install` + `start` | `orchd tend` (shipped) |
+| image pull | `pre_start` command run at tend | (no eager prepare in the rows) |
+| common path | `generate` / `up` (monolith) | porcelain, unchanged |
+| composition / manifests | the grower's policy, over the rows' JSON | out of scope, by design |
 
-`ExecSet` is already serde-serializable, so the first seam is open. The rest is
-lifting the internal calls to `stdin/stdout` boundaries and letting the walks
-re-express as compositions of the rows.
+Worked end to end on a real Mac:
+
+```sh
+orch parse Orchfile \
+  | orchd --runtime bare  sow \
+  | jq '.trees |= map(select(.service.name != "worker"))' \   # a grower's own step
+  | orchd --platform launchd --namespace orch --user plant \
+  | orchd --platform launchd --namespace orch --user tend     # service running under launchd
+```
+
+Two contracts to remember when piping by hand:
+- `sow` is the only stage that takes `--runtime`; `plant`/`tend` take `--platform`.
+- `plant` bakes absolute paths into each artifact from its config, so `plant` and
+  `tend` must be given the same `--namespace` / `--scope` / `--state-dir`. The
+  porcelain and any single flag set do this for you.
+
+Still future work: re-expressing `generate`/`up` as a `grow` walk over the rows so
+there is one code path, not two.
 
 ## Litmus
 
