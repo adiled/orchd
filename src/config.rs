@@ -52,67 +52,37 @@ impl Config {
     /// Supported keys: `runtime`, `platform`, `namespace`, `state_dir`,
     /// `data_dir`, `orch_bin`, `orchfile`.
     pub fn load(cli: &crate::cli::Cli) -> Self {
-        let project_dir = cli.project_dir.clone().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        });
+        // project_dir is resolved first (it locates .orchrc), so it gets
+        // CLI > env > cwd, with no .orchrc layer.
+        let project_dir = cli
+            .project_dir
+            .clone()
+            .or_else(|| std::env::var("ORCH_PROJECT").ok().map(PathBuf::from))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         // Load .orchrc (project_dir first, then home)
         let rc = load_orchrc(&project_dir);
 
-        let orchfile = cli.orchfile.clone().unwrap_or_else(|| {
-            rc.get("orchfile")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| project_dir.join("Orchfile"))
+        // Every other setting resolves CLI > env > .orchrc > default, uniformly.
+        let orchfile = path_setting(cli.orchfile.as_ref(), "ORCH_ORCHFILE", &rc, "orchfile", || {
+            project_dir.join("Orchfile")
         });
-
-        let state_dir = cli.state_dir.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_STATE_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    rc.get("state_dir")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| dirs_or_home().join(".orch"))
-                })
+        let state_dir = path_setting(cli.state_dir.as_ref(), "ORCH_STATE_DIR", &rc, "state_dir", || {
+            dirs_or_home().join(".orch")
         });
-
-        let data_dir = cli.data_dir.clone().unwrap_or_else(|| {
-            rc.get("data_dir")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| state_dir.join("data"))
+        let data_dir = path_setting(cli.data_dir.as_ref(), "ORCH_DATA", &rc, "data_dir", || {
+            state_dir.join("data")
         });
-
-        let orch_bin = cli.orch_bin.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_BIN")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    rc.get("orch_bin")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("orch"))
-                })
+        let orch_bin = path_setting(cli.orch_bin.as_ref(), "ORCH_BIN", &rc, "orch_bin", || {
+            PathBuf::from("orch")
         });
-
-        let runtime = cli.runtime.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_RUNTIME").unwrap_or_else(|_| {
-                rc.get("runtime")
-                    .cloned()
-                    .unwrap_or_else(|| "bare".to_string())
-            })
+        let runtime = str_setting(cli.runtime.as_ref(), "ORCH_RUNTIME", &rc, "runtime", || {
+            "bare".to_string()
         });
-
-        let platform = cli.platform.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_PLATFORM").unwrap_or_else(|_| {
-                rc.get("platform")
-                    .cloned()
-                    .unwrap_or_else(detect_platform)
-            })
-        });
-
-        let namespace = cli.namespace.clone().unwrap_or_else(|| {
-            std::env::var("ORCH_NAMESPACE").unwrap_or_else(|_| {
-                rc.get("namespace")
-                    .cloned()
-                    .unwrap_or_else(|| "orch".to_string())
-            })
+        let platform =
+            str_setting(cli.platform.as_ref(), "ORCH_PLATFORM", &rc, "platform", detect_platform);
+        let namespace = str_setting(cli.namespace.as_ref(), "ORCH_NAMESPACE", &rc, "namespace", || {
+            "orch".to_string()
         });
 
         let scope = if cli.user {
@@ -157,6 +127,46 @@ impl Config {
     pub fn target_name(&self) -> String {
         format!("{}.target", self.namespace)
     }
+}
+
+/// Resolve a path setting: CLI flag > env var > `.orchrc` key > default.
+fn path_setting(
+    cli: Option<&PathBuf>,
+    env: &str,
+    rc: &std::collections::HashMap<String, String>,
+    key: &str,
+    default: impl FnOnce() -> PathBuf,
+) -> PathBuf {
+    if let Some(v) = cli {
+        return v.clone();
+    }
+    if let Ok(v) = std::env::var(env) {
+        return PathBuf::from(v);
+    }
+    if let Some(v) = rc.get(key) {
+        return PathBuf::from(v);
+    }
+    default()
+}
+
+/// Resolve a string setting: CLI flag > env var > `.orchrc` key > default.
+fn str_setting(
+    cli: Option<&String>,
+    env: &str,
+    rc: &std::collections::HashMap<String, String>,
+    key: &str,
+    default: impl FnOnce() -> String,
+) -> String {
+    if let Some(v) = cli {
+        return v.clone();
+    }
+    if let Ok(v) = std::env::var(env) {
+        return v;
+    }
+    if let Some(v) = rc.get(key) {
+        return v.clone();
+    }
+    default()
 }
 
 /// Load `.orchrc` key-value config file.
