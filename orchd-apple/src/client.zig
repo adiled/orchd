@@ -133,6 +133,66 @@ pub const Client = struct {
         const data = reply.getData(xpc.Key.kernel) orelse return xpc.XpcError.ApiError;
         return allocator.dupe(u8, data) catch xpc.XpcError.ConnectionFailed;
     }
+
+    /// containerCreate: register a container from a fully-built configuration.
+    /// `config_json`/`kernel_json`/`options_json` are encoded structs; `init_image`
+    /// is the init image reference.
+    pub fn containerCreate(
+        self: Client,
+        allocator: std.mem.Allocator,
+        config_json: []const u8,
+        kernel_json: []const u8,
+        options_json: []const u8,
+        init_image: []const u8,
+    ) xpc.XpcError!void {
+        const init_z = allocator.dupeZ(u8, init_image) catch return xpc.XpcError.ConnectionFailed;
+        defer allocator.free(init_z);
+
+        const req = xpc.Message.init(xpc.Route.container_create);
+        defer req.deinit();
+        req.setData(xpc.Key.container_config, config_json);
+        req.setData(xpc.Key.kernel, kernel_json);
+        req.setData(xpc.Key.container_options, options_json);
+        req.setString(xpc.Key.init_image, init_z);
+
+        const reply = try self.conn.send(req);
+        defer reply.deinit();
+        try reply.checkError();
+    }
+
+    /// containerBootstrap: create the container's init process, wiring stdio.
+    /// `stdio_fd` is used for stdin/stdout/stderr (e.g. an open /dev/null fd).
+    pub fn containerBootstrap(self: Client, allocator: std.mem.Allocator, id: []const u8, stdio_fd: c_int) xpc.XpcError!void {
+        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        defer allocator.free(id_z);
+
+        const req = xpc.Message.init(xpc.Route.container_bootstrap);
+        defer req.deinit();
+        req.setFd(xpc.Key.stdin, stdio_fd);
+        req.setFd(xpc.Key.stdout, stdio_fd);
+        req.setFd(xpc.Key.stderr, stdio_fd);
+        req.setData(xpc.Key.dynamic_env, "{}");
+        req.setString(xpc.Key.id, id_z);
+
+        const reply = try self.conn.send(req);
+        defer reply.deinit();
+        try reply.checkError();
+    }
+
+    /// containerStartProcess: start the init process (processIdentifier == id).
+    pub fn containerStartProcess(self: Client, allocator: std.mem.Allocator, id: []const u8) xpc.XpcError!void {
+        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        defer allocator.free(id_z);
+
+        const req = xpc.Message.init(xpc.Route.container_start_process);
+        defer req.deinit();
+        req.setString(xpc.Key.id, id_z);
+        req.setString(xpc.Key.process_identifier, id_z);
+
+        const reply = try self.conn.send(req);
+        defer reply.deinit();
+        try reply.checkError();
+    }
 };
 
 /// Fetch a content-store blob by digest via the core-images service. The daemon

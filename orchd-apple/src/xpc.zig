@@ -28,6 +28,9 @@ pub const Route = struct {
     pub const get_default_kernel = "getDefaultKernel";
     pub const image_list = "imageList";
     pub const content_get = "contentGet";
+    pub const container_create = "containerCreate";
+    pub const container_bootstrap = "containerBootstrap";
+    pub const container_start_process = "containerStartProcess";
 };
 
 // Field keys (XPCKeys enum rawValues from apple/container).
@@ -43,6 +46,14 @@ pub const Key = struct {
     pub const image_descriptions = "imageDescriptions";
     pub const digest = "digest";
     pub const content_path = "contentPath";
+    pub const container_config = "containerConfig";
+    pub const container_options = "containerOptions";
+    pub const init_image = "initImage";
+    pub const dynamic_env = "dynamicEnv";
+    pub const process_identifier = "processIdentifier";
+    pub const stdin = "stdin";
+    pub const stdout = "stdout";
+    pub const stderr = "stderr";
 };
 
 // ─── Connection ────────────────────────────────────────────────────────────
@@ -119,6 +130,13 @@ pub const Message = struct {
 
     pub fn setString(self: Message, key: [:0]const u8, value: [:0]const u8) void {
         c.xpc_dictionary_set_string(self.handle, key.ptr, value.ptr);
+    }
+
+    /// Wrap an fd as an XPC fd object and set it (for stdio over XPC).
+    pub fn setFd(self: Message, key: [:0]const u8, fd: c_int) void {
+        if (c.xpc_fd_create(fd)) |obj| {
+            c.xpc_dictionary_set_value(self.handle, key.ptr, obj);
+        }
     }
 
     /// Returns a slice pointing into the XPC object — valid only while self is alive.

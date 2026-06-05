@@ -10,6 +10,8 @@
 const std = @import("std");
 const client = @import("client.zig");
 
+extern "c" fn close(fd: c_int) c_int;
+
 pub const Resolved = struct {
     /// Image descriptor digest (for ContainerConfiguration.image).
     image_digest: []const u8,
@@ -101,4 +103,96 @@ pub fn resolve(arena: std.mem.Allocator, io: std.Io, reference: []const u8) !Res
         .environment = env.items,
         .working_directory = if (wd.len == 0) "/" else wd,
     };
+}
+
+// ─── ContainerConfiguration (mirrors the daemon's snapshot shape) ───────────
+
+const Empty = struct {};
+const Resources = struct { cpus: i64, memoryInBytes: u64 };
+const Dns = struct {
+    nameservers: []const []const u8 = &.{},
+    searchDomains: []const []const u8 = &.{},
+    options: []const []const u8 = &.{},
+};
+const Descriptor = struct { digest: []const u8, size: i64, mediaType: []const u8 };
+const Image = struct { descriptor: Descriptor, reference: []const u8 };
+const UserId = struct { uid: u32 = 0, gid: u32 = 0 };
+const User = struct { id: UserId = .{} };
+const Platform = struct { os: []const u8 = "linux", architecture: []const u8 = "arm64" };
+const InitProcess = struct {
+    executable: []const u8,
+    arguments: []const []const u8,
+    environment: []const []const u8,
+    workingDirectory: []const u8,
+    user: User = .{},
+    terminal: bool = false,
+    rlimits: []const Empty = &.{},
+    supplementalGroups: []const u32 = &.{},
+};
+const Network = struct {
+    network: []const u8 = "default",
+    options: AttachmentOptions,
+};
+const AttachmentOptions = struct { hostname: []const u8 };
+const Config = struct {
+    id: []const u8,
+    image: Image,
+    initProcess: InitProcess,
+    resources: Resources,
+    platform: Platform = .{},
+    dns: Dns = .{},
+    mounts: []const Empty = &.{},
+    publishedPorts: []const Empty = &.{},
+    publishedSockets: []const Empty = &.{},
+    networks: []const Network,
+    labels: Empty = .{},
+    sysctls: Empty = .{},
+    runtimeHandler: []const u8 = "container-runtime-linux",
+    virtualization: bool = false,
+    rosetta: bool = false,
+    readOnly: bool = false,
+    ssh: bool = false,
+    useInit: bool = false,
+    capAdd: []const []const u8 = &.{},
+    capDrop: []const []const u8 = &.{},
+};
+
+const INIT_IMAGE = "ghcr.io/apple/containerization/vminit:0.31.0";
+
+/// Create and start a container entirely over XPC: resolve OCI -> kernel ->
+/// build ContainerConfiguration -> create -> bootstrap -> start.
+pub fn run(arena: std.mem.Allocator, allocator: std.mem.Allocator, io: std.Io, id: []const u8, reference: []const u8) !void {
+    const r = try resolve(arena, io, reference);
+
+    const c = client.Client.init();
+    defer c.deinit();
+
+    const kernel_json = try c.getDefaultKernel(arena, "{\"os\":\"linux\",\"architecture\":\"arm64\"}");
+
+    const cfg = Config{
+        .id = id,
+        .image = .{
+            .descriptor = .{ .digest = r.image_digest, .size = r.image_size, .mediaType = r.image_media_type },
+            .reference = reference,
+        },
+        .initProcess = .{
+            .executable = r.executable,
+            .arguments = r.arguments,
+            .environment = r.environment,
+            .workingDirectory = r.working_directory,
+        },
+        .resources = .{ .cpus = 2, .memoryInBytes = 1024 * 1024 * 1024 },
+        .networks = &.{.{ .options = .{ .hostname = id } }},
+    };
+    const config_json = try std.json.Stringify.valueAlloc(arena, cfg, .{});
+
+    const options_json = "{\"autoRemove\":false,\"rootFsOverride\":null}";
+
+    try c.containerCreate(allocator, config_json, kernel_json, options_json, INIT_IMAGE);
+
+    const fd = try std.posix.openatZ(std.posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR }, 0);
+    defer _ = close(fd);
+
+    try c.containerBootstrap(allocator, id, fd);
+    try c.containerStartProcess(allocator, id);
 }

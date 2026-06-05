@@ -69,6 +69,8 @@ pub fn main(init: std.process.Init) !void {
         try cmdContent(allocator, io, namespace); // namespace slot carries the digest
     } else if (std.mem.eql(u8, command, "resolve")) {
         try cmdResolve(allocator, io, namespace); // namespace slot carries the image ref
+    } else if (std.mem.eql(u8, command, "run")) {
+        try cmdRun(allocator, io, positionals);
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -185,6 +187,25 @@ fn cmdResolve(allocator: std.mem.Allocator, io: std.Io, reference: []const u8) !
     for (r.arguments) |a| std.debug.print("{s} ", .{a});
     std.debug.print("\nworkingdir:  {s}\n", .{r.working_directory});
     std.debug.print("environment: {d} vars\n", .{r.environment.len});
+}
+
+/// `run <id> <image>`: create and start a container entirely over XPC.
+fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const u8) !void {
+    if (positionals.len < 3) {
+        std.debug.print("usage: orchd-apple run <id> <image>\n", .{});
+        std.process.exit(1);
+    }
+    const id = positionals[1];
+    const reference = positionals[2];
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+
+    oci_mod.run(arena_state.allocator(), allocator, io, id, reference) catch |err| {
+        std.debug.print("error: run failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    std.debug.print("started {s} ({s}) via XPC\n", .{ id, reference });
 }
 
 fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
