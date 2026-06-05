@@ -8,7 +8,10 @@ use crate::exec::ExecSet;
 use crate::platform::{Platform, PlatformError};
 use crate::types::Service;
 
-use generate::{generate_service_plist, plist_filename, plist_label};
+use generate::{
+    build_dep_gates, build_supervise_spec, generate_service_plist,
+    generate_service_plist_with_deps, plist_filename, plist_label, supervise_spec_path,
+};
 
 pub struct LaunchdPlatform;
 
@@ -150,9 +153,26 @@ impl LaunchdPlatform {
         std::fs::create_dir_all(&units_dir)?;
 
         let mut generated = Vec::new();
+        let spec_dir = config.state_dir.join("supervise");
         for (idx, exec_set) in exec_sets {
             let service = &services[*idx];
-            let content = generate_service_plist(service, exec_set, config);
+            let deps = build_dep_gates(service, services);
+
+            // Orchestrated services (deps or teardown) need a supervisor spec.
+            let needs_supervisor =
+                !deps.is_empty() || exec_set.stop.is_some() || exec_set.post_stop.is_some();
+            if needs_supervisor {
+                std::fs::create_dir_all(&spec_dir)?;
+                let label = plist_label(config, &service.name);
+                let spec = build_supervise_spec(service, exec_set, config, &deps);
+                let json = serde_json::to_string_pretty(&spec)
+                    .map_err(|e| PlatformError::GenerationFailed(e.to_string()))?;
+                let spec_path = supervise_spec_path(config, &label);
+                std::fs::write(&spec_path, json)?;
+                generated.push(spec_path);
+            }
+
+            let content = generate_service_plist_with_deps(service, exec_set, config, &deps);
             let path = units_dir.join(plist_filename(config, &service.name));
             std::fs::write(&path, &content)?;
             generated.push(path.display().to_string());

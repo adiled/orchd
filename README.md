@@ -8,10 +8,19 @@ Orchfile → orch parse (JSON) → Runtime (ExecSet) → Platform (native artifa
 
 **Runtime** produces execution commands from service definitions. **Platform** consumes them and generates native service manager artifacts.
 
-| Layer    | Implemented | Planned              |
-|----------|-------------|----------------------|
-| Runtime  | `bare`      | `containerd`, `podman`, `apple` |
-| Platform | `systemd`   | `launchd`            |
+| Layer    | Implemented          | Planned                |
+|----------|----------------------|------------------------|
+| Runtime  | `bare`, `apple`      | `containerd`, `podman` |
+| Platform | `systemd`, `launchd` | —                      |
+
+The [`apple`](orchd-apple/) runtime runs container-mode services on macOS 26+
+via Apple's native [container](https://github.com/apple/container) framework. It
+is a standalone Zig co-process (`orchd-apple/`) that speaks XPC to
+`container-apiserver`; build it with `cd orchd-apple && zig build`.
+
+The `launchd` platform supervises services via [`orchd supervise`](src/supervise.rs),
+a launchd-native leaf process that renders the dependency ordering and stop/post-stop
+teardown launchd lacks natively — driven by the runtime-neutral `ExecSet`.
 
 ## Install
 
@@ -41,7 +50,7 @@ orchd clean [--keep-data]
 ```
 --orchfile <path>       Path to Orchfile (default: ./Orchfile)
 --overlay <path>        Overlay file (repeatable)
---runtime <name>        bare (default)
+--runtime <name>        bare (default), apple
 --namespace <name>      Unit prefix (default: orch)
 --state-dir <path>      Artifact directory (default: ~/.orch)
 --data-dir <path>       Service data (default: <state-dir>/data)

@@ -2,7 +2,9 @@
 ///
 /// For host-mode services, only `start` is populated (the `run_command`).
 /// For container runtimes, all fields may be populated (pull, create, start, stop, rm).
-#[derive(Debug, Default, Clone)]
+///
+/// Serializable so the apple runtime (orchd-apple Zig binary) can emit it as JSON.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExecSet {
     /// The main process command (ExecStart= / ProgramArguments)
     pub start: String,

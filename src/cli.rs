@@ -152,4 +152,12 @@ pub enum Commands {
         #[arg(long)]
         keep_data: bool,
     },
+
+    /// Supervise a single service from a spec file (invoked by launchd; internal).
+    #[command(hide = true)]
+    Supervise {
+        /// Path to the SuperviseSpec JSON.
+        #[arg(long)]
+        spec: PathBuf,
+    },
 }
