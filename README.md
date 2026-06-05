@@ -38,6 +38,17 @@ RESTART on-failure
 the whole idea: say what you want, orchd handles the rest. (The full list of
 options lives in the [Orch spec](https://github.com/adiled/orch).)
 
+A service with `FROM` is a container. On a Mac, tell orchd to use Apple's
+container tool once, by putting this in a file named `.orchrc` next to your
+Orchfile:
+
+```
+runtime=apple
+```
+
+(Services with `RUN` are plain programs and need no setup. On Linux, containers
+use `podman` or `containerd` instead.)
+
 ## Use it
 
 ```sh
@@ -51,8 +62,8 @@ That is the day-to-day. Run `orchd grow` again any time you change the Orchfile.
 
 ## Going further
 
-- **Settings:** drop an `.orchrc` file (`KEY=value` per line) to set defaults like
-  `namespace=myapp` or `runtime=apple`, so you do not type flags every time.
+- **More settings:** `.orchrc` takes one `KEY=value` per line, for defaults like
+  `namespace=myapp`, so you do not type flags every time.
 - **Build your own tooling:** `grow` is just three smaller steps you can pipe and
   reshape: `orchd sow | orchd plant | orchd tend`. See [`ORCHARD.md`](ORCHARD.md).
 
