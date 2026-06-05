@@ -11,7 +11,7 @@ Orchfile → orch parse (JSON) → Runtime (ExecSet) → Platform (native artifa
 | Layer    | Implemented          | Planned                |
 |----------|----------------------|------------------------|
 | Runtime  | `bare`, `apple`      | `containerd`, `podman` |
-| Platform | `systemd`, `launchd` | —                      |
+| Platform | `systemd`, `launchd` | (none)|
 
 The [`apple`](orchd-apple/) runtime runs container-mode services on macOS 26+
 via Apple's native [container](https://github.com/apple/container) framework. It
@@ -20,7 +20,7 @@ is a standalone Zig co-process (`orchd-apple/`) that speaks XPC to
 
 The `launchd` platform supervises services via [`orchd supervise`](src/supervise.rs),
 a launchd-native leaf process that renders the dependency ordering and stop/post-stop
-teardown launchd lacks natively — driven by the runtime-neutral `ExecSet`.
+teardown launchd lacks natively, driven by the runtime-neutral `ExecSet`.
 
 ## Install
 
@@ -75,7 +75,7 @@ Merge order: CLI > environment > `.orchrc` > defaults.
 
 ## Example
 
-A three-service stack — Postgres, a one-shot migration, and an app — wired with
+A three-service stack (Postgres, a one-shot migration, and an app) wired with
 dependencies and health checks. This runs on the implemented Linux path
 (`bare` runtime + `systemd`).
 
@@ -145,7 +145,7 @@ WantedBy=orch.target
 
 Because `postgres` has a `HEALTHCHECK` and is required, orchd generates a
 `orch-postgres-ready.service` gate so dependents start only once Postgres is
-actually accepting connections — not merely once its process is up:
+actually accepting connections, not merely once its process is up:
 
 ```ini
 [Service]
@@ -162,7 +162,7 @@ TimeoutStartSec=120s
 ## Tests
 
 ```sh
-cargo test                        # 74 unit tests
+cargo test                        # 113 unit tests
 cargo test -- --include-ignored   # + integration test (needs orch binary)
 ```
 
