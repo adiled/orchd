@@ -62,6 +62,8 @@ pub fn main(init: std.process.Init) !void {
         try cmdDelete(allocator, namespace);
     } else if (std.mem.eql(u8, command, "kernel")) {
         try cmdKernel(allocator, io);
+    } else if (std.mem.eql(u8, command, "images")) {
+        try cmdImages(allocator, io);
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -131,6 +133,19 @@ fn cmdKernel(allocator: std.mem.Allocator, io: std.Io) !void {
     };
     defer allocator.free(json);
     var buf: [4096]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(json);
+    try fw.interface.flush();
+}
+
+/// `images`: list images via the core-images XPC service.
+fn cmdImages(allocator: std.mem.Allocator, io: std.Io) !void {
+    const json = client_mod.imageList(allocator) catch |err| {
+        std.debug.print("error: imageList failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(json);
+    var buf: [8192]u8 = undefined;
     var fw = std.Io.File.stdout().writer(io, &buf);
     try fw.interface.writeAll(json);
     try fw.interface.flush();

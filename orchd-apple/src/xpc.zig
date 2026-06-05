@@ -16,6 +16,7 @@ const c = @import("xpc_extern.zig");
 pub const ROUTE_KEY = "com.apple.container.xpc.route";
 pub const ERROR_KEY = "com.apple.container.xpc.error";
 pub const SERVICE_NAME = "com.apple.container.apiserver";
+pub const IMAGES_SERVICE = "com.apple.container.core.container-core-images";
 
 // Routes (XPCRoute enum rawValues from apple/container).
 pub const Route = struct {
@@ -25,6 +26,7 @@ pub const Route = struct {
     pub const container_list = "containerList";
     pub const container_state = "containerState";
     pub const get_default_kernel = "getDefaultKernel";
+    pub const image_list = "imageList";
 };
 
 // Field keys (XPCKeys enum rawValues from apple/container).
@@ -37,6 +39,7 @@ pub const Key = struct {
     pub const api_server_version = "apiServerVersion";
     pub const system_platform = "systemPlatform";
     pub const kernel = "kernel";
+    pub const image_descriptions = "imageDescriptions";
 };
 
 // ─── Connection ────────────────────────────────────────────────────────────
@@ -47,7 +50,12 @@ pub const Connection = struct {
     /// Open a connection to com.apple.container.apiserver.
     /// Does not block — activation is lazy; first send() establishes contact.
     pub fn initApiServer() Connection {
-        const conn = c.xpc_connection_create_mach_service(SERVICE_NAME, null, 0);
+        return initService(SERVICE_NAME);
+    }
+
+    /// Open a connection to a named mach service (e.g. the core-images service).
+    pub fn initService(name: [*:0]const u8) Connection {
+        const conn = c.xpc_connection_create_mach_service(name, null, 0);
         // libxpc requires a valid event-handler block before activate(); we pass
         // a statically-built no-op global block (see noop_block below).
         c.xpc_connection_set_event_handler(conn, @ptrCast(&noop_block));

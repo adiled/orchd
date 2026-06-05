@@ -134,3 +134,21 @@ pub const Client = struct {
         return allocator.dupe(u8, data) catch xpc.XpcError.ConnectionFailed;
     }
 };
+
+/// List images via the core-images XPC service (a separate mach service from the
+/// apiserver). Returns the JSON-encoded [ImageDescription] array. This is the
+/// gateway to image resolution for create (descriptor + OCI config via contentGet).
+pub fn imageList(allocator: std.mem.Allocator) xpc.XpcError![]u8 {
+    const conn = xpc.Connection.initService(xpc.IMAGES_SERVICE);
+    defer conn.close();
+
+    const req = xpc.Message.init(xpc.Route.image_list);
+    defer req.deinit();
+
+    const reply = try conn.send(req);
+    defer reply.deinit();
+    try reply.checkError();
+
+    const data = reply.getData(xpc.Key.image_descriptions) orelse return allocator.dupe(u8, "[]") catch xpc.XpcError.ConnectionFailed;
+    return allocator.dupe(u8, data) catch xpc.XpcError.ConnectionFailed;
+}
