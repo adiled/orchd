@@ -24,29 +24,16 @@ fn main() {
     let config = Config::load(&cli);
 
     let result = match &cli.command {
-        Commands::Generate { force } => engine::generate(&config, *force).map_err(boxed),
-        Commands::Up {
-            services,
-            no_generate,
-            health_timeout: _,
-        } => engine::up(&config, services, *no_generate).map_err(boxed),
-        Commands::Down { services } => engine::down(&config, services).map_err(boxed),
-        Commands::Restart { services } => engine::restart(&config, services).map_err(boxed),
-        Commands::Status { json } => engine::status(&config, *json).map_err(boxed),
+        Commands::Grow { services, no_start } => {
+            engine::grow(&config, services, *no_start).map_err(boxed)
+        }
+        Commands::Survey { json } => engine::status(&config, *json).map_err(boxed),
+        Commands::Fell { keep_data } => engine::fell(&config, *keep_data).map_err(boxed),
         Commands::Logs {
             service,
             follow,
             lines,
         } => engine::logs(&config, service, *follow, *lines).map_err(boxed),
-        Commands::Health { timeout, verbose } => {
-            engine::health(&config, timeout, *verbose).map_err(boxed)
-        }
-        Commands::List {
-            enabled,
-            disabled,
-            json,
-        } => engine::list(&config, *enabled, *disabled, *json).map_err(boxed),
-        Commands::Clean { keep_data } => engine::clean(&config, *keep_data).map_err(boxed),
         Commands::Sow {} => orchard::sow(&config).map_err(boxed_orchard),
         Commands::Plant {} => orchard::plant(&config).map_err(boxed_orchard),
         Commands::Tend { no_start } => orchard::tend(&config, !*no_start).map_err(boxed_orchard),

@@ -70,11 +70,6 @@ impl Runtime for BareRuntime {
             }),
         }
     }
-
-    fn cleanup(&self, _service: &Service) -> Result<(), RuntimeError> {
-        // Nothing to clean up for bare services -- data dirs are left intact.
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -218,12 +213,5 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn test_cleanup__is_noop() {
-        let rt = BareRuntime::new(PathBuf::from("/tmp/orchd-test-data"));
-        let svc = host_service("redis", "redis-server");
-        assert!(rt.cleanup(&svc).is_ok());
     }
 }

@@ -149,18 +149,6 @@ impl Runtime for AppleRuntime {
             ))
         })
     }
-
-    fn cleanup(&self, service: &Service) -> Result<(), RuntimeError> {
-        if service.is_host() {
-            return Ok(());
-        }
-        let service_json = serde_json::to_vec(service)
-            .map_err(|e| RuntimeError::Other(e.to_string()))?;
-
-        // Best-effort: don't propagate cleanup failures.
-        let _ = self.call("cleanup", Some(&service_json));
-        Ok(())
-    }
 }
 
 #[cfg(test)]

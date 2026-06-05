@@ -1,26 +1,11 @@
 # orchd
 
-Execution engine for the [Orch specification](https://github.com/adiled/orch). Takes parsed Orchfile JSON and turns it into running, supervised services.
+Keep your services running with one simple file.
 
-```
-Orchfile → orch parse (JSON) → Runtime (ExecSet) → Platform (native artifacts)
-```
-
-**Runtime** produces execution commands from service definitions. **Platform** consumes them and generates native service manager artifacts.
-
-| Layer    | Implemented          | Planned                |
-|----------|----------------------|------------------------|
-| Runtime  | `bare`, `apple`      | `containerd`, `podman` |
-| Platform | `systemd`, `launchd` | (none)|
-
-The [`apple`](orchd-apple/) runtime runs container-mode services on macOS 26+
-via Apple's native [container](https://github.com/apple/container) framework. It
-is a standalone Zig co-process (`orchd-apple/`) that speaks XPC to
-`container-apiserver`; build it with `cd orchd-apple && zig build`.
-
-The `launchd` platform supervises services via [`orchd supervise`](src/supervise.rs),
-a launchd-native leaf process that renders the dependency ordering and stop/post-stop
-teardown launchd lacks natively, driven by the runtime-neutral `ExecSet`.
+You write a short file listing what you want running (a web app, a database, a
+worker). orchd starts them, starts them in the right order, restarts them if they
+crash, and stops them cleanly when you ask. On a Mac it uses launchd; on Linux it
+uses systemd. You do not need to know how either works.
 
 ## Install
 
@@ -29,167 +14,47 @@ cargo build --release
 ln -sf target/release/orchd /usr/local/bin/orchd
 ```
 
-Requires [orch](https://github.com/adiled/orch) in `PATH`.
+You also need [`orch`](https://github.com/adiled/orch) on your PATH (it reads the file).
 
-## Commands
+## Write an Orchfile
 
-```
-orchd generate [--force]
-orchd up [services...] [--no-generate]
-orchd down [services...]
-orchd restart [services...]
-orchd status [--json]
-orchd logs <service> [-n lines] [--follow]
-orchd health [--timeout 60s] [-v]
-orchd list [--enabled] [--disabled] [--json]
-orchd clean [--keep-data]
-```
-
-### Composable rows
-
-The same work, exposed as pipe-able stages so a consuming project can splice its
-own steps between them. Each reads JSON on stdin and writes JSON on stdout;
-`tend` is the only one with side effects.
+Put a file named `Orchfile` next to your project. Each `SERVICE` is one thing to
+run. Here is a database and a web app that needs it:
 
 ```
-orchd sow      # spec (orch parse JSON)  ->  cuttings (each service + its ExecSet)
-orchd plant    # cuttings                ->  beds (each service's native files, grouped)
-orchd tend     # beds                    ->  written, installed, started
-```
+SERVICE database
+FROM postgres:16
+ENV POSTGRES_PASSWORD=secret
+HEALTHCHECK pg_isready -h localhost
 
-```sh
-orch parse Orchfile \
-  | orchd --runtime apple sow \
-  | jq '.cuttings |= map(select(.service.disabled | not))' \   # your policy, not orchd's
-  | orchd --platform launchd --namespace orch plant \
-  | orchd --platform launchd --namespace orch tend
-```
-
-`sow` takes `--runtime`; `plant` and `tend` take `--platform`. orchd holds no
-composition policy (profiles, manifests, groves); those are the consuming
-project's, built over the rows' JSON. See [`ORCHARD.md`](ORCHARD.md).
-
-
-## Global Flags
-
-```
---orchfile <path>       Path to Orchfile (default: ./Orchfile)
---overlay <path>        Overlay file (repeatable)
---runtime <name>        bare (default), apple
---namespace <name>      Unit prefix (default: orch)
---state-dir <path>      Artifact directory (default: ~/.orch)
---data-dir <path>       Service data (default: <state-dir>/data)
---orch-bin <path>       orch binary (default: orch)
--v, --verbose
--q, --quiet
-```
-
-## Configuration
-
-`.orchrc` in project directory or `$HOME`, one `KEY=VALUE` per line:
-
-```
-runtime=bare
-namespace=myapp
-state_dir=/var/lib/myapp
-```
-
-Supported keys: `runtime`, `platform`, `namespace`, `state_dir`, `data_dir`, `orch_bin`, `orchfile`.
-
-Merge order: CLI > environment > `.orchrc` > defaults.
-
-## Example
-
-A three-service stack (Postgres, a one-shot migration, and an app) wired with
-dependencies and health checks. This runs on the implemented Linux path
-(`bare` runtime + `systemd`).
-
-**`Orchfile`**
-
-```
-ARG pg_port=5432
-ARG app_port=8000
-
-SERVICE postgres
-RUN /usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/main -p ${pg_port}
-USER postgres
-HEALTHCHECK pg_isready -h localhost -p ${pg_port}
+SERVICE web
+RUN myapp --port 8000
+REQUIRES database
+HEALTHCHECK http://localhost:8000
 RESTART on-failure
-RESTART_DELAY 2s
-MEMORY 1G
-
-SERVICE migrate
-RUN /srv/app/bin/migrate
-WORKDIR /srv/app
-ENV DATABASE_URL=postgres://localhost:${pg_port}/app
-REQUIRES postgres
-ONESHOT true
-
-SERVICE app
-RUN /srv/app/bin/server --port ${app_port}
-WORKDIR /srv/app
-ENV DATABASE_URL=postgres://localhost:${pg_port}/app
-REQUIRES postgres
-AFTER migrate
-HEALTHCHECK http://localhost:${app_port}/health
-RESTART on-failure
-TIMEOUT_START 30s
 ```
 
-**Generate and run**
+`REQUIRES database` means web waits until the database is actually ready. That is
+the whole idea: say what you want, orchd handles the rest. (The full list of
+options lives in the [Orch spec](https://github.com/adiled/orch).)
+
+## Use it
 
 ```sh
-orchd generate                 # Orchfile -> systemd units in ~/.orch/units
-orchd up                       # start the orch.target (deps ordered automatically)
-orchd status                   # SERVICE / STATE / SUB / PID table
-orchd health --timeout 30s -v  # poll each HEALTHCHECK until green
-orchd logs app --follow        # tail a service
-orchd clean                    # stop everything and remove generated artifacts
+orchd grow      # start everything
+orchd survey    # see what is running
+orchd logs web  # watch one service
+orchd fell      # stop everything and clean up
 ```
 
-**Generated `orch-app.service`** (produced from the `app` service above)
+That is the day-to-day. Run `orchd grow` again any time you change the Orchfile.
 
-```ini
-[Unit]
-Description=orch: app
-PartOf=orch.target
-After=orch-postgres-ready.service orch-migrate.service
-BindsTo=orch-postgres.service
+## Going further
 
-[Service]
-Type=simple
-ExecStart=/bin/bash -c '/srv/app/bin/server --port 8000'
-WorkingDirectory=/srv/app
-Environment="DATABASE_URL=postgres://localhost:5432/app"
-Restart=on-failure
-TimeoutStartSec=30s
-
-[Install]
-WantedBy=orch.target
-```
-
-Because `postgres` has a `HEALTHCHECK` and is required, orchd generates a
-`orch-postgres-ready.service` gate so dependents start only once Postgres is
-actually accepting connections, not merely once its process is up:
-
-```ini
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/bash -c 'until pg_isready -h localhost -p 5432 >/dev/null 2>&1; do sleep 2; done'
-TimeoutStartSec=120s
-```
-
-> On macOS the same Orchfile generates launchd plists instead (`--platform launchd`,
-> the default there); container-mode services (`FROM …`) use the `apple` runtime.
-
-
-## Tests
-
-```sh
-cargo test                        # 113 unit tests
-cargo test -- --include-ignored   # + integration test (needs orch binary)
-```
+- **Settings:** drop an `.orchrc` file (`KEY=value` per line) to set defaults like
+  `namespace=myapp` or `runtime=apple`, so you do not type flags every time.
+- **Build your own tooling:** `grow` is just three smaller steps you can pipe and
+  reshape: `orchd sow | orchd plant | orchd tend`. See [`ORCHARD.md`](ORCHARD.md).
 
 ## License
 

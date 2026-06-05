@@ -73,11 +73,6 @@ pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
     Ok(())
 }
 
-pub fn restart(services: &[String], config: &Config) -> Result<(), PlatformError> {
-    stop(services, config)?;
-    start(services, config)
-}
-
 #[derive(Debug)]
 pub struct ServiceStatus {
     pub name: String,

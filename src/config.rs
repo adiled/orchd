@@ -24,7 +24,6 @@ pub struct Config {
     /// Runtime name: bare, containerd, podman, apple.
     pub runtime: String,
     /// Platform name: systemd, launchd.
-    #[allow(dead_code)]
     pub platform: String,
     /// Scope: System (default, /etc/systemd/system) or User (~/.config/systemd/user, launchd LaunchAgents).
     pub scope: Scope,
@@ -225,7 +224,7 @@ mod tests {
 
     fn stub_cli() -> Cli {
         Cli {
-            command: Commands::Generate { force: false },
+            command: Commands::Survey { json: false },
             orchfile: None,
             overlay: vec![],
             runtime: None,

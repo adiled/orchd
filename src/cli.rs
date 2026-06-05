@@ -66,91 +66,57 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Generate platform artifacts from Orchfile
-    Generate {
-        /// Regenerate even if artifacts exist and Orchfile hasn't changed
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Generate artifacts and start services
-    Up {
-        /// Specific services to start (default: all enabled)
+    // ----- walks (the common path) -----------------------------------------
+    /// Bring the grove up: sow, plant, and tend in one step.
+    Grow {
+        /// Specific services to start (default: all enabled).
         services: Vec<String>,
 
-        /// Skip generation (use existing artifacts)
+        /// Write and install but do not start.
         #[arg(long)]
-        no_generate: bool,
-
-        /// Wait for health after start (e.g., "60s", "0" = don't wait)
-        #[arg(long)]
-        health_timeout: Option<String>,
+        no_start: bool,
     },
 
-    /// Stop services
-    Down {
-        /// Specific services to stop (default: all managed)
-        services: Vec<String>,
-    },
-
-    /// Restart services
-    Restart {
-        /// Specific services to restart (default: all managed)
-        services: Vec<String>,
-    },
-
-    /// Show status of all managed services
-    Status {
-        /// Output as JSON instead of table
+    /// Report the grove: each tree's state.
+    Survey {
+        /// Output as JSON instead of a table.
         #[arg(long)]
         json: bool,
     },
 
-    /// Tail logs for a service
+    /// Tear the grove down: stop and remove its beds.
+    Fell {
+        /// Keep service data directories.
+        #[arg(long)]
+        keep_data: bool,
+    },
+
+    /// Tail a tree's logs.
     Logs {
-        /// Service name
+        /// Service name.
         service: String,
 
-        /// Follow log output
+        /// Follow log output.
         #[arg(long, default_value = "true")]
         follow: bool,
 
-        /// Number of lines to show initially
+        /// Number of lines to show initially.
         #[arg(long, short = 'n', default_value = "100")]
         lines: u32,
     },
 
-    /// Wait for all enabled services to be healthy
-    Health {
-        /// Maximum wait time (e.g., "60s")
-        #[arg(long, default_value = "60s")]
-        timeout: String,
+    // ----- rows (composable pipes) -----------------------------------------
+    /// Row: spec (stdin) -> cuttings (stdout). Pair each service with its ExecSet.
+    Sow {},
 
-        /// Show per-service health details
-        #[arg(long, short)]
-        verbose: bool,
-    },
+    /// Row: cuttings (stdin) -> beds (stdout). Render each service's native files.
+    Plant {},
 
-    /// List all services defined in Orchfile
-    List {
-        /// Show only enabled services
+    /// Row: beds (stdin) -> running. Write, install, and start.
+    Tend {
+        /// Write and install but do not start.
         #[arg(long)]
-        enabled: bool,
-
-        /// Show only disabled services
-        #[arg(long)]
-        disabled: bool,
-
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Remove all generated artifacts and stop services
-    Clean {
-        /// Don't remove data directories
-        #[arg(long)]
-        keep_data: bool,
+        no_start: bool,
     },
 
     /// Supervise a single service from a spec file (invoked by launchd; internal).
@@ -159,18 +125,5 @@ pub enum Commands {
         /// Path to the SuperviseSpec JSON.
         #[arg(long)]
         spec: PathBuf,
-    },
-
-    /// Row: spec (stdin) -> sown (stdout). Annotate each service with its ExecSet.
-    Sow {},
-
-    /// Row: sown (stdin) -> artifacts (stdout). Render native units/plists.
-    Plant {},
-
-    /// Row: artifacts (stdin) -> running. Write, install, and start.
-    Tend {
-        /// Write and install but do not start.
-        #[arg(long)]
-        no_start: bool,
     },
 }

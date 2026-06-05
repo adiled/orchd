@@ -174,48 +174,18 @@ pub fn up(
     Ok(())
 }
 
-/// Stop services.
-pub fn down(config: &Config, services: &[String]) -> Result<(), EngineError> {
-    if !config.quiet {
-        if services.is_empty() {
-            eprintln!("stopping all services...");
-        } else {
-            eprintln!("stopping: {}", services.join(", "));
-        }
-    }
-
-    match config.platform.as_str() {
-        "launchd" => crate::platform::launchd::lifecycle::stop(services, config)?,
-        _ => crate::platform::systemd::lifecycle::stop(services, config)?,
-    }
-
-    if !config.quiet {
-        eprintln!("stopped");
-    }
-
-    Ok(())
+/// Tear the grove down: stop everything and remove its beds.
+pub fn fell(config: &Config, keep_data: bool) -> Result<(), EngineError> {
+    clean(config, keep_data)
 }
 
-/// Restart services.
-pub fn restart(config: &Config, services: &[String]) -> Result<(), EngineError> {
-    if !config.quiet {
-        if services.is_empty() {
-            eprintln!("restarting all services...");
-        } else {
-            eprintln!("restarting: {}", services.join(", "));
-        }
+/// Bring the grove up: generate artifacts, then start (unless `no_start`).
+pub fn grow(config: &Config, services: &[String], no_start: bool) -> Result<(), EngineError> {
+    if no_start {
+        generate(config, false)
+    } else {
+        up(config, services, false)
     }
-
-    match config.platform.as_str() {
-        "launchd" => crate::platform::launchd::lifecycle::restart(services, config)?,
-        _ => crate::platform::systemd::lifecycle::restart(services, config)?,
-    }
-
-    if !config.quiet {
-        eprintln!("restarted");
-    }
-
-    Ok(())
 }
 
 /// Show status of managed services.
@@ -233,157 +203,6 @@ pub fn logs(config: &Config, service: &str, follow: bool, lines: u32) -> Result<
         "launchd" => crate::platform::launchd::lifecycle::logs(service, follow, lines, config)?,
         _ => crate::platform::systemd::lifecycle::logs(service, follow, lines, config)?,
     }
-    Ok(())
-}
-
-/// List all services from Orchfile.
-pub fn list(
-    config: &Config,
-    only_enabled: bool,
-    only_disabled: bool,
-    as_json: bool,
-) -> Result<(), EngineError> {
-    let orchfile = parse_orchfile(config)?;
-
-    let services: Vec<&crate::types::Service> = orchfile
-        .services
-        .iter()
-        .filter(|s| {
-            if only_enabled {
-                !s.disabled
-            } else if only_disabled {
-                s.disabled
-            } else {
-                true
-            }
-        })
-        .collect();
-
-    if as_json {
-        print!("[");
-        for (i, s) in services.iter().enumerate() {
-            if i > 0 {
-                print!(",");
-            }
-            let mode = if s.is_host() { "host" } else { "container" };
-            let hc = s.healthcheck.as_deref().unwrap_or("");
-            print!(
-                "\n  {{\"name\":\"{}\",\"mode\":\"{}\",\"disabled\":{},\"healthcheck\":{}}}",
-                s.name,
-                mode,
-                s.disabled,
-                if hc.is_empty() {
-                    "null".to_string()
-                } else {
-                    format!("\"{}\"", hc)
-                }
-            );
-        }
-        println!("\n]");
-    } else {
-        println!(
-            "{:<24} {:<10} {:<10} {}",
-            "SERVICE", "MODE", "STATUS", "HEALTHCHECK"
-        );
-        println!("{}", "-".repeat(72));
-        for s in &services {
-            let mode = if s.is_host() { "host" } else { "container" };
-            let status = if s.disabled { "disabled" } else { "enabled" };
-            let hc = s.healthcheck.as_deref().unwrap_or("-");
-            println!("{:<24} {:<10} {:<10} {}", s.name, mode, status, hc);
-        }
-    }
-
-    Ok(())
-}
-
-/// Poll healthchecks for enabled services and report pass/fail.
-pub fn health(config: &Config, timeout_str: &str, verbose: bool) -> Result<(), EngineError> {
-    let orchfile = parse_orchfile(config)?;
-
-    let timeout_secs = parse_duration_secs(timeout_str);
-    let start = std::time::Instant::now();
-
-    let services_with_hc: Vec<&crate::types::Service> = orchfile
-        .services
-        .iter()
-        .filter(|s| !s.disabled && s.healthcheck.is_some())
-        .collect();
-
-    if services_with_hc.is_empty() {
-        if !config.quiet {
-            eprintln!("no services with healthchecks found");
-        }
-        return Ok(());
-    }
-
-    if !config.quiet {
-        eprintln!(
-            "checking health of {} service(s), timeout {}s...",
-            services_with_hc.len(),
-            timeout_secs
-        );
-    }
-
-    let mut passed = Vec::new();
-    let mut failed = Vec::new();
-
-    for svc in &services_with_hc {
-        let hc = svc.healthcheck.as_deref().unwrap();
-        let svc_start = std::time::Instant::now();
-        let remaining = timeout_secs.saturating_sub(start.elapsed().as_secs());
-
-        if remaining == 0 {
-            failed.push((svc.name.as_str(), "timeout (global)"));
-            continue;
-        }
-
-        if verbose {
-            eprintln!("  checking {}: {}", svc.name, hc);
-        }
-
-        // Determine if this is an HTTP healthcheck or a command
-        let check_cmd = if hc.starts_with("http://") || hc.starts_with("https://") {
-            format!("curl -sf '{}' >/dev/null 2>&1", hc)
-        } else {
-            format!("{} >/dev/null 2>&1", hc)
-        };
-
-        let ok = poll_healthcheck(&check_cmd, remaining);
-
-        if ok {
-            let elapsed = svc_start.elapsed().as_millis();
-            if verbose {
-                eprintln!("    pass ({}ms)", elapsed);
-            }
-            passed.push(svc.name.as_str());
-        } else {
-            if verbose {
-                eprintln!("    FAIL");
-            }
-            failed.push((svc.name.as_str(), "healthcheck timed out"));
-        }
-    }
-
-    // Print summary
-    println!(
-        "{:<24} {}",
-        "SERVICE", "HEALTH"
-    );
-    println!("{}", "-".repeat(40));
-    for name in &passed {
-        println!("{:<24} pass", name);
-    }
-    for (name, reason) in &failed {
-        println!("{:<24} FAIL ({})", name, reason);
-    }
-
-    if !failed.is_empty() {
-        return Err(EngineError::Runtime(crate::runtime::RuntimeError::Other(
-            format!("{}/{} healthchecks failed", failed.len(), passed.len() + failed.len()),
-        )));
-    }
-
     Ok(())
 }
 
@@ -483,48 +302,6 @@ fn is_up_to_date(config: &Config) -> bool {
     has_units
 }
 
-/// Poll a healthcheck command until it succeeds or timeout is reached.
-fn poll_healthcheck(cmd: &str, timeout_secs: u64) -> bool {
-    let start = std::time::Instant::now();
-    loop {
-        let result = Command::new("/bin/bash")
-            .args(["-c", cmd])
-            .output();
-
-        if let Ok(output) = result {
-            if output.status.success() {
-                return true;
-            }
-        }
-
-        if start.elapsed().as_secs() >= timeout_secs {
-            return false;
-        }
-
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    }
-}
-
-/// Parse a duration string like "60s", "2m", "120" into seconds.
-fn parse_duration_secs(s: &str) -> u64 {
-    let s = s.trim();
-    if let Some(n) = s.strip_suffix('s') {
-        n.parse().unwrap_or(60)
-    } else if let Some(n) = s.strip_suffix('m') {
-        n.parse::<u64>().unwrap_or(1) * 60
-    } else {
-        s.parse().unwrap_or(60)
-    }
-}
-
-/// Parse the Orchfile and return the deserialized OrchFile.
-/// Used by commands that need service info without generating (list, health).
-pub fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
-    let json = call_orch_parse(config)?;
-    serde_json::from_str(&json)
-        .map_err(|e| EngineError::JsonDeserialize(format!("{}", e)))
-}
-
 /// Call `orch parse <orchfile> [overlays...] [--arg key=value ...]` and return stdout JSON.
 ///
 /// Automatically injects a temporary overlay with ARG declarations for orchd's
@@ -616,38 +393,6 @@ fn write_vars_overlay(config: &Config) -> Result<std::path::PathBuf, EngineError
 mod tests {
     use super::*;
 
-    // --- parse_duration_secs ---
-
-    #[test]
-    fn test_parse_duration_secs__seconds_suffix() {
-        assert_eq!(parse_duration_secs("30s"), 30);
-    }
-
-    #[test]
-    fn test_parse_duration_secs__minutes_suffix() {
-        assert_eq!(parse_duration_secs("2m"), 120);
-    }
-
-    #[test]
-    fn test_parse_duration_secs__plain_number() {
-        assert_eq!(parse_duration_secs("45"), 45);
-    }
-
-    #[test]
-    fn test_parse_duration_secs__invalid_falls_back_to_60() {
-        assert_eq!(parse_duration_secs("abc"), 60);
-    }
-
-    #[test]
-    fn test_parse_duration_secs__empty_falls_back_to_60() {
-        assert_eq!(parse_duration_secs(""), 60);
-    }
-
-    #[test]
-    fn test_parse_duration_secs__whitespace_trimmed() {
-        assert_eq!(parse_duration_secs("  10s  "), 10);
-    }
-
     // --- EngineError Display ---
 
     #[test]
@@ -710,7 +455,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
 
         let cli = crate::cli::Cli {
-            command: crate::cli::Commands::Generate { force: false },
+            command: crate::cli::Commands::Survey { json: false },
             orchfile: None,
             overlay: vec![],
             runtime: None,
@@ -764,7 +509,7 @@ mod tests {
         let data_dir = tmp.join("data");
 
         let cli = crate::cli::Cli {
-            command: crate::cli::Commands::Generate { force: false },
+            command: crate::cli::Commands::Survey { json: false },
             orchfile: Some(fixture),
             overlay: vec![],
             runtime: Some("bare".to_string()),
