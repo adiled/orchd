@@ -362,10 +362,15 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_platform__returns_systemd_on_linux() {
-        // On this Debian 12 LXC, /run/systemd/system exists
-        let platform = detect_platform();
-        assert_eq!(platform, "systemd");
+    #[cfg(target_os = "macos")]
+    fn test_detect_platform__macos_returns_launchd() {
+        assert_eq!(detect_platform(), "launchd");
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn test_detect_platform__non_macos_returns_systemd() {
+        assert_eq!(detect_platform(), "systemd");
     }
 
     // --- parse_orchrc ---
