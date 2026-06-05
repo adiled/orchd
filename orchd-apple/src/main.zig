@@ -60,6 +60,8 @@ pub fn main(init: std.process.Init) !void {
         try cmdStop(allocator, namespace); // namespace slot carries the container id
     } else if (std.mem.eql(u8, command, "delete")) {
         try cmdDelete(allocator, namespace);
+    } else if (std.mem.eql(u8, command, "kernel")) {
+        try cmdKernel(allocator, io);
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -115,6 +117,23 @@ fn cmdDelete(allocator: std.mem.Allocator, id: []const u8) !void {
         std.debug.print("error: delete {s} failed ({s})\n", .{ id, @errorName(err) });
         std.process.exit(1);
     };
+}
+
+/// `kernel`: resolve the default kernel via XPC and emit its JSON.
+fn cmdKernel(allocator: std.mem.Allocator, io: std.Io) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    // SystemPlatform for the Linux guest on Apple Silicon.
+    const platform = "{\"os\":\"linux\",\"architecture\":\"arm64\"}";
+    const json = c.getDefaultKernel(allocator, platform) catch |err| {
+        std.debug.print("error: getDefaultKernel failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(json);
+    var buf: [4096]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(json);
+    try fw.interface.flush();
 }
 
 fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {

@@ -110,7 +110,27 @@ pub const Client = struct {
         defer reply.deinit();
         try reply.checkError();
 
-        const data = reply.getData(xpc.Key.containers) orelse return allocator.dupe(u8, "[]") catch xpc.XpcError.ConnectionFailed;
+        const containers = reply.getData(xpc.Key.containers) orelse return allocator.dupe(u8, "[]") catch xpc.XpcError.ConnectionFailed;
+        return allocator.dupe(u8, containers) catch xpc.XpcError.ConnectionFailed;
+    }
+
+    /// Get the default kernel for the given platform. Returns the apiserver's
+    /// JSON-encoded Kernel as an owned slice, which is relayed verbatim into the
+    /// `kernel` field of a containerCreate request (no need to parse it).
+    pub fn getDefaultKernel(
+        self: Client,
+        allocator: std.mem.Allocator,
+        platform_json: []const u8,
+    ) xpc.XpcError![]u8 {
+        const req = xpc.Message.init(xpc.Route.get_default_kernel);
+        defer req.deinit();
+        req.setData(xpc.Key.system_platform, platform_json);
+
+        const reply = try self.conn.send(req);
+        defer reply.deinit();
+        try reply.checkError();
+
+        const data = reply.getData(xpc.Key.kernel) orelse return xpc.XpcError.ApiError;
         return allocator.dupe(u8, data) catch xpc.XpcError.ConnectionFailed;
     }
 };

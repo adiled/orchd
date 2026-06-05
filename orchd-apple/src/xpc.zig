@@ -24,6 +24,7 @@ pub const Route = struct {
     pub const container_delete = "containerDelete";
     pub const container_list = "containerList";
     pub const container_state = "containerState";
+    pub const get_default_kernel = "getDefaultKernel";
 };
 
 // Field keys (XPCKeys enum rawValues from apple/container).
@@ -34,6 +35,8 @@ pub const Key = struct {
     pub const containers = "containers";
     pub const list_filters = "listFilters";
     pub const api_server_version = "apiServerVersion";
+    pub const system_platform = "systemPlatform";
+    pub const kernel = "kernel";
 };
 
 // ─── Connection ────────────────────────────────────────────────────────────
