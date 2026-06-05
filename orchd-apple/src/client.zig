@@ -135,9 +135,27 @@ pub const Client = struct {
     }
 };
 
-/// List images via the core-images XPC service (a separate mach service from the
-/// apiserver). Returns the JSON-encoded [ImageDescription] array. This is the
-/// gateway to image resolution for create (descriptor + OCI config via contentGet).
+/// Fetch a content-store blob by digest via the core-images service. The daemon
+/// replies with a local file path (`contentPath`); we read and return its bytes.
+/// Used to walk image index -> manifest -> OCI config for create.
+pub fn contentGet(allocator: std.mem.Allocator, io: std.Io, digest: []const u8) xpc.XpcError![]u8 {
+    const conn = xpc.Connection.initService(xpc.IMAGES_SERVICE);
+    defer conn.close();
+
+    const dig_z = allocator.dupeZ(u8, digest) catch return xpc.XpcError.ConnectionFailed;
+    defer allocator.free(dig_z);
+
+    const req = xpc.Message.init(xpc.Route.content_get);
+    defer req.deinit();
+    req.setString(xpc.Key.digest, dig_z);
+
+    const reply = try conn.send(req);
+    defer reply.deinit();
+    try reply.checkError();
+
+    const path = reply.getString(xpc.Key.content_path) orelse return xpc.XpcError.ApiError;
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch xpc.XpcError.ApiError;
+}
 pub fn imageList(allocator: std.mem.Allocator) xpc.XpcError![]u8 {
     const conn = xpc.Connection.initService(xpc.IMAGES_SERVICE);
     defer conn.close();

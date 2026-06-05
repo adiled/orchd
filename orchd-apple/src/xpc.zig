@@ -27,6 +27,7 @@ pub const Route = struct {
     pub const container_state = "containerState";
     pub const get_default_kernel = "getDefaultKernel";
     pub const image_list = "imageList";
+    pub const content_get = "contentGet";
 };
 
 // Field keys (XPCKeys enum rawValues from apple/container).
@@ -40,6 +41,8 @@ pub const Key = struct {
     pub const system_platform = "systemPlatform";
     pub const kernel = "kernel";
     pub const image_descriptions = "imageDescriptions";
+    pub const digest = "digest";
+    pub const content_path = "contentPath";
 };
 
 // ─── Connection ────────────────────────────────────────────────────────────

@@ -64,6 +64,8 @@ pub fn main(init: std.process.Init) !void {
         try cmdKernel(allocator, io);
     } else if (std.mem.eql(u8, command, "images")) {
         try cmdImages(allocator, io);
+    } else if (std.mem.eql(u8, command, "content")) {
+        try cmdContent(allocator, io, namespace); // namespace slot carries the digest
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -148,6 +150,19 @@ fn cmdImages(allocator: std.mem.Allocator, io: std.Io) !void {
     var buf: [8192]u8 = undefined;
     var fw = std.Io.File.stdout().writer(io, &buf);
     try fw.interface.writeAll(json);
+    try fw.interface.flush();
+}
+
+/// `content <digest>`: fetch a content-store blob via XPC and emit it.
+fn cmdContent(allocator: std.mem.Allocator, io: std.Io, digest: []const u8) !void {
+    const data = client_mod.contentGet(allocator, io, digest) catch |err| {
+        std.debug.print("error: contentGet failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(data);
+    var buf: [8192]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(data);
     try fw.interface.flush();
 }
 
