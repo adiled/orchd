@@ -1,0 +1,16 @@
+.{
+    .name = .orchd_apple,
+    .fingerprint = 0xd1da7541c6e53418,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+
+    .dependencies = .{
+        // CLI argument parsing — stable, 1.5k stars, last release April 2026.
+        .clap = .{
+            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.12.0.tar.gz",
+            .hash = "clap-0.12.0-oBajB7foAQDqlSwaSG5g0yq7xGbQARUsBk5T64gAOqP5",
+        },
+    },
+
+    .paths = .{""},
+}

@@ -1,3 +1,4 @@
+pub mod apple;
 pub mod bare;
 
 use crate::config::Config;
@@ -53,8 +54,9 @@ pub trait Runtime {
 pub fn create_runtime(name: &str, config: &Config) -> Result<Box<dyn Runtime>, RuntimeError> {
     match name {
         "bare" => Ok(Box::new(bare::BareRuntime::new(config.data_dir.clone()))),
+        "apple" => Ok(Box::new(apple::AppleRuntime::new(config))),
         _ => Err(RuntimeError::Other(format!(
-            "unknown runtime '{}'. Available: bare",
+            "unknown runtime '{}'. Available: bare, apple",
             name
         ))),
     }
