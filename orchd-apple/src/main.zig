@@ -11,6 +11,7 @@ const clap = @import("clap");
 
 const client_mod = @import("client.zig");
 const exec_set_mod = @import("exec_set.zig");
+const oci_mod = @import("oci.zig");
 const prepare_mod = @import("prepare.zig");
 const types = @import("types.zig");
 
@@ -66,6 +67,8 @@ pub fn main(init: std.process.Init) !void {
         try cmdImages(allocator, io);
     } else if (std.mem.eql(u8, command, "content")) {
         try cmdContent(allocator, io, namespace); // namespace slot carries the digest
+    } else if (std.mem.eql(u8, command, "resolve")) {
+        try cmdResolve(allocator, io, namespace); // namespace slot carries the image ref
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -164,6 +167,24 @@ fn cmdContent(allocator: std.mem.Allocator, io: std.Io, digest: []const u8) !voi
     var fw = std.Io.File.stdout().writer(io, &buf);
     try fw.interface.writeAll(data);
     try fw.interface.flush();
+}
+
+/// `resolve <ref>`: walk the OCI config over XPC and print initProcess fields.
+fn cmdResolve(allocator: std.mem.Allocator, io: std.Io, reference: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const r = oci_mod.resolve(arena, io, reference) catch |err| {
+        std.debug.print("error: resolve failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    std.debug.print("image:       {s} ({s})\n", .{ r.image_digest, r.image_media_type });
+    std.debug.print("executable:  {s}\n", .{r.executable});
+    std.debug.print("arguments:   ", .{});
+    for (r.arguments) |a| std.debug.print("{s} ", .{a});
+    std.debug.print("\nworkingdir:  {s}\n", .{r.working_directory});
+    std.debug.print("environment: {d} vars\n", .{r.environment.len});
 }
 
 fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
