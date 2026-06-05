@@ -1,10 +1,13 @@
 //! Apple container runtime — delegates to the `orchd-apple` Zig binary.
 //!
 //! The Zig binary handles:
-//!   check   → XPC ping to com.apple.container.apiserver
-//!   exec-set → translate Service → ExecSet (container CLI commands)
-//!   prepare  → `container image pull`
+//!   check    → XPC ping to com.apple.container.apiserver
+//!   exec-set → translate Service → ExecSet (orchd-apple XPC subcommands)
+//!   prepare  → image pull
 //!   cleanup  → delete container via XPC
+//!
+//! The generated ExecSet re-invokes orchd-apple (run/wait/stop/delete), so the
+//! whole container lifecycle runs over XPC with no `container` CLI.
 //!
 //! Communication protocol: JSON on stdin/stdout.
 
@@ -192,18 +195,14 @@ mod tests {
 
         let exec = rt.exec_set(&svc).expect("exec_set should succeed");
 
-        assert!(exec.start.contains("container run --name orch-postgres"));
-        assert!(exec.start.contains("--init"));
-        assert!(exec.start.contains("postgres:15"));
-        assert_eq!(
-            exec.pre_start.as_deref(),
-            Some("container image pull postgres:15")
-        );
-        assert_eq!(exec.stop.as_deref(), Some("container stop orch-postgres"));
-        assert_eq!(
-            exec.post_stop.as_deref(),
-            Some("container delete --force orch-postgres")
-        );
+        // The ExecSet drives the orchd-apple binary's XPC subcommands, not the
+        // `container` CLI. The leading token is the absolute orchd-apple path.
+        assert!(exec.start.contains(" run orch-postgres postgres:15"));
+        assert!(exec.start.contains(" wait orch-postgres"));
+        assert!(!exec.start.contains("container "));
+        assert!(exec.pre_start.as_deref().unwrap().ends_with(" pull postgres:15"));
+        assert!(exec.stop.as_deref().unwrap().ends_with(" stop orch-postgres"));
+        assert!(exec.post_stop.as_deref().unwrap().ends_with(" delete orch-postgres"));
     }
 
     /// Host-mode services pass through unchanged (same as bare runtime).

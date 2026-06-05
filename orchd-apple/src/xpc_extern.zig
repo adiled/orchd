@@ -132,6 +132,11 @@ pub extern fn xpc_dictionary_set_value(
     value: xpc_object_t,
 ) void;
 
+pub extern fn xpc_dictionary_get_int64(
+    xdict: xpc_object_t,
+    key: [*:0]const u8,
+) i64;
+
 // --- Object lifecycle ---
 
 pub extern fn xpc_get_type(object: xpc_object_t) xpc_type_t;

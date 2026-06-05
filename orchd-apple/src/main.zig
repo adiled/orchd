@@ -71,6 +71,10 @@ pub fn main(init: std.process.Init) !void {
         try cmdResolve(allocator, io, namespace); // namespace slot carries the image ref
     } else if (std.mem.eql(u8, command, "run")) {
         try cmdRun(allocator, io, positionals);
+    } else if (std.mem.eql(u8, command, "wait")) {
+        try cmdWait(allocator, namespace); // namespace slot carries the container id
+    } else if (std.mem.eql(u8, command, "pull")) {
+        try cmdPull(io, namespace); // namespace slot carries the image ref
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -208,6 +212,27 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const
     std.debug.print("started {s} ({s}) via XPC\n", .{ id, reference });
 }
 
+/// `wait <id>`: block until the container exits, then exit with its code. This
+/// is the long-running foreground process the supervisor tracks.
+fn cmdWait(allocator: std.mem.Allocator, id: []const u8) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    const code = c.containerWait(allocator, id) catch |err| {
+        std.debug.print("error: wait {s} failed ({s})\n", .{ id, @errorName(err) });
+        std.process.exit(1);
+    };
+    std.process.exit(@intCast(code & 0xff));
+}
+
+/// `pull <image>`: ensure the image is in the content store. (Image fetch over
+/// XPC is the one remaining CLI holdout; runs `container image pull`.)
+fn cmdPull(io: std.Io, image: []const u8) !void {
+    prepare_mod.pullImage(io, image) catch |err| {
+        std.debug.print("error: pull {s} failed ({s})\n", .{ image, @errorName(err) });
+        std.process.exit(1);
+    };
+}
+
 fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
     const svc = readService(allocator, io) catch std.process.exit(1);
     defer svc.deinit();
@@ -215,7 +240,7 @@ fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !
         std.debug.print("error: apple runtime only handles container-mode services\n", .{});
         std.process.exit(1);
     }
-    const es = exec_set_mod.build(allocator, svc.value, namespace) catch |err| {
+    const es = exec_set_mod.build(allocator, io, svc.value, namespace) catch |err| {
         std.debug.print("error: exec-set: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };

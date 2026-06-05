@@ -31,6 +31,7 @@ pub const Route = struct {
     pub const container_create = "containerCreate";
     pub const container_bootstrap = "containerBootstrap";
     pub const container_start_process = "containerStartProcess";
+    pub const container_wait = "containerWait";
 };
 
 // Field keys (XPCKeys enum rawValues from apple/container).
@@ -54,6 +55,7 @@ pub const Key = struct {
     pub const stdin = "stdin";
     pub const stdout = "stdout";
     pub const stderr = "stderr";
+    pub const exit_code = "exitCode";
 };
 
 // ─── Connection ────────────────────────────────────────────────────────────
@@ -137,6 +139,10 @@ pub const Message = struct {
         if (c.xpc_fd_create(fd)) |obj| {
             c.xpc_dictionary_set_value(self.handle, key.ptr, obj);
         }
+    }
+
+    pub fn getInt64(self: Message, key: [:0]const u8) i64 {
+        return c.xpc_dictionary_get_int64(self.handle, key.ptr);
     }
 
     /// Returns a slice pointing into the XPC object — valid only while self is alive.

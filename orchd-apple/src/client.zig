@@ -193,6 +193,23 @@ pub const Client = struct {
         defer reply.deinit();
         try reply.checkError();
     }
+
+    /// containerWait: block until the container's init process exits; returns its
+    /// exit code. This is the foreground process the supervisor tracks.
+    pub fn containerWait(self: Client, allocator: std.mem.Allocator, id: []const u8) xpc.XpcError!i64 {
+        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        defer allocator.free(id_z);
+
+        const req = xpc.Message.init(xpc.Route.container_wait);
+        defer req.deinit();
+        req.setString(xpc.Key.id, id_z);
+        req.setString(xpc.Key.process_identifier, id_z);
+
+        const reply = try self.conn.send(req);
+        defer reply.deinit();
+        try reply.checkError();
+        return reply.getInt64(xpc.Key.exit_code);
+    }
 };
 
 /// Fetch a content-store blob by digest via the core-images service. The daemon
