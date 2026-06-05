@@ -160,4 +160,17 @@ pub enum Commands {
         #[arg(long)]
         spec: PathBuf,
     },
+
+    /// Row: spec (stdin) -> sown (stdout). Annotate each service with its ExecSet.
+    Sow {},
+
+    /// Row: sown (stdin) -> artifacts (stdout). Render native units/plists.
+    Plant {},
+
+    /// Row: artifacts (stdin) -> running. Write, install, and start.
+    Tend {
+        /// Write and install but do not start.
+        #[arg(long)]
+        no_start: bool,
+    },
 }

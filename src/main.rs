@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod engine;
 mod exec;
+mod orchard;
 mod platform;
 mod runtime;
 mod supervise;
@@ -46,6 +47,9 @@ fn main() {
             json,
         } => engine::list(&config, *enabled, *disabled, *json).map_err(boxed),
         Commands::Clean { keep_data } => engine::clean(&config, *keep_data).map_err(boxed),
+        Commands::Sow {} => orchard::sow(&config).map_err(boxed_orchard),
+        Commands::Plant {} => orchard::plant(&config).map_err(boxed_orchard),
+        Commands::Tend { no_start } => orchard::tend(&config, !*no_start).map_err(boxed_orchard),
         Commands::Supervise { .. } => unreachable!("handled above"),
     };
 
@@ -56,5 +60,9 @@ fn main() {
 }
 
 fn boxed(e: engine::EngineError) -> Box<dyn std::error::Error> {
+    Box::new(e)
+}
+
+fn boxed_orchard(e: orchard::OrchardError) -> Box<dyn std::error::Error> {
     Box::new(e)
 }
