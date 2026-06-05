@@ -5,9 +5,9 @@ contracts. orchd grows things; it does not tell you how to arrange your orchard.
 
 ## Principle: mechanism, not policy
 
-orchd provides **mechanism** — pure transforms from an Orchfile spec to a running,
-supervised service, each stage addressable as a `stdin → stdout` pipe. It holds **no
-policy**: composition strategy, environment naming, persisted manifests, project
+orchd provides **mechanism**: pure transforms from an Orchfile spec to a running,
+supervised service, each stage addressable as a `stdin -> stdout` pipe. It holds **no
+policy**. Composition strategy, environment naming, persisted manifests, project
 discovery, and drift tracking belong to the *consuming project*, which arranges
 orchd's stages however it likes.
 
@@ -17,27 +17,27 @@ without forking orchd. If they can, orchd fits any orchard anyone designs.
 ## The pipeline
 
 ```
-Orchfiles ──graft──▶ spec ──sow──▶ sown ──plant──▶ artifacts ──tend──▶ running grove
-         (compose)         (runtime)       (platform)          (init system)
+Orchfiles --graft--> spec --sow--> sown --plant--> artifacts --tend--> running grove
+         (compose)        (runtime)       (platform)          (init system)
 ```
 
 | Stage | Verb | Transform | Owner |
 |-------|------|-----------|-------|
-| compose overlays | **graft** | base + overlays + args → one merged spec | `orch` (the parser) |
-| runtime | **sow** | spec → each service annotated with its ExecSet | `orchd sow` |
-| platform | **plant** | sown → native artifacts (units / plists / specs) | `orchd plant` |
+| compose overlays | **graft** | base + overlays + args into one merged spec | `orch` (the parser) |
+| runtime | **sow** | spec into each service annotated with its ExecSet | `orchd sow` |
+| platform | **plant** | sown into native artifacts (units / plists / specs) | `orchd plant` |
 | activate + supervise | **tend** | install + start; keep alive | `orchd tend` |
 
 Why the words earn their place:
-- **graft** — joining plant tissues; exactly what overlay merge is (the spec's
+- **graft**: joining plant tissues, exactly what overlay merge is (the spec's
   "systemd drop-in inspired" model).
-- **sow** — choose the growing method and prepare each thing to be planted; the
+- **sow**: choose the growing method and prepare each thing to be planted; the
   runtime deciding bare-soil vs container.
-- **plant** — put it in ground the OS understands; a systemd unit or launchd plist.
-- **tend** — keep it alive; `orchd tend <service>` *is* the supervisor leaf.
+- **plant**: put it in ground the OS understands, a systemd unit or launchd plist.
+- **tend**: keep it alive. `orchd tend <service>` *is* the supervisor leaf.
 
 Names flex; the **contracts** are the commitment. We do not rename things that
-don't map to a real transform — `logs` stays `logs`.
+don't map to a real transform. `logs` stays `logs`.
 
 ## The rows (plumbing): pure, pipe-able
 
@@ -47,8 +47,8 @@ flags, and is stateless. Only `tend` has side effects.
 ### `orchd sow --runtime <name>`
 
 Runtime transform. Annotates each service with the execution commands for the
-chosen runtime. Pure — no image pulls, no I/O. (Pulls become a `pre_start`
-command, run later at tend time.)
+chosen runtime. Pure: no image pulls, no I/O. (Pulls become a `pre_start` command,
+run later at tend time.)
 
 ```
 stdin:   Spec        (the `orch parse` JSON)
@@ -82,9 +82,9 @@ flags:   --start/--no-start  --scope
 ## The contracts
 
 Three JSON shapes flow through the rows. They are versioned wire formats, not
-internal types — splice freely.
+internal types. Splice freely.
 
-### Spec (graft → sow)
+### Spec (graft to sow)
 
 The merged Orchfile, emitted by `orch parse`. Abbreviated:
 
@@ -108,10 +108,10 @@ The merged Orchfile, emitted by `orch parse`. Abbreviated:
 }
 ```
 
-### Sown (sow → plant)
+### Sown (sow to plant)
 
 The spec, with each service paired to its ExecSet. The runtime's knowledge is now
-fully captured in command strings — `plant` never needs to know which runtime ran.
+fully captured in command strings; `plant` never needs to know which runtime ran.
 
 ```json
 {
@@ -134,7 +134,7 @@ fully captured in command strings — `plant` never needs to know which runtime 
 `exec` is the orthogonality contract: every runtime writes it, every platform reads
 it, neither knows the other. (This is why `ExecSet` is serde-serializable.)
 
-### Artifacts (plant → tend)
+### Artifacts (plant to tend)
 
 The native files plus where they go. `kind` lets `tend` install each correctly.
 
@@ -159,9 +159,9 @@ Convenience commands are nothing but pre-composed walks over the rows. They exis
 for the common path; they are never the only path.
 
 ```
-orchd grow    ≡  orch parse $files | orchd sow | orchd plant | orchd tend
-orchd survey  ≡  status of a grove (walk it, query the init system, report health)
-orchd fell    ≡  tend --stop, then remove artifacts (down + clean)
+orchd grow    ==  orch parse $files | orchd sow | orchd plant | orchd tend
+orchd survey  ==  status of a grove (walk it, query the init system, report health)
+orchd fell    ==  tend --stop, then remove artifacts (down + clean)
 ```
 
 A grower who wants control reaches past `grow` for the individual rows. orchd never
@@ -169,12 +169,12 @@ owns *how* the walk is arranged.
 
 ## Groves (namespaces)
 
-A **grove** is a named cluster of tended trees — a namespace. Many groves share one
+A **grove** is a named cluster of tended trees, a namespace. Many groves share one
 orchard (machine); each is surveyed and felled independently. A grove's identity is
 the `--namespace` carried through `plant`/`tend`; on systemd it is also a real
 `<ns>.target`, on launchd a `<ns>.`-prefixed set.
 
-Naming a grove, pinning which composition produced it, detecting drift — these are
+Naming a grove, pinning which composition produced it, detecting drift: these are
 **policy**. A consuming project layers them by capturing the rows' JSON (the Spec it
 grafted, the Artifacts it planted) wherever and however it wants. orchd does not
 prescribe a manifest format; it emits the material a manifest would be made of.
@@ -193,10 +193,10 @@ orch parse base.orch staging.orch --arg env=staging \
   | orchd tend
 ```
 
-orchd sees none of this. It transformed Spec → Sown and Sown → Artifacts; the grower
-arranged the orchard.
+orchd sees none of this. It transformed Spec into Sown and Sown into Artifacts; the
+grower arranged the orchard.
 
-## Today → target
+## Today to target
 
 The mechanism already exists inside the monolithic `generate`/`up`; the work is to
 expose the seams, not to invent new logic.
@@ -210,12 +210,12 @@ expose the seams, not to invent new logic.
 | common path | `generate` / `up` (monolith) | `grow` (walk over rows) |
 | composition / manifests | implicit (flags + prefix scan) | the grower's policy, over the rows' JSON |
 
-`ExecSet` is already serde-serializable — the first seam is open. The rest is
+`ExecSet` is already serde-serializable, so the first seam is open. The rest is
 lifting the internal calls to `stdin/stdout` boundaries and letting the walks
 re-express as compositions of the rows.
 
 ## Litmus
 
 > A grower should be able to splice a step between `sow` and `plant` without touching
-> orchd. If they can, orchd is an orchard tool — it fits any grove anyone designs. If
+> orchd. If they can, orchd is an orchard tool: it fits any grove anyone designs. If
 > they can only `grow`, it is a walled garden.
