@@ -60,12 +60,29 @@ orchd fell      # stop everything and clean up
 
 That is the day-to-day. Run `orchd grow` again any time you change the Orchfile.
 
-## Going further
+Set defaults in `.orchrc` (one `KEY=value` per line, like `namespace=myapp`) so
+you do not type flags every time.
 
-- **More settings:** `.orchrc` takes one `KEY=value` per line, for defaults like
-  `namespace=myapp`, so you do not type flags every time.
-- **Build your own tooling:** `grow` is just three smaller steps you can pipe and
-  reshape: `orchd sow | orchd plant | orchd tend`. See [`ORCHARD.md`](ORCHARD.md).
+## Power usage
+
+`orchd grow` is really three small steps. Run them yourself when you want to slip
+your own logic in the middle:
+
+```sh
+orch parse Orchfile \
+  | orchd sow --runtime apple \           # services -> run commands
+  | orchd plant --platform launchd \      # -> native service files
+  | orchd tend                            # -> running
+```
+
+Every step is plain JSON in, JSON out, so you can pipe anything between them:
+
+```sh
+... | orchd sow | jq 'del(.cuttings[0])' | orchd plant | ...
+```
+
+orchd has no opinion about how you compose; that part is yours. Full reference:
+[`ORCHARD.md`](ORCHARD.md).
 
 ## License
 
