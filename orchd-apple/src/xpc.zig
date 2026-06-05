@@ -32,6 +32,7 @@ pub const Key = struct {
     pub const stop_options = "stopOptions";
     pub const force_delete = "forceDelete";
     pub const containers = "containers";
+    pub const list_filters = "listFilters";
     pub const api_server_version = "apiServerVersion";
 };
 
@@ -124,13 +125,15 @@ pub const Message = struct {
     }
 
     pub fn setBool(self: Message, key: [:0]const u8, value: bool) void {
-        // XPC dictionaries store bools as int64.
-        c.xpc_dictionary_set_string(self.handle, key.ptr, if (value) "true" else "false");
+        c.xpc_dictionary_set_bool(self.handle, key.ptr, value);
     }
 
     /// Check the error key. Returns XpcError.ApiError if the server sent an error payload.
     pub fn checkError(self: Message) XpcError!void {
-        if (self.getData(ERROR_KEY)) |_| return XpcError.ApiError;
+        if (self.getData(ERROR_KEY)) |err_data| {
+            std.debug.print("xpc apiserver error: {s}\n", .{err_data});
+            return XpcError.ApiError;
+        }
     }
 };
 

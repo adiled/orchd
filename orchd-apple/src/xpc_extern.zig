@@ -115,6 +115,12 @@ pub extern fn xpc_dictionary_get_data(
     length: *usize,
 ) ?[*]const u8;
 
+pub extern fn xpc_dictionary_set_bool(
+    xdict: xpc_object_t,
+    key: [*:0]const u8,
+    value: bool,
+) void;
+
 // --- Object lifecycle ---
 
 pub extern fn xpc_get_type(object: xpc_object_t) xpc_type_t;

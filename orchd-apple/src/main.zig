@@ -54,6 +54,12 @@ pub fn main(init: std.process.Init) !void {
         try cmdPrepare(allocator, io, namespace);
     } else if (std.mem.eql(u8, command, "cleanup")) {
         try cmdCleanup(allocator, io, namespace);
+    } else if (std.mem.eql(u8, command, "list")) {
+        try cmdList(allocator, io);
+    } else if (std.mem.eql(u8, command, "stop")) {
+        try cmdStop(allocator, namespace); // namespace slot carries the container id
+    } else if (std.mem.eql(u8, command, "delete")) {
+        try cmdDelete(allocator, namespace);
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -73,6 +79,42 @@ fn cmdCheck(allocator: std.mem.Allocator) !void {
         std.process.exit(1);
     };
     std.debug.print("container-apiserver ok (version: {s})\n", .{version});
+}
+
+/// `list`: query container states via XPC and emit the daemon's structured JSON.
+fn cmdList(allocator: std.mem.Allocator, io: std.Io) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    const json = c.containerList(allocator) catch |err| {
+        std.debug.print("error: container list failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(json);
+
+    var buf: [4096]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(json);
+    try fw.interface.flush();
+}
+
+/// `stop <id>`: stop a container via XPC (SIGTERM, 5s grace).
+fn cmdStop(allocator: std.mem.Allocator, id: []const u8) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    c.containerStop(allocator, id, 5) catch |err| {
+        std.debug.print("error: stop {s} failed ({s})\n", .{ id, @errorName(err) });
+        std.process.exit(1);
+    };
+}
+
+/// `delete <id>`: force-delete a container via XPC.
+fn cmdDelete(allocator: std.mem.Allocator, id: []const u8) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    c.containerDelete(allocator, id, true) catch |err| {
+        std.debug.print("error: delete {s} failed ({s})\n", .{ id, @errorName(err) });
+        std.process.exit(1);
+    };
 }
 
 fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {

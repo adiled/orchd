@@ -43,24 +43,26 @@ pub const Client = struct {
 
     // ── Container lifecycle ────────────────────────────────────────────────
 
-    /// Stop a running container by ID/name.
-    /// `signal`  — POSIX signal number (15 = SIGTERM)
-    /// `timeout` — seconds to wait before SIGKILL
+    /// Stop a running container by ID/name, waiting `timeout_secs` before SIGKILL.
+    /// Signal is left unset so the daemon uses the container's stop signal /
+    /// runtime default (matches the CLI's default behavior).
     pub fn containerStop(
         self: Client,
         allocator: std.mem.Allocator,
         id: []const u8,
-        signal: u32,
-        timeout_secs: u32,
+        timeout_secs: i32,
     ) xpc.XpcError!void {
         const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(id_z);
 
-        // Build stopOptions JSON payload that container-apiserver expects.
-        // From ContainerAPIService source: { "signal": N, "timeout": N }
-        const opts_json = std.fmt.allocPrint(allocator, "{{\"signal\":{d},\"timeout\":{d}}}", .{
-            signal, timeout_secs,
-        }) catch return xpc.XpcError.ConnectionFailed;
+        // ContainerStopOptions @ 0.12.3 { timeoutInSeconds: Int32, signal: Int32 }
+        // signal is a number (15 = SIGTERM). NOTE: this struct differs across
+        // container versions; it must match the pinned, installed daemon.
+        const opts_json = std.fmt.allocPrint(
+            allocator,
+            "{{\"timeoutInSeconds\":{d},\"signal\":15}}",
+            .{timeout_secs},
+        ) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(opts_json);
 
         const req = xpc.Message.init(xpc.Route.container_stop);
@@ -91,5 +93,24 @@ pub const Client = struct {
         const reply = try self.conn.send(req);
         defer reply.deinit();
         try reply.checkError();
+    }
+
+    /// List containers. Returns the apiserver's JSON-encoded [ContainerSnapshot]
+    /// array as an owned slice (caller frees). This is the structured observe
+    /// plane: typed data straight from the daemon, no CLI text scraping.
+    pub fn containerList(self: Client, allocator: std.mem.Allocator) xpc.XpcError![]u8 {
+        const req = xpc.Message.init(xpc.Route.container_list);
+        defer req.deinit();
+
+        // ContainerListFilters.all encodes with its non-optional fields present.
+        // (Swift's synthesized Decodable requires the keys, even at defaults.)
+        req.setData(xpc.Key.list_filters, "{\"ids\":[],\"labels\":{}}");
+
+        const reply = try self.conn.send(req);
+        defer reply.deinit();
+        try reply.checkError();
+
+        const data = reply.getData(xpc.Key.containers) orelse return allocator.dupe(u8, "[]") catch xpc.XpcError.ConnectionFailed;
+        return allocator.dupe(u8, data) catch xpc.XpcError.ConnectionFailed;
     }
 };
