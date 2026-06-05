@@ -52,21 +52,21 @@ own steps between them. Each reads JSON on stdin and writes JSON on stdout;
 `tend` is the only one with side effects.
 
 ```
-orchd sow      # spec (orch parse JSON)  ->  sown (each service + its ExecSet)
-orchd plant    # sown                    ->  artifacts (units/plists/specs + paths)
-orchd tend     # artifacts               ->  written, installed, started
+orchd sow      # spec (orch parse JSON)  ->  cuttings (each service + its ExecSet)
+orchd plant    # cuttings                ->  beds (each service's native files, grouped)
+orchd tend     # beds                    ->  written, installed, started
 ```
 
 ```sh
 orch parse Orchfile \
   | orchd --runtime apple sow \
-  | jq '.trees |= map(select(.service.disabled | not))' \   # your policy, not orchd's
+  | jq '.cuttings |= map(select(.service.disabled | not))' \   # your policy, not orchd's
   | orchd --platform launchd --namespace orch plant \
   | orchd --platform launchd --namespace orch tend
 ```
 
 `sow` takes `--runtime`; `plant` and `tend` take `--platform`. orchd holds no
-composition policy (profiles, manifests, namespaces); those are the consuming
+composition policy (profiles, manifests, groves); those are the consuming
 project's, built over the rows' JSON. See [`ORCHARD.md`](ORCHARD.md).
 
 
