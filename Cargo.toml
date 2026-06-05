@@ -2,6 +2,10 @@
 name = "orchd"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+description = "Execution engine for the Orch specification: turns parsed Orchfile JSON into running, supervised services (systemd/launchd; bare/apple-container runtimes)."
+repository = "https://github.com/adiled/orchd"
+readme = "README.md"
 
 [dependencies]
 orch = { git = "https://github.com/adiled/orch.git", branch = "main" }
