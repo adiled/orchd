@@ -61,7 +61,8 @@ orchd fell      # stop everything and clean up
 That is the day-to-day. Run `orchd grow` again any time you change the Orchfile.
 
 Set defaults in `.orchrc` (one `KEY=value` per line, like `namespace=myapp`) so
-you do not type flags every time.
+you do not type flags every time. Full list of settings, env vars, and
+precedence: [`CONFIG.md`](CONFIG.md).
 
 ## Power usage
 
