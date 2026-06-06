@@ -608,6 +608,10 @@ pub fn resolve(
     defer allocator.free(config_body);
 
     const pcfg = try parseConfig(allocator, config_body);
+    // On the success path, ownership of argv/env/cwd transfers to the returned
+    // Image. On any error below (e.g. a mid-pull curl failure) free them here so
+    // a failed resolve does not leak.
+    errdefer pcfg.deinit(allocator);
 
     // 3. Layers -> unpack into work_dir/rootfs in order. Same rootfs assembly
     // as the offline layout path (openRootfs + extractLayerBlob). Each blob is
@@ -615,6 +619,7 @@ pub fn resolve(
     // on gzip/zstd/plain tar by magic, covering tar+gzip and tar+zstd layers).
     var rf = try openRootfs(allocator, io, work_dir);
     defer rf.dir.close(io);
+    errdefer allocator.free(rf.path);
 
     const blob_path = try std.fmt.allocPrint(allocator, "{s}/.layer.blob", .{work_dir});
     defer allocator.free(blob_path);
@@ -1177,7 +1182,7 @@ test "resolve: pulls alpine:latest and unpacks a real rootfs" {
     defer threaded.deinit();
     const io = threaded.io();
 
-    if (std.process.hasEnvVar(a, "ORCHD_OCI_SKIP_NET") catch false) return error.SkipZigTest;
+    if (std.c.getenv("ORCHD_OCI_SKIP_NET") != null) return error.SkipZigTest;
 
     const work_dir = "oci_test_net_work";
     std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
