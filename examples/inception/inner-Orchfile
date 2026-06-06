@@ -1,0 +1,5 @@
+# Inner workload: what orchd-inside-the-VM drives through containerd.
+# orchd's containerd runtime turns this into nerdctl pull + nerdctl run.
+SERVICE web
+FROM docker.io/library/alpine:latest
+CMD sleep 300
