@@ -1,10 +1,14 @@
-//! `orchd supervise` — a launchd-native, ExecSet-driven service supervisor.
+//! `orchdi` — orchd's own service supervisor. The init orchd carries with it.
 //!
-//! launchd runs one program per service and only SIGTERMs it: no ExecStop,
-//! no ExecStopPost, no dependency model. This binary is the leaf launchd execs
-//! to fill those gaps, driven entirely by a `SuperviseSpec` derived from the
-//! ExecSet — so it is runtime-agnostic (apple/containerd/podman/bare all flow
-//! through the same four command strings).
+//! This is the mechanism the platforms wrap: it reads a `SuperviseSpec` (four
+//! ExecSet command strings + deps + timeout) and babysits one service through
+//! its whole life. It is runtime-agnostic (apple / containerd / podman / bare
+//! all flow through the same four strings) and platform-independent.
+//!
+//! Who launches it differs by platform: `launchd` and `systemd` register it as
+//! a job (so the OS starts it on boot and resurrects it); the `orchdi` platform
+//! runs it raw, tracked by a pidfile, where there is no OS init to lean on
+//! (containers, CI, WSL). Invoked as the `orchd supervise --spec <path>` leaf.
 //!
 //! Lifecycle:
 //!   1. wait for dependencies to become healthy (REQUIRES aborts, AFTER proceeds)

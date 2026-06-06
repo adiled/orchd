@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::exec::ExecSet;
-use crate::supervise::{healthcheck_to_cmd, DepSpec, SuperviseSpec};
+use crate::orchdi::{healthcheck_to_cmd, DepSpec, SuperviseSpec};
 use crate::types::{RestartPolicy, Service};
 
 /// A dependency readiness gate: poll `poll_cmd` until it succeeds (or times out)
