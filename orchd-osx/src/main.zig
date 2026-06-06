@@ -63,7 +63,7 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("error: run requires <name> <image>\n", .{});
             std.process.exit(2);
         };
-        cmdRun(allocator, io, slot, image);
+        cmdRun(allocator, io, slot, image, &it);
     } else if (std.mem.eql(u8, command, "wait")) {
         cmdWait(allocator, slot);
     } else if (std.mem.eql(u8, command, "stop")) {
@@ -216,9 +216,65 @@ fn cmdCleanup(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !
     vz.delete(allocator, name) catch {};
 }
 
-fn cmdRun(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []const u8) void {
-    const code = vz.run(allocator, io, id, image) catch |err| backendStub("run", id, err);
+fn cmdRun(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []const u8, it: *std.process.Args.Iterator) void {
+    // Optional `--spec <base64>` carries the Service config (env/cmd/etc).
+    var spec_b64: ?[]const u8 = null;
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--spec")) spec_b64 = it.next();
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ov: vz.Overrides = if (spec_b64) |b64|
+        buildOverrides(arena, io, b64) catch .{}
+    else
+        .{};
+
+    const code = vz.run(allocator, io, id, image, ov) catch |err| backendStub("run", id, err);
     std.process.exit(@intCast(code));
+}
+
+/// Decode the base64 Service spec and turn it into run Overrides (env from the
+/// env map + env_files, plus entrypoint/cmd/workdir). All slices are arena-owned.
+fn buildOverrides(arena: std.mem.Allocator, io: std.Io, b64: []const u8) !vz.Overrides {
+    const dec = std.base64.standard.Decoder;
+    const json = try arena.alloc(u8, try dec.calcSizeForSlice(b64));
+    try dec.decode(json, b64);
+    const svc = try std.json.parseFromSliceLeaky(types.Service, arena, json, .{
+        .ignore_unknown_fields = true,
+        .allocate = .alloc_always,
+    });
+
+    var env: std.ArrayList([]const u8) = .empty;
+    if (svc.env == .object) {
+        var eit = svc.env.object.iterator();
+        while (eit.next()) |e| {
+            const v = switch (e.value_ptr.*) {
+                .string => |s| s,
+                else => continue,
+            };
+            try env.append(arena, try std.fmt.allocPrint(arena, "{s}={s}", .{ e.key_ptr.*, v }));
+        }
+    }
+    for (svc.env_files) |ef| {
+        const data = std.Io.Dir.cwd().readFileAlloc(io, ef, arena, .unlimited) catch continue;
+        var lit = std.mem.splitScalar(u8, data, '\n');
+        while (lit.next()) |line| {
+            const t = std.mem.trim(u8, line, " \r\t");
+            if (t.len == 0 or t[0] == '#') continue;
+            if (std.mem.indexOfScalar(u8, t, '=') == null) continue;
+            try env.append(arena, try arena.dupe(u8, t));
+        }
+    }
+
+    return .{
+        .env = try env.toOwnedSlice(arena),
+        .entrypoint = svc.entrypoint,
+        .cmd = svc.cmd,
+        .workdir = svc.workdir,
+    };
 }
 
 fn cmdWait(allocator: std.mem.Allocator, id: []const u8) void {

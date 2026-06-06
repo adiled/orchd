@@ -130,6 +130,14 @@ fn openListener(port: u32) !fd_t {
 
 /// Fork the container process, stream its stdout/stderr to `conn`, and return
 /// its exit code. `spec` argv/env/cwd describe the process to run.
+/// Return the value of the PATH entry in `env`, or a sane default.
+fn findPath(env: []const []const u8) []const u8 {
+    for (env) |e| {
+        if (std.mem.startsWith(u8, e, "PATH=")) return e["PATH=".len..];
+    }
+    return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+}
+
 fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
     if (spec.argv.len == 0) return error.EmptyArgv;
 
@@ -163,7 +171,22 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
         if (null_fd >= 0) _ = linux.close(null_fd);
 
         _ = linux.chdir(cwd.ptr);
-        _ = linux.execve(argv[0].?, argv.ptr, envp.ptr);
+
+        // exec argv[0]. If it has no '/', resolve it against PATH (like a shell
+        // /execvp), trying each dir until one execs. execve only returns on
+        // failure, so we just keep trying.
+        const cmd0 = spec.argv[0];
+        if (std.mem.indexOfScalar(u8, cmd0, '/') != null) {
+            _ = linux.execve(argv[0].?, argv.ptr, envp.ptr);
+        } else {
+            const path_env = findPath(spec.env);
+            var pit = std.mem.tokenizeScalar(u8, path_env, ':');
+            var pbuf: [4096]u8 = undefined;
+            while (pit.next()) |dir| {
+                const full = std.fmt.bufPrintZ(&pbuf, "{s}/{s}", .{ dir, cmd0 }) catch continue;
+                _ = linux.execve(full.ptr, argv.ptr, envp.ptr);
+            }
+        }
         // execve only returns on failure.
         linux.exit(127);
     }

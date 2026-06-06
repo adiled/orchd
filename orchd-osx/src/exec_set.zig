@@ -43,7 +43,11 @@ pub fn build(
     const pre_start = try std.fmt.allocPrint(allocator, "{s} pull {s}", .{ self, image });
     // The VM lives inside the `run` process, so run is the foreground process
     // launchd tracks: it blocks until the container exits. No separate `wait`.
-    const start = try std.fmt.allocPrint(allocator, "{s} run {s} {s}", .{ self, name, image });
+    // The full Service config rides along as a shell-safe base64 --spec blob so
+    // run honors env/cmd/entrypoint/workdir (the supervisor gives run no stdin).
+    const spec_b64 = try encodeSpec(allocator, svc);
+    defer allocator.free(spec_b64);
+    const start = try std.fmt.allocPrint(allocator, "{s} run {s} {s} --spec {s}", .{ self, name, image, spec_b64 });
     const stop = try std.fmt.allocPrint(allocator, "{s} stop {s}", .{ self, name });
     const post_stop = try std.fmt.allocPrint(allocator, "{s} delete {s}", .{ self, name });
 
@@ -53,6 +57,17 @@ pub fn build(
         .stop = stop,
         .post_stop = post_stop,
     };
+}
+
+/// Serialize `svc` to JSON and base64-encode it (standard alphabet), so it can
+/// ride as a single shell-safe `run --spec` argument. Caller frees the result.
+pub fn encodeSpec(allocator: std.mem.Allocator, svc: types.Service) Error![]u8 {
+    const json = std.json.Stringify.valueAlloc(allocator, svc, .{}) catch return Error.OutOfMemory;
+    defer allocator.free(json);
+    const enc = std.base64.standard.Encoder;
+    const out = allocator.alloc(u8, enc.calcSize(json.len)) catch return Error.OutOfMemory;
+    _ = enc.encode(out, json);
+    return out;
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

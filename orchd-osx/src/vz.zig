@@ -63,20 +63,30 @@ const KERNEL_CMDLINE = "console=hvc0 ip=dhcp";
 const MEMORY: u64 = 1024 * 1024 * 1024;
 const CPUS: usize = 2;
 
-/// Cached image process config (argv/env/cwd from the OCI config), stored next
-/// to the unpacked rootfs so re-runs need no re-pull.
+/// Cached image process config, stored next to the unpacked rootfs so re-runs
+/// need no re-pull. Entrypoint and Cmd are kept separate for override semantics.
 const CacheMeta = struct {
-    argv: []const []const u8,
-    env: []const []const u8,
-    cwd: []const u8,
+    entrypoint: []const []const u8 = &.{},
+    cmd: []const []const u8 = &.{},
+    env: []const []const u8 = &.{},
+    cwd: []const u8 = "/",
+};
+
+/// Service overrides layered on top of the image defaults (from `run --spec`).
+pub const Overrides = struct {
+    env: []const []const u8 = &.{}, // KEY=VALUE merged after the image env
+    entrypoint: ?[]const u8 = null,
+    cmd: ?[]const u8 = null,
+    workdir: ?[]const u8 = null,
 };
 
 /// Boot a container for `image` and block until its process exits; returns the
 /// exit code. This is the foreground process launchd tracks.
 ///
 /// Images are cached: the unpacked rootfs + its config live under
-/// ~/.orch/osx/images/<ref>, so an image is pulled at most once.
-pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []const u8) Error!i64 {
+/// ~/.orch/osx/images/<ref>, so an image is pulled at most once. `ov` layers the
+/// Service config (env/cmd/entrypoint/workdir) on top of the image defaults.
+pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []const u8, ov: Overrides) Error!i64 {
     const cache = try imageCacheDir(allocator, image);
     defer allocator.free(cache);
     const rootfs = try std.fmt.allocPrint(allocator, "{s}/rootfs", .{cache});
@@ -88,30 +98,63 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []co
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var spec: proto.ExecSpec = undefined;
+    var base: CacheMeta = undefined;
     if (fileExists(meta_path)) {
         // Cache hit: reuse the unpacked rootfs and stored config (no pull).
         const data = std.Io.Dir.cwd().readFileAlloc(io, meta_path, arena, .unlimited) catch
             return Error.ImageFailed;
-        const parsed = std.json.parseFromSliceLeaky(CacheMeta, arena, data, .{}) catch
+        base = std.json.parseFromSliceLeaky(CacheMeta, arena, data, .{}) catch
             return Error.ImageFailed;
-        spec = .{ .argv = parsed.argv, .env = parsed.env, .cwd = parsed.cwd };
     } else {
         makePath(io, cache);
         const img = oci.resolve(allocator, io, cache, image) catch |e| {
             std.debug.print("orchd-osx run: image resolve failed ({s})\n", .{@errorName(e)});
             return Error.ImageFailed;
         };
+        base = .{ .entrypoint = img.entrypoint, .cmd = img.cmd, .env = img.env, .cwd = img.cwd };
         // Persist the config so the next run skips the pull.
-        const meta = CacheMeta{ .argv = img.argv, .env = img.env, .cwd = img.cwd };
-        if (std.json.Stringify.valueAlloc(allocator, meta, .{})) |j| {
+        if (std.json.Stringify.valueAlloc(allocator, base, .{})) |j| {
             defer allocator.free(j);
             std.Io.Dir.cwd().writeFile(io, .{ .sub_path = meta_path, .data = j }) catch {};
         } else |_| {}
-        spec = .{ .argv = img.argv, .env = img.env, .cwd = img.cwd };
     }
 
+    const spec = applyOverrides(arena, base, ov) catch return Error.ImageFailed;
     return runRootfs(allocator, io, id, rootfs, spec);
+}
+
+/// Compose the final ExecSpec from the image defaults + Service overrides, with
+/// Docker semantics: entrypoint set replaces the executable (and clears the
+/// image Cmd unless a cmd override is also given); cmd set replaces the
+/// arguments; env is the image env with the service env appended (later wins).
+fn applyOverrides(arena: std.mem.Allocator, base: CacheMeta, ov: Overrides) !proto.ExecSpec {
+    var argv: std.ArrayList([]const u8) = .empty;
+    if (ov.entrypoint) |ep| {
+        try splitInto(arena, &argv, ep);
+    } else {
+        for (base.entrypoint) |s| try argv.append(arena, s);
+    }
+    if (ov.cmd) |c| {
+        try splitInto(arena, &argv, c);
+    } else if (ov.entrypoint == null) {
+        for (base.cmd) |s| try argv.append(arena, s);
+    }
+
+    var env: std.ArrayList([]const u8) = .empty;
+    for (base.env) |e| try env.append(arena, e);
+    for (ov.env) |e| try env.append(arena, e);
+
+    return .{
+        .argv = try argv.toOwnedSlice(arena),
+        .env = try env.toOwnedSlice(arena),
+        .cwd = if (ov.workdir) |w| w else base.cwd,
+    };
+}
+
+/// Split `s` on ASCII spaces into non-empty tokens, appending to `list`.
+fn splitInto(arena: std.mem.Allocator, list: *std.ArrayList([]const u8), s: []const u8) !void {
+    var it = std.mem.tokenizeScalar(u8, s, ' ');
+    while (it.next()) |tok| try list.append(arena, tok);
 }
 
 /// The integration core: given an unpacked rootfs and the process to run, build

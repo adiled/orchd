@@ -38,9 +38,12 @@ pub const Error = error{
 };
 
 /// A resolved image: an unpacked rootfs plus the process defaults from its
-/// OCI config. `argv` is Entrypoint ++ Cmd.
+/// OCI config. Entrypoint and Cmd are kept separate for override semantics;
+/// `argv` is the merge (entrypoint ++ cmd).
 pub const Image = struct {
     rootfs_dir: []const u8,
+    entrypoint: []const []const u8 = &.{},
+    cmd: []const []const u8 = &.{},
     argv: []const []const u8,
     env: []const []const u8,
     cwd: []const u8,
@@ -150,24 +153,31 @@ const ConfigDoc = struct {
     } = null,
 };
 
-/// Resolved process config. argv/env are freshly allocated and owned by the
-/// caller; free with `deinit`. cwd points into `cwd_buf` (also owned).
+/// Resolved process config. Entrypoint and Cmd are kept SEPARATE (not merged)
+/// so callers can apply Docker override semantics. `argv` is the convenience
+/// merge (entrypoint ++ cmd). All slices are owned by the caller (free with
+/// `deinit`).
 pub const ProcessConfig = struct {
+    entrypoint: []const []const u8,
+    cmd: []const []const u8,
     argv: []const []const u8,
     env: []const []const u8,
     cwd: []const u8,
 
     pub fn deinit(self: ProcessConfig, allocator: std.mem.Allocator) void {
-        for (self.argv) |s| allocator.free(s);
-        allocator.free(self.argv);
+        for (self.entrypoint) |s| allocator.free(s);
+        allocator.free(self.entrypoint);
+        for (self.cmd) |s| allocator.free(s);
+        allocator.free(self.cmd);
+        allocator.free(self.argv); // argv reuses the entrypoint/cmd strings
         for (self.env) |s| allocator.free(s);
         allocator.free(self.env);
         allocator.free(self.cwd);
     }
 };
 
-/// Parse the OCI image config JSON, producing argv = Entrypoint ++ Cmd,
-/// env = Env, cwd = WorkingDir (default "/").
+/// Parse the OCI image config JSON. Keeps Entrypoint and Cmd separate; also
+/// provides argv = Entrypoint ++ Cmd. env = Env, cwd = WorkingDir (default "/").
 pub fn parseConfig(allocator: std.mem.Allocator, json: []const u8) !ProcessConfig {
     const parsed = try std.json.parseFromSlice(ConfigDoc, allocator, json, .{
         .ignore_unknown_fields = true,
@@ -176,16 +186,27 @@ pub fn parseConfig(allocator: std.mem.Allocator, json: []const u8) !ProcessConfi
 
     const cfg = parsed.value.config;
 
-    // argv = Entrypoint ++ Cmd
-    var argv: std.ArrayList([]const u8) = .empty;
+    var entrypoint: std.ArrayList([]const u8) = .empty;
     errdefer {
-        for (argv.items) |s| allocator.free(s);
-        argv.deinit(allocator);
+        for (entrypoint.items) |s| allocator.free(s);
+        entrypoint.deinit(allocator);
+    }
+    var cmd: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (cmd.items) |s| allocator.free(s);
+        cmd.deinit(allocator);
     }
     if (cfg) |c| {
-        if (c.Entrypoint) |ep| for (ep) |s| try argv.append(allocator, try allocator.dupe(u8, s));
-        if (c.Cmd) |cmd| for (cmd) |s| try argv.append(allocator, try allocator.dupe(u8, s));
+        if (c.Entrypoint) |ep| for (ep) |s| try entrypoint.append(allocator, try allocator.dupe(u8, s));
+        if (c.Cmd) |cm| for (cm) |s| try cmd.append(allocator, try allocator.dupe(u8, s));
     }
+
+    // argv = entrypoint ++ cmd, reusing the same string slices (not re-duped;
+    // deinit frees them once via entrypoint/cmd and frees only argv's array).
+    var argv: std.ArrayList([]const u8) = .empty;
+    errdefer argv.deinit(allocator);
+    for (entrypoint.items) |s| try argv.append(allocator, s);
+    for (cmd.items) |s| try argv.append(allocator, s);
 
     var env: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -204,6 +225,8 @@ pub fn parseConfig(allocator: std.mem.Allocator, json: []const u8) !ProcessConfi
     errdefer allocator.free(cwd);
 
     return .{
+        .entrypoint = try entrypoint.toOwnedSlice(allocator),
+        .cmd = try cmd.toOwnedSlice(allocator),
         .argv = try argv.toOwnedSlice(allocator),
         .env = try env.toOwnedSlice(allocator),
         .cwd = cwd,
@@ -514,6 +537,8 @@ pub fn unpackLayout(
 
     return .{
         .rootfs_dir = rf.path,
+        .entrypoint = pcfg.entrypoint,
+        .cmd = pcfg.cmd,
         .argv = pcfg.argv,
         .env = pcfg.env,
         .cwd = pcfg.cwd,
@@ -644,6 +669,8 @@ pub fn resolve(
 
     return .{
         .rootfs_dir = rf.path,
+        .entrypoint = pcfg.entrypoint,
+        .cmd = pcfg.cmd,
         .argv = pcfg.argv,
         .env = pcfg.env,
         .cwd = pcfg.cwd,
@@ -1054,8 +1081,10 @@ fn putBlob(a: std.mem.Allocator, io: std.Io, layout: std.Io.Dir, bytes: []const 
 /// would eventually hand back an owned struct).
 fn freeImage(a: std.mem.Allocator, img: Image) void {
     a.free(img.rootfs_dir);
-    for (img.argv) |s| a.free(s);
+    for (img.argv) |s| a.free(s); // frees every string once (argv = entrypoint ++ cmd)
     a.free(img.argv);
+    a.free(img.entrypoint); // arrays only; their strings were freed via argv
+    a.free(img.cmd);
     for (img.env) |s| a.free(s);
     a.free(img.env);
     a.free(img.cwd);
