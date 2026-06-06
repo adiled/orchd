@@ -132,8 +132,12 @@ while it lives), exactly like the XPC path.
 - Apple silicon, macOS with Virtualization.framework.
 - The `com.apple.security.virtualization` entitlement (codesign), same as the
   container daemon and vfkit.
-- A Linux kernel (>= 6.14.9) and the vminitd guest binary. Reuse the daemon's
-  fetched artifacts during build-out.
+- Our own pinned Linux kernel asset (we do NOT reuse the daemon's): a known-good
+  aarch64 kernel with virtio_blk, virtio_console, vsock, and ext4 built in (=y),
+  so no initramfs is needed. Resolved from `$ORCHD_OSX_KERNEL` or
+  `~/.orch/osx/kernel/vmlinux` (see `kernel.zig`, pin `6.12-lts-aarch64-virtio`).
+- Our guest init (`orchd-osx-init`) and ext4 rootfs are built by orchd-osx
+  itself; nothing is taken from the container daemon.
 
 ## Build
 
