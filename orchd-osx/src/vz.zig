@@ -9,15 +9,14 @@
 //!
 //! Pipeline (run):
 //!   oci.resolve  image ref -> unpacked rootfs dir + process spec
-//!   ext4.build   rootfs dir + our guest init -> ext4 image (/dev/vda)
-//!   vm.boot      kernel + ext4 -> a running VM (init=/orchd-init)
+//!   cpio.build   rootfs dir + our guest init -> initramfs image
+//!   vm.boot      kernel + initramfs -> a running VM (runs /init)
 //!   vm.connect   vsock port 1024 -> a raw fd
 //!   vsock.run    send the exec spec, stream stdio, return the exit code
 
 const std = @import("std");
 
 const oci = @import("oci.zig");
-const ext4 = @import("ext4.zig");
 const cpio = @import("cpio.zig");
 const vm = @import("vm.zig");
 const vsock = @import("vsock.zig");
@@ -50,7 +49,7 @@ pub const Error = error{
     NotImplemented,
     BootFailed,
     ImageFailed,
-    Ext4Failed,
+    RootfsFailed,
     ExecFailed,
     OutOfMemory,
     NoHome,
@@ -193,13 +192,13 @@ pub fn runRootfs(
     defer allocator.free(cpio_path);
     const init_bytes = readInitBytes(allocator, io) catch |e| {
         std.debug.print("orchd-osx run: cannot read guest init ({s})\n", .{@errorName(e)});
-        return Error.Ext4Failed;
+        return Error.RootfsFailed;
     };
     defer allocator.free(init_bytes);
 
     cpio.build(allocator, io, rootfs_dir, cpio_path, init_bytes) catch |e| {
         std.debug.print("orchd-osx run: initramfs build failed ({s})\n", .{@errorName(e)});
-        return Error.Ext4Failed;
+        return Error.RootfsFailed;
     };
 
     // 2. Boot the VM (kernel + initramfs; no block-device root).
