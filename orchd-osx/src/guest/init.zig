@@ -138,6 +138,127 @@ fn findPath(env: []const []const u8) []const u8 {
     return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 }
 
+// ── resource caps + user switching (applied in the child before exec) ───────
+
+const RLIMIT_NOFILE: usize = 7;
+const RLIMIT_NPROC: usize = 6;
+const Rlimit64 = extern struct { cur: u64, max: u64 };
+
+fn setLimit(resource: usize, val: u64) void {
+    const rl = Rlimit64{ .cur = val, .max = val };
+    const r = linux.syscall4(.prlimit64, 0, resource, @intFromPtr(&rl), 0);
+    if (linux.errno(r) != .SUCCESS) report("orchd-init: setrlimit failed\n");
+}
+
+fn applyLimits(limits: proto.Limits) void {
+    if (limits.nofile != 0) setLimit(RLIMIT_NOFILE, limits.nofile);
+    if (limits.nproc != 0) setLimit(RLIMIT_NPROC, limits.nproc);
+}
+
+const Ids = struct { uid: u32, gid: u32 };
+
+fn isAllDigits(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| if (c < '0' or c > '9') return false;
+    return true;
+}
+
+/// Read a whole small file into `buf`; returns the populated prefix or null.
+fn readSmall(path: [*:0]const u8, buf: []u8) ?[]const u8 {
+    const fd_u = linux.open(path, .{ .ACCMODE = .RDONLY }, 0);
+    if (@as(isize, @bitCast(fd_u)) < 0) return null;
+    const fd: fd_t = @intCast(fd_u);
+    defer _ = linux.close(fd);
+    var off: usize = 0;
+    while (off < buf.len) {
+        const r = linux.read(fd, buf[off..].ptr, buf.len - off);
+        if (linux.errno(r) != .SUCCESS) return null;
+        if (r == 0) break;
+        off += r;
+    }
+    return buf[0..off];
+}
+
+/// name:passwd:uid:gid:... lookup in /etc/passwd.
+fn lookupPasswd(name: []const u8, buf: []u8) ?Ids {
+    const data = readSmall("/etc/passwd", buf) orelse return null;
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var f = std.mem.splitScalar(u8, line, ':');
+        const fname = f.next() orelse continue;
+        if (!std.mem.eql(u8, fname, name)) continue;
+        _ = f.next(); // passwd field
+        const uid_s = f.next() orelse continue;
+        const gid_s = f.next() orelse continue;
+        const uid = std.fmt.parseInt(u32, uid_s, 10) catch continue;
+        const gid = std.fmt.parseInt(u32, gid_s, 10) catch continue;
+        return .{ .uid = uid, .gid = gid };
+    }
+    return null;
+}
+
+/// name:passwd:gid:... lookup in /etc/group.
+fn lookupGroup(name: []const u8, buf: []u8) ?u32 {
+    const data = readSmall("/etc/group", buf) orelse return null;
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var f = std.mem.splitScalar(u8, line, ':');
+        const gname = f.next() orelse continue;
+        if (!std.mem.eql(u8, gname, name)) continue;
+        _ = f.next(); // passwd field
+        const gid_s = f.next() orelse continue;
+        return std.fmt.parseInt(u32, gid_s, 10) catch continue;
+    }
+    return null;
+}
+
+/// Resolve a USER directive ("uid", "uid:gid", "name", "name:group") to ids.
+fn parseUser(user: []const u8) ?Ids {
+    if (user.len == 0) return null;
+    var buf: [64 * 1024]u8 = undefined;
+    var uid_part = user;
+    var gid_part: ?[]const u8 = null;
+    if (std.mem.indexOfScalar(u8, user, ':')) |c| {
+        uid_part = user[0..c];
+        gid_part = user[c + 1 ..];
+    }
+    var ids: Ids = undefined;
+    if (isAllDigits(uid_part)) {
+        const uid = std.fmt.parseInt(u32, uid_part, 10) catch return null;
+        ids = .{ .uid = uid, .gid = uid };
+    } else {
+        ids = lookupPasswd(uid_part, &buf) orelse return null;
+    }
+    if (gid_part) |g| {
+        if (isAllDigits(g)) {
+            ids.gid = std.fmt.parseInt(u32, g, 10) catch ids.gid;
+        } else if (lookupGroup(g, &buf)) |gid| {
+            ids.gid = gid;
+        }
+    }
+    return ids;
+}
+
+/// Drop to the requested user: clear supplementary groups, setgid, then setuid
+/// (uid last, so the gid change is still privileged). No-op for root/empty.
+fn applyUser(user: []const u8) void {
+    if (user.len == 0) return;
+    const ids = parseUser(user) orelse {
+        report("orchd-init: user parse failed: ");
+        report(user);
+        report("\n");
+        return;
+    };
+    const sg = linux.syscall2(.setgroups, 0, 0);
+    const rg = linux.syscall1(.setgid, ids.gid);
+    const ru = linux.syscall1(.setuid, ids.uid);
+    if (linux.errno(sg) != .SUCCESS) report("orchd-init: setgroups failed\n");
+    if (linux.errno(rg) != .SUCCESS) report("orchd-init: setgid failed\n");
+    if (linux.errno(ru) != .SUCCESS) report("orchd-init: setuid failed\n");
+}
+
 fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
     if (spec.argv.len == 0) return error.EmptyArgv;
 
@@ -169,6 +290,10 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
         _ = linux.close(err_pipe[0]);
         _ = linux.close(err_pipe[1]);
         if (null_fd >= 0) _ = linux.close(null_fd);
+
+        // Apply resource caps (as root), then drop to the requested user.
+        applyLimits(spec.limits);
+        applyUser(spec.user);
 
         _ = linux.chdir(cwd.ptr);
 

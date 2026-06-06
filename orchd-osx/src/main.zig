@@ -274,6 +274,19 @@ fn buildOverrides(arena: std.mem.Allocator, io: std.Io, b64: []const u8) !vz.Ove
         }
     }
 
+    var limits = proto.Limits{};
+    const r = svc.resources;
+    if (r.limit_nofile) |n| limits.nofile = n;
+    if (r.limit_nproc) |n| limits.nproc = n;
+    if (r.tasks_max) |n| limits.pids_max = n;
+    if (r.io_weight) |w| limits.io_weight = w;
+    if (r.cpu_quota) |q| {
+        if (parseCpuQuota(q)) |cq| {
+            limits.cpu_quota_us = cq.quota_us;
+            limits.cpu_period_us = cq.period_us;
+        }
+    }
+
     return .{
         .env = try env.toOwnedSlice(arena),
         .entrypoint = svc.entrypoint,
@@ -281,7 +294,20 @@ fn buildOverrides(arena: std.mem.Allocator, io: std.Io, b64: []const u8) !vz.Ove
         .workdir = svc.workdir,
         .memory_mb = if (svc.resources.memory) |m| parseMemoryMb(m) else null,
         .cpus = if (svc.resources.cpus) |c| cpusToCount(c) else null,
+        .user = svc.user,
+        .limits = limits,
     };
+}
+
+/// Parse a CPU quota string into a cgroup v2 cpu.max (quota,period) pair in
+/// microseconds. Accepts "50%" (systemd style) or a bare number treated as a
+/// percentage. period is fixed at 100000us. Returns null if unparseable.
+fn parseCpuQuota(s: []const u8) ?struct { quota_us: u64, period_us: u64 } {
+    const t = std.mem.trim(u8, s, " \t%");
+    const pct = std.fmt.parseInt(u64, t, 10) catch return null;
+    if (pct == 0) return null;
+    const period: u64 = 100000;
+    return .{ .quota_us = pct * period / 100, .period_us = period };
 }
 
 /// Parse a memory size string into megabytes for the VM RAM. Accepts k/m/g (and

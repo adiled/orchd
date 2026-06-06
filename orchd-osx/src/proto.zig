@@ -32,6 +32,26 @@ pub const MsgType = enum(u8) {
     _,
 };
 
+/// Resource caps applied by the guest before exec. 0 means "unset" for every
+/// field. Memory/cpu/pids/io map to cgroup v2 controllers; nofile/nproc to
+/// setrlimit. Carried in ExecSpec so the single wire file stays the source of
+/// truth.
+pub const Limits = struct {
+    memory_max: u64 = 0, // cgroup memory.max, bytes
+    cpu_quota_us: u64 = 0, // cgroup cpu.max quota (per period)
+    cpu_period_us: u64 = 0, // cgroup cpu.max period (default 100000 if quota set)
+    pids_max: u64 = 0, // cgroup pids.max
+    io_weight: u64 = 0, // cgroup io.weight (1..10000)
+    nofile: u64 = 0, // RLIMIT_NOFILE
+    nproc: u64 = 0, // RLIMIT_NPROC
+};
+
+/// A virtio-fs mount the guest performs: share `tag` -> `dest` inside the guest.
+pub const Mount = struct {
+    tag: []const u8,
+    dest: []const u8,
+};
+
 /// What the host asks the guest to run. The rootfs is already mounted by the
 /// guest (it is /dev/vda); this is the process to exec inside it.
 pub const ExecSpec = struct {
@@ -41,23 +61,47 @@ pub const ExecSpec = struct {
     env: []const []const u8 = &.{},
     /// Working directory inside the container; empty means "/".
     cwd: []const u8 = "",
+    /// uid[:gid] or username to switch to before exec; empty means root.
+    user: []const u8 = "",
+    /// virtio-fs shares to mount before exec (tag -> dest).
+    mounts: []const Mount = &.{},
+    /// Resource caps (cgroup v2 + rlimits) applied before exec.
+    limits: Limits = .{},
 
     /// Encode into an owned byte buffer (caller frees). Layout:
     ///   u16 argc; { u16 len, bytes }*argc
     ///   u16 envc; { u16 len, bytes }*envc
     ///   u16 cwd_len, bytes
+    ///   u16 user_len, bytes
+    ///   u16 mountc; { u16 tag_len, bytes; u16 dest_len, bytes }*mountc
+    ///   7 x u64 limits (LE)
     pub fn encode(self: ExecSpec, allocator: std.mem.Allocator) ![]u8 {
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(allocator);
         try putList(allocator, &buf, self.argv);
         try putList(allocator, &buf, self.env);
         try putStr(allocator, &buf, self.cwd);
+        try putStr(allocator, &buf, self.user);
+        try buf.appendSlice(allocator, &std.mem.toBytes(@as(u16, @intCast(self.mounts.len))));
+        for (self.mounts) |m| {
+            try putStr(allocator, &buf, m.tag);
+            try putStr(allocator, &buf, m.dest);
+        }
+        inline for (.{
+            self.limits.memory_max,    self.limits.cpu_quota_us, self.limits.cpu_period_us,
+            self.limits.pids_max,      self.limits.io_weight,    self.limits.nofile,
+            self.limits.nproc,
+        }) |v| {
+            try buf.appendSlice(allocator, &std.mem.toBytes(@as(u64, v)));
+        }
         return buf.toOwnedSlice(allocator);
     }
 
     /// Decode from a payload body (the bytes after the MsgType). Strings point
-    /// into `body`, so `body` must outlive the returned spec; the two slices
-    /// (argv, env) are allocated and owned by the caller (free with `free`).
+    /// into `body`, so `body` must outlive the returned spec; the allocated
+    /// slices (argv, env, mounts) are owned by the caller (free with `free`).
+    /// Trailing fields (user/mounts/limits) are tolerated as absent for forward
+    /// compatibility: an older encoder's body simply leaves them at defaults.
     pub fn decode(allocator: std.mem.Allocator, body: []const u8) !ExecSpec {
         var p: usize = 0;
         const argv = try getList(allocator, body, &p);
@@ -65,12 +109,39 @@ pub const ExecSpec = struct {
         const env = try getList(allocator, body, &p);
         errdefer allocator.free(env);
         const cwd = try getStr(body, &p);
-        return .{ .argv = argv, .env = env, .cwd = cwd };
+
+        var user: []const u8 = "";
+        var mounts: []const Mount = &.{};
+        var limits: Limits = .{};
+        if (p < body.len) {
+            user = try getStr(body, &p);
+            const mc = std.mem.readInt(u16, body[p..][0..2], .little);
+            p += 2;
+            const ms = try allocator.alloc(Mount, mc);
+            errdefer allocator.free(ms);
+            for (ms) |*m| {
+                m.tag = try getStr(body, &p);
+                m.dest = try getStr(body, &p);
+            }
+            mounts = ms;
+            inline for (.{
+                "memory_max", "cpu_quota_us", "cpu_period_us",
+                "pids_max",   "io_weight",    "nofile",
+                "nproc",
+            }) |field| {
+                if (p + 8 <= body.len) {
+                    @field(limits, field) = std.mem.readInt(u64, body[p..][0..8], .little);
+                    p += 8;
+                }
+            }
+        }
+        return .{ .argv = argv, .env = env, .cwd = cwd, .user = user, .mounts = mounts, .limits = limits };
     }
 
     pub fn free(self: ExecSpec, allocator: std.mem.Allocator) void {
         allocator.free(self.argv);
         allocator.free(self.env);
+        if (self.mounts.len > 0) allocator.free(self.mounts);
     }
 };
 

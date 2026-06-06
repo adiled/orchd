@@ -88,6 +88,10 @@ pub const Overrides = struct {
     memory_mb: ?u64 = null,
     /// VM vCPU count (from resources.cpus). null -> default.
     cpus: ?usize = null,
+    /// uid[:gid] or username to switch to before exec (from service.user).
+    user: ?[]const u8 = null,
+    /// cgroup v2 + rlimit caps applied by the guest (from resources.*).
+    limits: proto.Limits = .{},
 };
 
 /// Boot a container for `image` and block until its process exits; returns the
@@ -171,6 +175,8 @@ fn applyOverrides(arena: std.mem.Allocator, base: CacheMeta, ov: Overrides) !pro
         .argv = try argv.toOwnedSlice(arena),
         .env = try env.toOwnedSlice(arena),
         .cwd = if (ov.workdir) |w| w else base.cwd,
+        .user = ov.user orelse "",
+        .limits = ov.limits,
     };
 }
 
