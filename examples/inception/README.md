@@ -25,7 +25,8 @@ service spec (memory / cpus / volumes).
 | `Orchfile` | the **outer** unit: boot a Debian VM, sized, with the toolchain mounted, running the driver |
 | `run-test.sh` | runs **inside** the VM: starts containerd, then has the inner orchd drive it |
 | `inner-Orchfile` | the **inner** workload the containerd runtime runs (an alpine container) |
-| `setup.sh` | stages `tools/` (builds the Linux orchd, fetches the containerd toolchain) and writes a runnable `Orchfile.run` |
+| `stress.sh` / `inner-stress-Orchfile` | the stress variant: repeated grow/fell cycles over several containers, leak-checked against containerd's own state |
+| `setup.sh` | stages `tools/` (builds the Linux orchd, fetches containerd + runc) and writes runnable `Orchfile.run` / `Orchfile.stress` |
 
 `tools/` (containerd + runc + the Linux orchd) is fetched/built by
 `setup.sh`, not committed.
@@ -45,6 +46,23 @@ tail -f ./state/logs/orch.ctd.log
 You should see, from inside the VM: containerd come up, then
 `orchd --runtime containerd grow` pull and run the inner alpine container, and
 containerd's own `ctr tasks ls` report it RUNNING.
+
+## Stress it
+
+Same VM, but the driver runs repeated grow/fell cycles over several containers
+and asserts containerd is left with zero leaked tasks/containers/snapshots
+after each teardown:
+
+```sh
+ORCHD_APPLE_MODE=osx \
+  orchd --orchfile Orchfile.stress --runtime apple --platform orchdi \
+        --state-dir ./state grow
+tail -f ./state/logs/orch.ctd.log    # ends with RESULT: PASS
+```
+
+Note: graceful stop allows a grace period before SIGKILL, so each `fell` takes
+several seconds to settle if the container's PID 1 ignores SIGTERM (same as
+`docker stop`'s default). The cycle test waits that out before leak-checking.
 
 ## Requirements
 

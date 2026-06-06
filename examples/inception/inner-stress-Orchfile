@@ -1,0 +1,12 @@
+# Stress workload: several containers (mixed images) for the cycle test.
+SERVICE a
+FROM docker.io/library/alpine:latest
+CMD sleep 600
+
+SERVICE b
+FROM docker.io/library/alpine:latest
+CMD sleep 600
+
+SERVICE c
+FROM docker.io/library/busybox:latest
+CMD sleep 600

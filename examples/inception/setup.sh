@@ -29,9 +29,11 @@ if [ ! -e "$tools/bin/runc" ]; then
   chmod +x "$tools/bin/runc"
 fi
 
-echo "==> copying the in-VM driver + inner workload into tools/"
+echo "==> copying the in-VM driver + inner workloads into tools/"
 cp "$here/run-test.sh" "$tools/run-test.sh"
 cp "$here/inner-Orchfile" "$tools/inner-Orchfile"
+cp "$here/stress.sh" "$tools/stress.sh"
+cp "$here/inner-stress-Orchfile" "$tools/inner-stress-Orchfile"
 
 echo "==> staging a CA bundle (debian-slim has none; containerd needs it for registry TLS)"
 if [ -f /etc/ssl/cert.pem ]; then
@@ -40,8 +42,11 @@ else
   curl -fsSL https://curl.se/ca/cacert.pem -o "$tools/ca-bundle.crt"
 fi
 
-echo "==> writing runnable Orchfile.run (absolute volume path)"
+echo "==> writing runnable Orchfiles (absolute volume path)"
 sed "s|__TOOLS__|$tools|" "$here/Orchfile" > "$here/Orchfile.run"
+# stress variant: same VM, CMD runs the grow/fell cycle test.
+sed "s|__TOOLS__|$tools|; s|/opt/tools/run-test.sh|/opt/tools/stress.sh|" \
+    "$here/Orchfile" > "$here/Orchfile.stress"
 
 cat <<EOF
 
