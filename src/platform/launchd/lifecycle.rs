@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::platform::PlatformError;
 
 use super::{install_dir, plist_dest_path};
-use super::generate::plist_label;
+use crate::orchdi::service_label;
 
 /// launchctl domain target: `gui/<uid>` (user) or `system` (system).
 fn domain(config: &Config) -> String {
@@ -171,7 +171,7 @@ pub fn logs(
     lines: u32,
     config: &Config,
 ) -> Result<(), PlatformError> {
-    let label = plist_label(config, service);
+    let label = service_label(config, service);
     let log_base = log_base(config);
     let out_path = format!("{}/{}.out.log", log_base, label);
     let err_path = format!("{}/{}.err.log", log_base, label);
@@ -207,7 +207,7 @@ fn log_base(config: &Config) -> String {
 /// plists discovered in the install dir.
 fn labels_for(services: &[String], config: &Config) -> Result<Vec<String>, PlatformError> {
     if !services.is_empty() {
-        return Ok(services.iter().map(|s| plist_label(config, s)).collect());
+        return Ok(services.iter().map(|s| service_label(config, s)).collect());
     }
 
     let install = install_dir(config);

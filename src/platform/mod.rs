@@ -1,4 +1,5 @@
 pub mod launchd;
+pub mod orchdi;
 pub mod systemd;
 
 use crate::config::Config;

@@ -147,15 +147,13 @@ pub fn plant(config: &Config) -> Result<(), OrchardError> {
 }
 
 fn beds_launchd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &Config) -> Vec<Bed> {
-    use crate::platform::launchd::generate::{
-        build_dep_gates, build_supervise_spec, generate_service_plist_with_deps, plist_filename,
-        plist_label, supervise_spec_path,
-    };
+    use crate::orchdi::{build_dep_gates, build_supervise_spec, service_label, supervise_spec_path};
+    use crate::platform::launchd::generate::{generate_service_plist_with_deps, plist_filename};
     let units_dir = config.units_dir();
     let mut beds = Vec::new();
     for (idx, exec) in exec_sets {
         let svc = &services[*idx];
-        let label = plist_label(config, &svc.name);
+        let label = service_label(config, &svc.name);
         let deps = build_dep_gates(svc, services);
         let mut arts = Vec::new();
 

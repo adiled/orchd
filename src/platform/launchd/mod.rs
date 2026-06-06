@@ -8,10 +8,8 @@ use crate::exec::ExecSet;
 use crate::platform::{Platform, PlatformError};
 use crate::types::Service;
 
-use generate::{
-    build_dep_gates, build_supervise_spec, generate_service_plist_with_deps, plist_filename,
-    plist_label, supervise_spec_path,
-};
+use crate::orchdi::{build_dep_gates, build_supervise_spec, service_label, supervise_spec_path};
+use generate::{generate_service_plist_with_deps, plist_filename};
 
 pub struct LaunchdPlatform;
 
@@ -136,7 +134,7 @@ impl LaunchdPlatform {
                 !deps.is_empty() || exec_set.stop.is_some() || exec_set.post_stop.is_some();
             if needs_supervisor {
                 std::fs::create_dir_all(&spec_dir)?;
-                let label = plist_label(config, &service.name);
+                let label = service_label(config, &service.name);
                 let spec = build_supervise_spec(service, exec_set, config, &deps);
                 let json = serde_json::to_string_pretty(&spec)
                     .map_err(|e| PlatformError::GenerationFailed(e.to_string()))?;

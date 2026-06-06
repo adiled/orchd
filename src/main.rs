@@ -5,7 +5,7 @@ mod exec;
 mod orchard;
 mod platform;
 mod runtime;
-mod supervise;
+mod orchdi;
 mod types;
 
 use clap::Parser;
@@ -18,7 +18,7 @@ fn main() {
     // `supervise` is a leaf process (launchd execs it); it doesn't need the
     // full engine config and must run before Config::load to stay lightweight.
     if let Commands::Supervise { spec } = &cli.command {
-        std::process::exit(supervise::run(spec));
+        std::process::exit(orchdi::run(spec));
     }
 
     let config = Config::load(&cli);
