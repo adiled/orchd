@@ -156,7 +156,7 @@ fn cmdRunTest(allocator: std.mem.Allocator, io: std.Io) !void {
     const spec = proto.ExecSpec{ .argv = &.{"/payload"}, .env = &.{}, .cwd = "/" };
     std.debug.print("vz-run-test: booting container, exec /payload ...\n", .{});
 
-    const code = vz.runRootfs(allocator, io, "runtest", rootfs, spec) catch |e| {
+    const code = vz.runRootfs(allocator, io, "runtest", rootfs, spec, .{}) catch |e| {
         std.debug.print("vz-run-test: FAILED ({s})\n", .{@errorName(e)});
         std.process.exit(1);
     };
@@ -279,7 +279,38 @@ fn buildOverrides(arena: std.mem.Allocator, io: std.Io, b64: []const u8) !vz.Ove
         .entrypoint = svc.entrypoint,
         .cmd = svc.cmd,
         .workdir = svc.workdir,
+        .memory_mb = if (svc.resources.memory) |m| parseMemoryMb(m) else null,
+        .cpus = if (svc.resources.cpus) |c| cpusToCount(c) else null,
     };
+}
+
+/// Parse a memory size string into megabytes for the VM RAM. Accepts k/m/g (and
+/// the Ki/Mi/Gi variants) suffixes, case-insensitive; a bare number is bytes.
+/// Returns null if unparseable (caller falls back to the default).
+fn parseMemoryMb(s: []const u8) ?u64 {
+    const t = std.mem.trim(u8, s, " \t");
+    var end: usize = 0;
+    while (end < t.len and t[end] >= '0' and t[end] <= '9') end += 1;
+    if (end == 0) return null;
+    const num = std.fmt.parseInt(u64, t[0..end], 10) catch return null;
+    const suffix = std.mem.trim(u8, t[end..], " \t");
+    var bytes: u64 = num;
+    if (suffix.len > 0) {
+        bytes = switch (std.ascii.toLower(suffix[0])) {
+            'k' => num * 1024,
+            'm' => num * 1024 * 1024,
+            'g' => num * 1024 * 1024 * 1024,
+            else => num,
+        };
+    }
+    const mb = bytes / (1024 * 1024);
+    return if (mb == 0) 1 else mb;
+}
+
+/// Round a fractional CPU request up to whole vCPUs (min 1).
+fn cpusToCount(c: f64) usize {
+    if (c <= 1.0) return 1;
+    return @intFromFloat(@ceil(c));
 }
 
 fn cmdWait(allocator: std.mem.Allocator, id: []const u8) void {

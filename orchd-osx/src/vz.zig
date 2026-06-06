@@ -59,8 +59,15 @@ const VSOCK_PORT: u32 = 1024;
 // initramfs boot: the kernel unpacks our cpio as root and runs /init from it.
 // ip=dhcp makes the kernel autoconfigure eth0 from VZ's NAT DHCP at boot.
 const KERNEL_CMDLINE = "console=hvc0 ip=dhcp";
-const MEMORY: u64 = 1024 * 1024 * 1024;
-const CPUS: usize = 2;
+const MEMORY_DEFAULT_BYTES: u64 = 1024 * 1024 * 1024;
+const CPUS_DEFAULT: usize = 2;
+
+/// VM-level options resolved from the Service spec, applied at boot. Distinct
+/// from Overrides (which shapes the guest *process*): these shape the VM itself.
+pub const RunOpts = struct {
+    memory_bytes: u64 = MEMORY_DEFAULT_BYTES,
+    cpu_count: usize = CPUS_DEFAULT,
+};
 
 /// Cached image process config, stored next to the unpacked rootfs so re-runs
 /// need no re-pull. Entrypoint and Cmd are kept separate for override semantics.
@@ -77,6 +84,10 @@ pub const Overrides = struct {
     entrypoint: ?[]const u8 = null,
     cmd: ?[]const u8 = null,
     workdir: ?[]const u8 = null,
+    /// VM RAM in megabytes (from resources.memory). null -> default.
+    memory_mb: ?u64 = null,
+    /// VM vCPU count (from resources.cpus). null -> default.
+    cpus: ?usize = null,
 };
 
 /// Boot a container for `image` and block until its process exits; returns the
@@ -106,7 +117,11 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []co
         return Error.ImageFailed;
 
     const spec = applyOverrides(arena, base, ov) catch return Error.ImageFailed;
-    return runRootfs(allocator, io, id, rootfs, spec);
+    const opts = RunOpts{
+        .memory_bytes = if (ov.memory_mb) |m| m * 1024 * 1024 else MEMORY_DEFAULT_BYTES,
+        .cpu_count = ov.cpus orelse CPUS_DEFAULT,
+    };
+    return runRootfs(allocator, io, id, rootfs, spec, opts);
 }
 
 /// Pull `image` into the cache if it is not already there. Idempotent: a no-op
@@ -173,6 +188,7 @@ pub fn runRootfs(
     id: []const u8,
     rootfs_dir: []const u8,
     spec: proto.ExecSpec,
+    opts: RunOpts,
 ) Error!i64 {
     const work = try workDir(allocator, id);
     defer allocator.free(work);
@@ -223,8 +239,8 @@ pub fn runRootfs(
         .cmdline = KERNEL_CMDLINE,
         .rootfs_path = "/nonexistent-no-block",
         .ramdisk_path = cpio_z,
-        .cpu_count = CPUS,
-        .memory_bytes = MEMORY,
+        .cpu_count = opts.cpu_count,
+        .memory_bytes = opts.memory_bytes,
         .vsock_port = VSOCK_PORT,
     }) catch |e| {
         std.debug.print("orchd-osx run: VM boot failed ({s})\n", .{@errorName(e)});
