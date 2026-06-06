@@ -22,6 +22,7 @@ const vm = @import("vm.zig");
 const vsock = @import("vsock.zig");
 const kernel = @import("kernel.zig");
 const proto = @import("proto.zig");
+const types = @import("types.zig");
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 extern "c" fn getpid() c_int;
@@ -67,6 +68,7 @@ const CPUS_DEFAULT: usize = 2;
 pub const RunOpts = struct {
     memory_bytes: u64 = MEMORY_DEFAULT_BYTES,
     cpu_count: usize = CPUS_DEFAULT,
+    shares: []const vm.Share = &.{},
 };
 
 /// Cached image process config, stored next to the unpacked rootfs so re-runs
@@ -92,6 +94,8 @@ pub const Overrides = struct {
     user: ?[]const u8 = null,
     /// cgroup v2 + rlimit caps applied by the guest (from resources.*).
     limits: proto.Limits = .{},
+    /// Host directories to share into the guest via virtio-fs (service.volumes).
+    volumes: []const types.Volume = &.{},
 };
 
 /// Boot a container for `image` and block until its process exits; returns the
@@ -120,10 +124,25 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []co
     const base = std.json.parseFromSliceLeaky(CacheMeta, arena, data, .{}) catch
         return Error.ImageFailed;
 
-    const spec = applyOverrides(arena, base, ov) catch return Error.ImageFailed;
+    var spec = applyOverrides(arena, base, ov) catch return Error.ImageFailed;
+
+    // Volumes -> virtio-fs shares (host side) + guest mounts (tag -> dest). One
+    // tag per volume links the two ends.
+    var shares: std.ArrayList(vm.Share) = .empty;
+    var mounts: std.ArrayList(proto.Mount) = .empty;
+    for (ov.volumes, 0..) |vol, i| {
+        const tag_s = std.fmt.allocPrint(arena, "vol{d}", .{i}) catch continue;
+        const tag = arena.dupeZ(u8, tag_s) catch continue;
+        const host = arena.dupeZ(u8, vol.source) catch continue;
+        shares.append(arena, .{ .tag = tag, .host_path = host }) catch continue;
+        mounts.append(arena, .{ .tag = tag, .dest = vol.destination }) catch continue;
+    }
+    spec.mounts = mounts.items;
+
     const opts = RunOpts{
         .memory_bytes = if (ov.memory_mb) |m| m * 1024 * 1024 else MEMORY_DEFAULT_BYTES,
         .cpu_count = ov.cpus orelse CPUS_DEFAULT,
+        .shares = shares.items,
     };
     return runRootfs(allocator, io, id, rootfs, spec, opts);
 }
@@ -248,6 +267,7 @@ pub fn runRootfs(
         .cpu_count = opts.cpu_count,
         .memory_bytes = opts.memory_bytes,
         .vsock_port = VSOCK_PORT,
+        .shares = opts.shares,
     }) catch |e| {
         std.debug.print("orchd-osx run: VM boot failed ({s})\n", .{@errorName(e)});
         return Error.BootFailed;

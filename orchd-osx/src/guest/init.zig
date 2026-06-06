@@ -70,6 +70,9 @@ fn run() !void {
     const spec = try proto.ExecSpec.decode(a, frame.body);
     defer spec.free(a);
 
+    // Mount virtio-fs shares (PID 1, pre-fork) so the child inherits them.
+    mountShares(a, spec.mounts);
+
     const code = try runChild(a, conn, spec);
     try writeFrame(conn, .exit, &std.mem.toBytes(@as(i32, code)));
     _ = linux.close(conn);
@@ -85,6 +88,41 @@ fn mountEssentials() void {
     _ = linux.mount("devtmpfs", "/dev", "devtmpfs", 0, 0);
     // cgroup v2 unified hierarchy, for resource caps (best-effort).
     _ = linux.mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0, 0);
+}
+
+/// Mount each virtio-fs share at its destination (tag -> dest). Runs in PID 1
+/// before the fork so the child inherits the mounts. Best-effort per share.
+fn mountShares(a: std.mem.Allocator, mounts: []const proto.Mount) void {
+    for (mounts) |m| {
+        if (m.dest.len == 0) continue;
+        mkdirAll(m.dest);
+        const tag = dupZ(a, m.tag) catch continue;
+        defer a.free(tag);
+        const dest = dupZ(a, m.dest) catch continue;
+        defer a.free(dest);
+        if (linux.errno(linux.mount(tag.ptr, dest.ptr, "virtiofs", 0, 0)) != .SUCCESS) {
+            report("orchd-init: virtiofs mount failed: ");
+            report(m.dest);
+            report("\n");
+        }
+    }
+}
+
+/// `mkdir -p`: create `path` and any missing parents (best-effort).
+fn mkdirAll(path: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    if (path.len == 0 or path.len >= buf.len) return;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    var i: usize = 1;
+    while (i < path.len) : (i += 1) {
+        if (buf[i] == '/') {
+            buf[i] = 0;
+            _ = linux.mkdir(@ptrCast(&buf), 0o755);
+            buf[i] = '/';
+        }
+    }
+    _ = linux.mkdir(@ptrCast(&buf), 0o755);
 }
 
 /// Read eth0's IPv4 (set by the kernel's ip=dhcp) and send it to the host as an

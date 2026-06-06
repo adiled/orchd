@@ -296,6 +296,7 @@ fn buildOverrides(arena: std.mem.Allocator, io: std.Io, b64: []const u8) !vz.Ove
         .cpus = if (svc.resources.cpus) |c| cpusToCount(c) else null,
         .user = svc.user,
         .limits = limits,
+        .volumes = svc.volumes,
     };
 }
 
