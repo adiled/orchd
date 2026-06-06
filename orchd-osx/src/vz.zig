@@ -25,6 +25,26 @@ const kernel = @import("kernel.zig");
 const proto = @import("proto.zig");
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+extern "c" fn getpid() c_int;
+extern "c" fn kill(pid: c_int, sig: c_int) c_int;
+extern "c" fn signal(sig: c_int, handler: *const fn (c_int) callconv(.c) void) usize;
+extern "c" fn unlink(path: [*:0]const u8) c_int;
+extern "c" fn _exit(code: c_int) noreturn;
+
+const SIGTERM: c_int = 15;
+const SIGINT: c_int = 2;
+
+// The active run's pidfile, so the SIGTERM handler can clean it up. orchd-osx
+// runs one container per process.
+var g_pidfile: ?[:0]const u8 = null;
+
+/// On stop (SIGTERM from `orchd-osx stop`, or launchd), unlink the pidfile and
+/// exit. The VM is owned by this process, so exiting tears it down cleanly with
+/// no orphan (unlike the daemon model).
+fn onTerm(_: c_int) callconv(.c) void {
+    if (g_pidfile) |p| _ = unlink(p.ptr);
+    _exit(0);
+}
 
 pub const Error = error{
     NotImplemented,
@@ -43,23 +63,55 @@ const KERNEL_CMDLINE = "console=hvc0 ip=dhcp";
 const MEMORY: u64 = 1024 * 1024 * 1024;
 const CPUS: usize = 2;
 
+/// Cached image process config (argv/env/cwd from the OCI config), stored next
+/// to the unpacked rootfs so re-runs need no re-pull.
+const CacheMeta = struct {
+    argv: []const []const u8,
+    env: []const []const u8,
+    cwd: []const u8,
+};
+
 /// Boot a container for `image` and block until its process exits; returns the
 /// exit code. This is the foreground process launchd tracks.
+///
+/// Images are cached: the unpacked rootfs + its config live under
+/// ~/.orch/osx/images/<ref>, so an image is pulled at most once.
 pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []const u8) Error!i64 {
-    const work = try workDir(allocator, id);
-    defer allocator.free(work);
-    makePath(io, work);
-
-    // 1. Resolve the image into a rootfs + process spec.
-    const rootfs = try std.fmt.allocPrint(allocator, "{s}/rootfs", .{work});
+    const cache = try imageCacheDir(allocator, image);
+    defer allocator.free(cache);
+    const rootfs = try std.fmt.allocPrint(allocator, "{s}/rootfs", .{cache});
     defer allocator.free(rootfs);
-    const img = oci.resolve(allocator, io, work, image) catch |e| {
-        std.debug.print("orchd-osx run: image resolve failed ({s})\n", .{@errorName(e)});
-        return Error.ImageFailed;
-    };
+    const meta_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{cache});
+    defer allocator.free(meta_path);
 
-    const spec = proto.ExecSpec{ .argv = img.argv, .env = img.env, .cwd = img.cwd };
-    return runRootfs(allocator, io, id, img.rootfs_dir, spec);
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var spec: proto.ExecSpec = undefined;
+    if (fileExists(meta_path)) {
+        // Cache hit: reuse the unpacked rootfs and stored config (no pull).
+        const data = std.Io.Dir.cwd().readFileAlloc(io, meta_path, arena, .unlimited) catch
+            return Error.ImageFailed;
+        const parsed = std.json.parseFromSliceLeaky(CacheMeta, arena, data, .{}) catch
+            return Error.ImageFailed;
+        spec = .{ .argv = parsed.argv, .env = parsed.env, .cwd = parsed.cwd };
+    } else {
+        makePath(io, cache);
+        const img = oci.resolve(allocator, io, cache, image) catch |e| {
+            std.debug.print("orchd-osx run: image resolve failed ({s})\n", .{@errorName(e)});
+            return Error.ImageFailed;
+        };
+        // Persist the config so the next run skips the pull.
+        const meta = CacheMeta{ .argv = img.argv, .env = img.env, .cwd = img.cwd };
+        if (std.json.Stringify.valueAlloc(allocator, meta, .{})) |j| {
+            defer allocator.free(j);
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = meta_path, .data = j }) catch {};
+        } else |_| {}
+        spec = .{ .argv = img.argv, .env = img.env, .cwd = img.cwd };
+    }
+
+    return runRootfs(allocator, io, id, rootfs, spec);
 }
 
 /// The integration core: given an unpacked rootfs and the process to run, build
@@ -74,6 +126,24 @@ pub fn runRootfs(
     const work = try workDir(allocator, id);
     defer allocator.free(work);
     makePath(io, work);
+
+    // pidfile + signal handlers: `orchd-osx stop <id>` (or launchd) SIGTERMs
+    // this process; we exit and the VM dies with us. This is the up/down
+    // interface: run holds the container, stop ends it.
+    const pidfile = std.fmt.allocPrint(allocator, "{s}/pid", .{work}) catch null;
+    if (pidfile) |pf| {
+        const pfz = allocator.dupeZ(u8, pf) catch null;
+        allocator.free(pf);
+        if (pfz) |z| {
+            g_pidfile = z;
+            writePidfile(io, z);
+            _ = signal(SIGTERM, &onTerm);
+            _ = signal(SIGINT, &onTerm);
+        }
+    }
+    defer if (g_pidfile) |z| {
+        _ = unlink(z.ptr);
+    };
 
     // 1. initramfs (cpio): the rootfs tree + our guest init at /init.
     const cpio_path = try std.fmt.allocPrint(allocator, "{s}/rootfs.cpio", .{work});
@@ -133,9 +203,18 @@ pub fn wait(allocator: std.mem.Allocator, id: []const u8) Error!i64 {
 }
 
 pub fn stop(allocator: std.mem.Allocator, id: []const u8) Error!void {
-    _ = allocator;
-    _ = id;
-    // launchd SIGTERMs the run process, which tears its VM down. Nothing extra.
+    const work = try workDir(allocator, id);
+    defer allocator.free(work);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const pidpath = std.fmt.allocPrint(allocator, "{s}/pid", .{work}) catch return Error.OutOfMemory;
+    defer allocator.free(pidpath);
+    const data = std.Io.Dir.cwd().readFileAlloc(io, pidpath, allocator, .unlimited) catch return; // not running
+    defer allocator.free(data);
+    const pid = std.fmt.parseInt(c_int, std.mem.trim(u8, data, " \n\r\t"), 10) catch return;
+    _ = kill(pid, SIGTERM); // the run process exits and the VM tears down
 }
 
 pub fn delete(allocator: std.mem.Allocator, id: []const u8) Error!void {
@@ -160,8 +239,38 @@ fn workDir(allocator: std.mem.Allocator, id: []const u8) Error![]u8 {
         return Error.OutOfMemory;
 }
 
+/// Per-image cache dir, keyed by a filesystem-safe form of the reference.
+fn imageCacheDir(allocator: std.mem.Allocator, image: []const u8) Error![]u8 {
+    const home_z = getenv("HOME") orelse return Error.NoHome;
+    const home = std.mem.span(home_z);
+    const safe = allocator.dupe(u8, image) catch return Error.OutOfMemory;
+    defer allocator.free(safe);
+    for (safe) |*c| {
+        if (!std.ascii.isAlphanumeric(c.*) and c.* != '.' and c.* != '-' and c.* != '_') c.* = '_';
+    }
+    return std.fmt.allocPrint(allocator, "{s}/.orch/osx/images/{s}", .{ home, safe }) catch
+        return Error.OutOfMemory;
+}
+
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+
+fn fileExists(path: []const u8) bool {
+    var buf: [1024]u8 = undefined;
+    if (path.len >= buf.len) return false;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    return access(@ptrCast(&buf), 0) == 0;
+}
+
 fn makePath(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().createDirPath(io, path) catch {};
+}
+
+/// Write this process's pid to `path` so `stop` can find and signal it.
+fn writePidfile(io: std.Io, path: [:0]const u8) void {
+    var buf: [16]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d}", .{getpid()}) catch return;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = s }) catch {};
 }
 
 /// Read the guest init binary bytes: $ORCHD_OSX_INIT, else next to this exe.
