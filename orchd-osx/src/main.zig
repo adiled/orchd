@@ -11,11 +11,11 @@
 //!   exec-set <namespace>  -- stdin: Service JSON -> stdout: ExecSet JSON
 //!   prepare  <namespace>  -- stdin: Service JSON, fetch/prepare image rootfs
 //!   cleanup  <namespace>  -- stdin: Service JSON, tear down
-//!   pull   <image>        -- fetch an image                       [TODO: backend]
-//!   run    <name> <image> -- create+boot a VM, start the container [TODO: backend]
-//!   wait   <name>         -- block until the container exits       [TODO: backend]
-//!   stop   <name>         -- graceful stop                         [TODO: backend]
-//!   delete <name>         -- remove                                [TODO: backend]
+//!   pull   <image>        -- fetch an image
+//!   run    <name> <image> -- boot a VM and run the container (blocks until exit)
+//!   wait   <name>         -- no-op (run is the foreground process)
+//!   stop   <name>         -- stop the container VM
+//!   delete <name>         -- remove the container's state
 
 const std = @import("std");
 

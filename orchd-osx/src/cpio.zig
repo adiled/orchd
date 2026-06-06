@@ -143,10 +143,11 @@ fn copyTree(ar: *Archive, io: std.Io, allocator: std.mem.Allocator, d: *std.Io.D
             .file => {
                 const data = try d.readFileAlloc(io, entry.name, allocator, .unlimited);
                 defer allocator.free(data);
-                // TODO: preserve real per-file modes from the host tree (OCI
-                // layers carry them). For now everything is executable, which is
-                // permissive but lets binaries run.
-                try ar.file(name, 0o755, data);
+                // Preserve the real file mode from the host tree (OCI layers
+                // carry it through the unpack). Fall back to 0644 if stat fails.
+                const st = d.statFile(io, entry.name, .{}) catch null;
+                const mode: u32 = if (st) |s| @intCast(s.permissions.toMode() & 0o7777) else 0o644;
+                try ar.file(name, mode, data);
             },
             else => {},
         }

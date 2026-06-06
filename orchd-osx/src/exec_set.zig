@@ -41,11 +41,9 @@ pub fn build(
     defer allocator.free(self);
 
     const pre_start = try std.fmt.allocPrint(allocator, "{s} pull {s}", .{ self, image });
-    const start = try std.fmt.allocPrint(
-        allocator,
-        "{s} run {s} {s} && {s} wait {s}",
-        .{ self, name, image, self, name },
-    );
+    // The VM lives inside the `run` process, so run is the foreground process
+    // launchd tracks: it blocks until the container exits. No separate `wait`.
+    const start = try std.fmt.allocPrint(allocator, "{s} run {s} {s}", .{ self, name, image });
     const stop = try std.fmt.allocPrint(allocator, "{s} stop {s}", .{ self, name });
     const post_stop = try std.fmt.allocPrint(allocator, "{s} delete {s}", .{ self, name });
 
@@ -68,8 +66,8 @@ test "minimal container service drives orchd-osx" {
 
     try std.testing.expect(std.mem.endsWith(u8, es.pre_start.?, " pull postgres:15"));
     try std.testing.expect(std.mem.indexOf(u8, es.start, " run orch-postgres postgres:15") != null);
-    try std.testing.expect(std.mem.indexOf(u8, es.start, " wait orch-postgres") != null);
-    try std.testing.expect(std.mem.indexOf(u8, es.start, "&&") != null);
+    // run is foreground (the VM lives in it); no separate wait stage.
+    try std.testing.expect(std.mem.indexOf(u8, es.start, " wait ") == null);
     try std.testing.expect(std.mem.endsWith(u8, es.stop.?, " stop orch-postgres"));
     try std.testing.expect(std.mem.endsWith(u8, es.post_stop.?, " delete orch-postgres"));
 

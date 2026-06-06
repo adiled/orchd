@@ -195,6 +195,15 @@ fn buildConfig(spec: BootSpec) BuildError!objc.Id {
     // Entropy (virtio-rng) helps the guest boot in reasonable time.
     const entropy_dev = objc.allocInit("VZVirtioEntropyDeviceConfiguration");
 
+    // NAT network: a virtio-net device on VZ's built-in NAT, so the container
+    // gets an IP (the kernel autoconfigures eth0 via DHCP with `ip=dhcp`).
+    const net_dev = blk: {
+        const ndev = objc.allocInit("VZVirtioNetworkDeviceConfiguration") orelse break :blk null;
+        const nat = objc.allocInit("VZNATNetworkDeviceAttachment") orelse break :blk null;
+        objc.msgSend(void, ndev, objc.sel("setAttachment:"), .{nat});
+        break :blk ndev;
+    };
+
     // Assemble the configuration.
     const cfg_cls = objc.class("VZVirtualMachineConfiguration") orelse return error.BuildFailed;
     const cfg_alloc = objc.msgSend(?objc.Id, cfg_cls, objc.sel("alloc"), .{}) orelse return error.BuildFailed;
@@ -215,6 +224,9 @@ fn buildConfig(spec: BootSpec) BuildError!objc.Id {
     }
     if (entropy_dev) |d| {
         objc.msgSend(void, config, objc.sel("setEntropyDevices:"), .{singletonArray(d)});
+    }
+    if (net_dev) |d| {
+        objc.msgSend(void, config, objc.sel("setNetworkDevices:"), .{singletonArray(d)});
     }
 
     return config;

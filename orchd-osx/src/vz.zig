@@ -38,7 +38,8 @@ pub const Error = error{
 
 const VSOCK_PORT: u32 = 1024;
 // initramfs boot: the kernel unpacks our cpio as root and runs /init from it.
-const KERNEL_CMDLINE = "console=hvc0";
+// ip=dhcp makes the kernel autoconfigure eth0 from VZ's NAT DHCP at boot.
+const KERNEL_CMDLINE = "console=hvc0 ip=dhcp";
 const MEMORY: u64 = 1024 * 1024 * 1024;
 const CPUS: usize = 2;
 
@@ -138,9 +139,12 @@ pub fn stop(allocator: std.mem.Allocator, id: []const u8) Error!void {
 }
 
 pub fn delete(allocator: std.mem.Allocator, id: []const u8) Error!void {
-    _ = allocator;
-    _ = id;
-    // TODO: rm -rf the per-container work dir.
+    const work = try workDir(allocator, id);
+    defer allocator.free(work);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    std.Io.Dir.cwd().deleteTree(io, work) catch {};
 }
 
 pub fn available() bool {

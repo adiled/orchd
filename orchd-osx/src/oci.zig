@@ -17,8 +17,11 @@
 //!     tiny layout in a temp dir.
 //! resolve() wires these together over a Docker Registry v2 / OCI pull with
 //! the docker.io bearer-token auth flow, sharing rootfs assembly with
-//! unpackLayout(). The network pull has no test here (tests run offline); see
-//! the TODO on resolve() for the gated integration test.
+//! unpackLayout(). All registry HTTP(S) goes through `curl` (curlGet /
+//! curlGetToFile) so we use the OS TLS stack instead of Zig 0.16's std TLS,
+//! which fails to load system CAs and trips TlsInitializationFailed against
+//! real-world CDNs. There is a network integration test at the bottom that
+//! pulls docker.io/library/alpine:latest and asserts the unpacked rootfs.
 
 const std = @import("std");
 
@@ -31,6 +34,7 @@ pub const Error = error{
     UnsupportedMediaType,
     NoMatchingPlatform,
     HttpStatus,
+    CurlFailed,
 };
 
 /// A resolved image: an unpacked rootfs plus the process defaults from its
@@ -381,11 +385,38 @@ fn isGzip(blob: []const u8) bool {
     return blob.len >= 2 and blob[0] == 0x1f and blob[1] == 0x8b;
 }
 
-/// Extract one layer blob into `dest`, dispatching on gzip vs plain tar.
-/// TODO: zstd layers (application/vnd.oci.image.layer.v1.tar+zstd).
+/// Detect a zstd frame by its magic number (0x28 0xB5 0x2F 0xFD, little-endian).
+/// OCI permits application/vnd.oci.image.layer.v1.tar+zstd layers.
+fn isZstd(blob: []const u8) bool {
+    return blob.len >= 4 and blob[0] == 0x28 and blob[1] == 0xb5 and
+        blob[2] == 0x2f and blob[3] == 0xfd;
+}
+
+/// Extract one zstd'd tar layer into `dest`. Uses std.compress.zstd, which
+/// exists in Zig 0.16. A heap window buffer keeps the (up to 8 MiB) sliding
+/// window off the stack.
+pub fn extractLayerZstd(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    dest: std.Io.Dir,
+    zstd_bytes: []const u8,
+) !void {
+    var in: std.Io.Reader = .fixed(zstd_bytes);
+    const window_len = std.compress.zstd.default_window_len;
+    const buf = try allocator.alloc(u8, window_len + std.compress.zstd.block_size_max);
+    defer allocator.free(buf);
+    var dec: std.compress.zstd.Decompress = .init(&in, buf, .{ .window_len = window_len });
+    try extractLayerTar(allocator, io, dest, &dec.reader);
+}
+
+/// Extract one layer blob into `dest`, dispatching on gzip / zstd / plain tar
+/// by magic bytes (so both the offline layout path and the registry pull share
+/// one code path regardless of declared mediaType).
 fn extractLayerBlob(allocator: std.mem.Allocator, io: std.Io, dest: std.Io.Dir, blob: []const u8) !void {
     if (isGzip(blob)) {
         try extractLayerGzip(allocator, io, dest, blob);
+    } else if (isZstd(blob)) {
+        try extractLayerZstd(allocator, io, dest, blob);
     } else {
         var reader: std.Io.Reader = .fixed(blob);
         try extractLayerTar(allocator, io, dest, &reader);
