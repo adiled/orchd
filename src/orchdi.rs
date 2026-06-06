@@ -25,6 +25,10 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
+use crate::exec::ExecSet;
+use crate::types::Service;
+
 /// A dependency the service waits on before starting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepSpec {
@@ -227,6 +231,106 @@ pub fn healthcheck_to_cmd(hc: &str) -> String {
     } else {
         hc.to_string()
     }
+}
+
+// ─── Spec building (shared by every platform; orchdi owns it) ──────────────
+
+/// A dependency readiness gate: poll `poll_cmd` until it succeeds (or times
+/// out) before starting the service. `required` distinguishes REQUIRES (must
+/// pass) from AFTER (ordering only).
+pub struct DepGate {
+    pub poll_cmd: String,
+    pub timeout_secs: u32,
+    pub required: bool,
+}
+
+/// Service label: `{namespace}.{service}` (reverse-DNS style).
+pub fn service_label(config: &Config, service_name: &str) -> String {
+    format!("{}.{}", config.namespace, service_name)
+}
+
+/// Path to a service's SuperviseSpec JSON: `<state_dir>/supervise/<label>.json`.
+pub fn supervise_spec_path(config: &Config, label: &str) -> String {
+    config
+        .state_dir
+        .join("supervise")
+        .join(format!("{label}.json"))
+        .display()
+        .to_string()
+}
+
+/// Parse "30s" / "2m" / "120" → seconds. Returns None on parse failure.
+pub fn parse_duration_secs(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix('s') {
+        n.parse().ok()
+    } else if let Some(n) = s.strip_suffix('m') {
+        n.parse::<u32>().ok().map(|v| v * 60)
+    } else {
+        s.parse().ok()
+    }
+}
+
+/// Build the SuperviseSpec for a service from its ExecSet + dependency gates.
+/// Runtime-agnostic: only command strings flow in.
+pub fn build_supervise_spec(
+    service: &Service,
+    exec_set: &ExecSet,
+    config: &Config,
+    deps: &[DepGate],
+) -> SuperviseSpec {
+    let stop_timeout = service
+        .timeouts
+        .stop
+        .as_deref()
+        .and_then(parse_duration_secs)
+        .unwrap_or(if exec_set.stop.is_some() || exec_set.post_stop.is_some() {
+            30
+        } else {
+            10
+        });
+    SuperviseSpec {
+        label: service_label(config, &service.name),
+        pre_start: exec_set.pre_start.clone(),
+        start: exec_set.start.clone(),
+        stop: exec_set.stop.clone(),
+        post_stop: exec_set.post_stop.clone(),
+        deps: deps
+            .iter()
+            .map(|d| DepSpec {
+                poll_cmd: d.poll_cmd.clone(),
+                timeout_secs: d.timeout_secs,
+                required: d.required,
+            })
+            .collect(),
+        stop_timeout_secs: stop_timeout,
+    }
+}
+
+/// Build the dependency readiness gates for `service`: for each REQUIRES/AFTER
+/// dependency that is enabled and has a HEALTHCHECK, a poll the supervisor runs
+/// before starting. Deps without a healthcheck are skipped.
+pub fn build_dep_gates(service: &Service, all: &[Service]) -> Vec<DepGate> {
+    let lookup = |name: &str| all.iter().find(|s| s.name == name && !s.disabled);
+    let mut gates = Vec::new();
+    for (names, required) in [(&service.requires, true), (&service.after, false)] {
+        for dep_name in names {
+            if let Some(dep) = lookup(dep_name) {
+                if let Some(hc) = &dep.healthcheck {
+                    gates.push(DepGate {
+                        poll_cmd: healthcheck_to_cmd(hc),
+                        timeout_secs: dep
+                            .readiness_timeout
+                            .as_deref()
+                            .and_then(parse_duration_secs)
+                            .unwrap_or(90),
+                        required,
+                    });
+                }
+            }
+        }
+    }
+    gates
 }
 
 #[cfg(test)]

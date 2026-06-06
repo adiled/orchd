@@ -2,17 +2,13 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::exec::ExecSet;
-use crate::orchdi::{healthcheck_to_cmd, DepSpec, SuperviseSpec};
+use crate::orchdi::{parse_duration_secs, service_label, supervise_spec_path, DepGate};
 use crate::types::{RestartPolicy, Service};
 
 /// A dependency readiness gate: poll `poll_cmd` until it succeeds (or times out)
 /// before starting the service. `required` distinguishes REQUIRES (must pass —
 /// abort start on timeout) from AFTER (ordering only — proceed on timeout).
-pub struct DepGate {
-    pub poll_cmd: String,
-    pub timeout_secs: u32,
-    pub required: bool,
-}
+// `DepGate`, the spec builders, and `service_label` now live in `orchdi`.
 
 /// Generate a launchd .plist with no dependencies (test convenience).
 #[cfg(test)]
@@ -29,7 +25,7 @@ pub fn generate_service_plist_with_deps(
     config: &Config,
     deps: &[DepGate],
 ) -> String {
-    let label = plist_label(config, &service.name);
+    let label = service_label(config, &service.name);
     let log_dir = log_dir(config);
     let stdout_path = format!("{}/{}.out.log", log_dir, label);
     let stderr_path = format!("{}/{}.err.log", log_dir, label);
@@ -215,87 +211,9 @@ fn orchd_exe() -> String {
         .unwrap_or_else(|| "orchd".to_string())
 }
 
-/// Path to a service's SuperviseSpec JSON: `<state_dir>/supervise/<label>.json`.
-pub fn supervise_spec_path(config: &Config, label: &str) -> String {
-    config
-        .state_dir
-        .join("supervise")
-        .join(format!("{label}.json"))
-        .display()
-        .to_string()
-}
-
-/// Build the SuperviseSpec for a service from its ExecSet + dependency gates.
-/// Runtime-agnostic: only command strings flow in.
-pub fn build_supervise_spec(
-    service: &Service,
-    exec_set: &ExecSet,
-    config: &Config,
-    deps: &[DepGate],
-) -> SuperviseSpec {
-    let stop_timeout = service
-        .timeouts
-        .stop
-        .as_deref()
-        .and_then(parse_duration_secs)
-        .unwrap_or(if exec_set.stop.is_some() || exec_set.post_stop.is_some() {
-            30
-        } else {
-            10
-        });
-    SuperviseSpec {
-        label: plist_label(config, &service.name),
-        pre_start: exec_set.pre_start.clone(),
-        start: exec_set.start.clone(),
-        stop: exec_set.stop.clone(),
-        post_stop: exec_set.post_stop.clone(),
-        deps: deps
-            .iter()
-            .map(|d| DepSpec {
-                poll_cmd: d.poll_cmd.clone(),
-                timeout_secs: d.timeout_secs,
-                required: d.required,
-            })
-            .collect(),
-        stop_timeout_secs: stop_timeout,
-    }
-}
-
-/// Build the dependency readiness gates for `service`: for each REQUIRES/AFTER
-/// dependency that is enabled and has a HEALTHCHECK, a poll the supervisor runs
-/// before starting. Deps without a healthcheck are skipped (nothing to poll) —
-/// mirrors systemd's ready-gate selection.
-pub fn build_dep_gates(service: &Service, all: &[Service]) -> Vec<DepGate> {
-    let lookup = |name: &str| all.iter().find(|s| s.name == name && !s.disabled);
-    let mut gates = Vec::new();
-    for (names, required) in [(&service.requires, true), (&service.after, false)] {
-        for dep_name in names {
-            if let Some(dep) = lookup(dep_name) {
-                if let Some(hc) = &dep.healthcheck {
-                    gates.push(DepGate {
-                        poll_cmd: healthcheck_to_cmd(hc),
-                        timeout_secs: dep
-                            .readiness_timeout
-                            .as_deref()
-                            .and_then(parse_duration_secs)
-                            .unwrap_or(90),
-                        required,
-                    });
-                }
-            }
-        }
-    }
-    gates
-}
-
-/// Label format: `{namespace}.{service}` (reverse-DNS style).
-pub fn plist_label(config: &Config, service_name: &str) -> String {
-    format!("{}.{}", config.namespace, service_name)
-}
-
 /// Plist filename: `{label}.plist`.
 pub fn plist_filename(config: &Config, service_name: &str) -> String {
-    format!("{}.plist", plist_label(config, service_name))
+    format!("{}.plist", service_label(config, service_name))
 }
 
 /// Log directory: `$HOME/Library/Logs` for user, `/Library/Logs` for system.
@@ -314,14 +232,6 @@ fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
     } else {
         project_dir.join(path).display().to_string()
     }
-}
-
-/// Parse "30s" / "2m" / "120" → seconds. Returns None on parse failure.
-fn parse_duration_secs(s: &str) -> Option<u32> {
-    let s = s.trim();
-    if let Some(n) = s.strip_suffix('s') { n.parse().ok() }
-    else if let Some(n) = s.strip_suffix('m') { n.parse::<u32>().ok().map(|v| v * 60) }
-    else { s.parse().ok() }
 }
 
 /// Minimal XML entity escaping for plist string values.
@@ -344,6 +254,7 @@ fn xml_escape(s: &str) -> String {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+    use crate::orchdi::{build_dep_gates, build_supervise_spec};
     use crate::config::Scope;
     use crate::types::*;
     use std::collections::HashMap;
@@ -773,9 +684,9 @@ mod tests {
     }
 
     #[test]
-    fn test_plist_label__format() {
+    fn test_service_label__format() {
         let cfg = test_config();
-        assert_eq!(plist_label(&cfg, "web"), "orch.web");
+        assert_eq!(service_label(&cfg, "web"), "orch.web");
     }
 
     #[test]
