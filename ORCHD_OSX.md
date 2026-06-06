@@ -8,33 +8,31 @@ the third operating mode of the `apple` runtime:
 |------|--------------------|---------|--------|
 | 1 | `container` / `cli` | shell out to Apple's `container` CLI | works |
 | 2 | `xpc` / `daemon` (default) | `orchd-apple`: drive the pinned daemon over XPC | works |
-| 3 | `osx` / `vz` | `orchd-osx`: this runtime | scaffold |
+| 3 | `osx` / `vz` | `orchd-osx`: this runtime | **works** |
 
 All three turn a container Service into the same `ExecSet` contract. The Rust
 `apple` runtime (`src/runtime/apple.rs`) is a thin envelope that selects one.
 Modes 2 and 3 are the same code path from Rust's side: spawn a co-process that
-speaks a small JSON-over-stdio protocol. So orchd-osx is a drop-in that can be
-built out independently without touching orchd-apple.
+speaks a small JSON-over-stdio protocol.
 
 ## Why this exists
 
 The XPC path (mode 2) works but depends on Apple's `container` daemon running.
-orchd-osx removes that dependency entirely: own the host side in Zig, reuse only
-Apple's artifacts (the Linux kernel and the `vminitd` guest binary) as data.
+orchd-osx removes that dependency entirely: we own the whole stack in Zig and
+reuse nothing from the daemon. The only external artifact is a pinned Linux
+kernel (macOS ships none); the guest init, wire protocol, image pull, and
+rootfs are all ours.
 
-This is feasible because the real architecture is a two-layer stack, and the
-host layer is an Objective-C framework that non-Swift languages already drive in
-production (Go's Code-Hex/vz, vfkit used by podman-machine and minikube):
+The host layer is an Objective-C framework that non-Swift languages already
+drive in production (Go's Code-Hex/vz, vfkit used by podman-machine and
+minikube), so driving it from Zig (which we already do for XPC) is known ground:
 
 ```
 [host, macOS]                          [guest, Linux VM]
-Virtualization.framework  ── vsock ──  vminitd (PID 1, gRPC server)
-  driven via objc_msgSend                process/exec/wait/kill/IO/mount
-  boots: kernel + ext4 rootfs
+Virtualization.framework  ── vsock ──  our init (PID 1, Zig static binary)
+  driven via objc_msgSend                length-prefixed protocol (no gRPC):
+  boots: kernel + cpio initramfs         exec / stdout / stderr / exit / ipinfo
 ```
-
-We already drive Objective-C from Zig (the XPC client hand-builds the ObjC Block
-ABI), so the host side is known ground, not a leap.
 
 ### Why not link the `containerization` Swift package directly
 
@@ -49,29 +47,42 @@ API (async/await, structs, Codable) is not C-callable. Bridging needs a Swift
   bridge.
 
 For a minimal-dependency Zig project that inverts the ethos. Owning the host VMM
-in Zig is more work up front but keeps a single static binary and no Swift.
+in Zig is more work up front but keeps a single binary and no Swift.
 
-## Build-out order
+## How it works
 
-Each step is independently testable. The entry points already exist and stub
-honestly (`vz.zig` returns `NotImplemented`); fill them in order.
+A container runs entirely on our own stack, no daemon:
 
-1. **objc.zig** — Objective-C runtime helpers: class lookup, `objc_msgSend`
-   shims, autorelease. Reuse the patterns from orchd-apple's XPC client.
-2. **Boot a bare VM** — `VZVirtualMachineConfiguration` with a
-   `VZLinuxBootLoader` (kernel), a memory/CPU config, and a
-   `VZVirtioSocketDevice`. Start it; confirm it boots.
-3. **vsock.zig** — a minimal gRPC-over-vsock client to vminitd (single HTTP/2
-   connection + a protobuf codec for just the messages we use). Goal: exec
-   `echo` inside the guest and read its output. This is the long pole; size it
-   first by pulling vminitd's `.proto` from `apple/containerization`.
-4. **ext4.zig** — OCI image to ext4 rootfs. Reuse the daemon's prepared
-   artifacts first (fastest path to a running container); own the builder later
-   for full independence (parity with `ContainerizationEXT4`).
-5. **Lifecycle** — wire create / wait / stop / delete in `vz.zig` and remove the
-   stubs in `main.zig`.
+1. **pull** (`oci.zig`) — fetch the image from any OCI registry. Registry HTTP
+   goes through `curl` (the OS TLS stack + system CAs; Zig 0.16 std TLS fails
+   against real CDNs). Generic Bearer auth via the `WWW-Authenticate` challenge,
+   so docker.io, ghcr.io, public.ecr.aws, quay.io all work. Layers (gzip / zstd
+   / plain tar) unpack into a rootfs, cached under `~/.orch/osx/images/<ref>` so
+   an image is pulled at most once.
+2. **rootfs** (`cpio.zig`) — pack the unpacked rootfs plus our guest init into a
+   newc cpio initramfs. Correct-by-construction (no block-filesystem superblock
+   to get subtly wrong); the kernel unpacks it to tmpfs and runs `/init`.
+3. **boot** (`vm.zig`, via `objc.zig`) — build a `VZVirtualMachineConfiguration`
+   (Linux boot loader + cpio initramfs + virtio block/console/vsock/entropy + a
+   NAT network device), start it on a serial dispatch queue. `ip=dhcp` gives the
+   container an IP from VZ's NAT.
+4. **exec** (`vsock.zig` + `guest/init.zig`) — the guest init mounts /proc /sys
+   /dev, reports its IP, and listens on vsock; the host connects, sends the
+   process spec, the guest exec's it (PATH-resolved), streams stdout/stderr back,
+   and reports the exit code.
+5. **lifecycle** — `run` is the foreground process that owns the VM and blocks
+   until the container exits. `stop` finds the run process via its pidfile and
+   SIGTERMs it; the VM dies with the process (no orphan). `delete` removes the
+   per-container state.
 
-## Module boundaries
+Service overrides (env / cmd / entrypoint / workdir) ride into `run` as a
+base64 `--spec` blob and layer on the image defaults with Docker semantics.
+
+Requirements: a pinned kernel asset (`kernel.zig`, see below) and the
+`com.apple.security.virtualization` entitlement (ad-hoc codesign via
+`scripts/sign.sh`).
+
+See `STRESS_TEST_GROUND_0_OSX.md` for the load/robustness validation.
 
 One job per module. Boundaries are contracts: a module knows only the layer
 directly below it, never reaches past it. The unsafe and the OS-specific are
@@ -89,9 +100,9 @@ Host side (orchd-osx binary, macOS):
 | `vm.zig` | Build VZVirtualMachineConfiguration, boot/stop a VM, hand back the vsock connection fd. async->sync via dispatch_semaphore | objc, kernel | containers, OCI, protocol |
 | `vsock.zig` | Host end of our wire protocol over the connection fd | proto, an fd | VZ, objc |
 | `proto.zig` | The host<->guest wire format (message types, framing). Single source of truth, shared with the guest | nothing | everything |
-| `oci.zig` | Image ref -> local rootfs + config (entrypoint/env/cwd) | registry/content | VMs, ext4 layout |
-| `ext4.zig` | rootfs dir -> ext4 image file | filesystem | VMs, OCI |
-| `kernel.zig` | Provide the path to our kernel asset | our asset store | everything |
+| `oci.zig` | Image ref -> local rootfs + config (entrypoint/cmd/env/cwd). curl pull, generic registry auth, gzip/zstd/tar layers, caching | registry/content | VMs, rootfs format |
+| `cpio.zig` | rootfs dir + guest init -> newc cpio initramfs | filesystem | VMs, OCI |
+| `kernel.zig` | Provide the path to our pinned kernel asset | our asset store | everything |
 
 Guest side (separate static aarch64-linux binary):
 
@@ -122,10 +133,10 @@ orchd-osx stop   <name>         -- graceful stop
 orchd-osx delete <name>         -- remove
 ```
 
-`exec-set` emits an ExecSet whose `start` is
-`orchd-osx run <name> <image> && orchd-osx wait <name>`, so the launchd
-supervisor runs the container in the foreground (run starts it, wait blocks
-while it lives), exactly like the XPC path.
+`exec-set` emits an ExecSet whose `start` is `orchd-osx run <name> <image>
+--spec <b64>`. Because the VM lives inside the `run` process, `run` IS the
+foreground process launchd tracks (it blocks until the container exits); there
+is no separate `wait`. `stop` SIGTERMs the run process via its pidfile.
 
 ## Runtime requirements
 
