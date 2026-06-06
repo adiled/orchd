@@ -14,11 +14,11 @@ cargo build --release
 ln -sf target/release/orchd /usr/local/bin/orchd
 ```
 
-You also need [`orch`](https://github.com/adiled/orch) on your PATH (it reads the file).
+For containers on a Mac (requires [`just`](https://github.com/casey/just) and Zig):
 
-For containers on a Mac, `just install` builds everything (orchd, the runtime,
-and the guest pieces), fetches the kernel, and installs it in one step (needs
-Zig 0.16 and `brew install just`).
+```sh
+just install
+```
 
 ## Write an Orchfile
 

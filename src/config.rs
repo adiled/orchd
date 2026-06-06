@@ -33,8 +33,6 @@ pub struct Config {
     pub project_dir: PathBuf,
     /// Data directory for service storage.
     pub data_dir: PathBuf,
-    /// Path to the orch parser binary.
-    pub orch_bin: PathBuf,
     /// Namespace for isolation (used as unit prefix).
     pub namespace: String,
     /// Pass-through args to orch parse (key=value).
@@ -50,7 +48,7 @@ impl Config {
     ///
     /// `.orchrc` is a KEY=VALUE file searched in project_dir then HOME.
     /// Supported keys: `runtime`, `platform`, `namespace`, `state_dir`,
-    /// `data_dir`, `orch_bin`, `orchfile`.
+    /// `data_dir`, `orchfile`.
     pub fn load(cli: &crate::cli::Cli) -> Self {
         // project_dir is resolved first (it locates .orchrc), so it gets
         // CLI > env > cwd, with no .orchrc layer.
@@ -72,9 +70,6 @@ impl Config {
         });
         let data_dir = path_setting(cli.data_dir.as_ref(), "ORCH_DATA", &rc, "data_dir", || {
             state_dir.join("data")
-        });
-        let orch_bin = path_setting(cli.orch_bin.as_ref(), "ORCH_BIN", &rc, "orch_bin", || {
-            PathBuf::from("orch")
         });
         let runtime = str_setting(cli.runtime.as_ref(), "ORCH_RUNTIME", &rc, "runtime", || {
             "bare".to_string()
@@ -105,7 +100,6 @@ impl Config {
             state_dir,
             project_dir,
             data_dir,
-            orch_bin,
             namespace,
             args: cli.args.clone(),
             verbose: cli.verbose,
@@ -242,7 +236,6 @@ mod tests {
             state_dir: None,
             project_dir: None,
             data_dir: None,
-            orch_bin: None,
             namespace: None,
             user: false,
             system: false,
@@ -402,9 +395,9 @@ mod tests {
 
     #[test]
     fn test_parse_orchrc__value_with_equals() {
-        let content = "orch_bin=/usr/local/bin/orch\n";
+        let content = "namespace=a=b\n";
         let rc = parse_orchrc(content);
-        assert_eq!(rc.get("orch_bin").unwrap(), "/usr/local/bin/orch");
+        assert_eq!(rc.get("namespace").unwrap(), "a=b");
     }
 
     #[test]

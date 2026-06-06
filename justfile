@@ -54,7 +54,7 @@ dist: build
     cp orchd-osx/zig-out/bin/orchd-osx      dist/bin/
     cp orchd-osx/zig-out/bin/orchd-osx-init dist/bin/
     if command -v orch >/dev/null; then cp "$(command -v orch)" dist/bin/; \
-      else echo "note: 'orch' not on PATH; install it (cargo install --git https://github.com/adiled/orch)"; fi
+      else echo "note: 'orch' not on PATH; optional, only for the manual parse pipe"; fi
     (cd orchd-osx && ./scripts/sign.sh "$root/dist/bin/orchd-osx" >/dev/null)
     echo "staged -> dist/bin ($(ls dist/bin | tr '\n' ' '))"
 

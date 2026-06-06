@@ -14,7 +14,6 @@ CLI flag   >   env var   >   .orchrc   >   default
 | Orchfile | `--orchfile` | `ORCH_ORCHFILE` | `orchfile` | `<project>/Orchfile` |
 | State dir | `--state-dir` | `ORCH_STATE_DIR` | `state_dir` | `~/.orch` |
 | Data dir | `--data-dir` | `ORCH_DATA` | `data_dir` | `<state>/data` |
-| orch binary | `--orch-bin` | `ORCH_BIN` | `orch_bin` | `orch` (from PATH) |
 | Runtime | `--runtime` | `ORCH_RUNTIME` | `runtime` | `bare` |
 | Platform | `--platform` | `ORCH_PLATFORM` | `platform` | auto (launchd on macOS, else systemd) |
 | Namespace | `--namespace` | `ORCH_NAMESPACE` | `namespace` | `orch` |

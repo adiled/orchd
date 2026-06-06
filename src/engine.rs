@@ -1,4 +1,3 @@
-use std::process::Command;
 
 use crate::config::Config;
 use crate::exec::ExecSet;
@@ -13,8 +12,6 @@ use crate::types::OrchFile;
 pub enum EngineError {
     #[error("orch parse failed: {0}")]
     OrchParse(String),
-    #[error("JSON deserialization failed: {0}")]
-    JsonDeserialize(String),
     #[error("runtime error: {0}")]
     Runtime(#[from] crate::runtime::RuntimeError),
     #[error("platform error: {0}")]
@@ -23,11 +20,10 @@ pub enum EngineError {
 
 /// Run the full generate pipeline:
 /// 1. Check mtime (skip if up-to-date unless `force`)
-/// 2. Call `orch parse` to get JSON
-/// 3. Deserialize into OrchFile
-/// 4. Create runtime, check prerequisites
-/// 5. For each enabled service: runtime.prepare() + runtime.exec_set()
-/// 6. Platform generate_all() + install()
+/// 2. Parse the Orchfile (+ overlays) in-process via the orch library
+/// 3. Create runtime, check prerequisites
+/// 4. For each enabled service: runtime.prepare() + runtime.exec_set()
+/// 5. Platform generate_all() + install()
 pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
     // 1. Skip if artifacts are newer than Orchfile (unless --force)
     if !force && is_up_to_date(config) {
@@ -37,12 +33,8 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
         return Ok(());
     }
 
-    // 2. Call orch parse
-    let json = call_orch_parse(config)?;
-
-    // 2. Deserialize
-    let orchfile: OrchFile = serde_json::from_str(&json)
-        .map_err(|e| EngineError::JsonDeserialize(format!("{}", e)))?;
+    // 2. Parse the Orchfile (+ overlays) in-process via the orch library.
+    let orchfile: OrchFile = parse_orchfile(config)?;
 
     if !config.quiet {
         eprintln!(
@@ -302,74 +294,64 @@ fn is_up_to_date(config: &Config) -> bool {
     has_units
 }
 
-/// Call `orch parse <orchfile> [overlays...] [--arg key=value ...]` and return stdout JSON.
+/// Parse the Orchfile (+ overlays) in-process via the `orch` library and return
+/// the resolved OrchFile. No subprocess, no `orch` binary on PATH.
 ///
-/// Automatically injects a temporary overlay with ARG declarations for orchd's
-/// built-in variables (ORCH_DATA, ORCH_PROJECT, etc.) so Orchfiles can reference
-/// them without the user having to pass --arg manually.
-fn call_orch_parse(config: &Config) -> Result<String, EngineError> {
-    // Write temp overlay with built-in variable ARG declarations
-    let vars_overlay = write_vars_overlay(config)?;
+/// Injects an in-memory overlay declaring orchd's built-in variables (ORCH_DATA,
+/// etc.) so Orchfiles can reference them without the user passing `--arg`.
+fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
+    let mut files: Vec<(String, String)> = Vec::new();
 
-    let mut cmd = Command::new(&config.orch_bin);
-    cmd.arg("parse");
-    cmd.arg(&config.orchfile);
-
-    // Inject vars overlay first so user overlays can override
-    cmd.arg(&vars_overlay);
-
-    // Add user overlay files
-    for overlay in &config.overlays {
-        cmd.arg(overlay);
-    }
-
-    // Add --arg flags
-    for arg in &config.args {
-        cmd.arg("--arg");
-        cmd.arg(arg);
-    }
-
-    if config.verbose {
-        eprintln!("exec: {:?}", cmd);
-    }
-
-    let output = cmd.output().map_err(|e| {
+    // Main Orchfile.
+    let content = std::fs::read_to_string(&config.orchfile).map_err(|e| {
         EngineError::OrchParse(format!(
-            "failed to execute '{}': {}",
-            config.orch_bin.display(),
+            "failed to read '{}': {}",
+            config.orchfile.display(),
             e
         ))
     })?;
+    files.push((config.orchfile.display().to_string(), content));
 
-    // Clean up temp file
-    let _ = std::fs::remove_file(&vars_overlay);
+    // Built-in variable declarations (in-memory; was a temp overlay file).
+    files.push(("orchd-vars.orch".to_string(), vars_overlay_content(config)));
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(EngineError::OrchParse(format!(
-            "exit code {}: {}",
-            output.status.code().unwrap_or(-1),
-            stderr.trim()
-        )));
+    // User overlays (merged left-to-right, so these override).
+    for overlay in &config.overlays {
+        let content = std::fs::read_to_string(overlay).map_err(|e| {
+            EngineError::OrchParse(format!(
+                "failed to read overlay '{}': {}",
+                overlay.display(),
+                e
+            ))
+        })?;
+        files.push((overlay.display().to_string(), content));
     }
 
-    String::from_utf8(output.stdout).map_err(|e| {
-        EngineError::OrchParse(format!("invalid UTF-8 in orch output: {}", e))
+    // `--arg key=value` overrides take precedence over ARG defaults.
+    let mut overrides: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for arg in &config.args {
+        if let Some((k, v)) = arg.split_once('=') {
+            overrides.insert(k.to_string(), v.to_string());
+        }
+    }
+
+    if config.verbose {
+        eprintln!("parsing {} file(s) in-process via orch", files.len());
+    }
+
+    orch::parse_files(&files, &overrides).map_err(|errs| {
+        let msg = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        EngineError::OrchParse(msg)
     })
 }
 
-/// Write a temporary Orchfile overlay containing ARG declarations for orchd's
-/// built-in variables. These variables are referenced in Orchfiles (e.g.
-/// `${ORCH_DATA}`) but aren't declared as ARGs — orch leaves them unresolved
-/// unless we declare them.
-fn write_vars_overlay(config: &Config) -> Result<std::path::PathBuf, EngineError> {
-    let dir = config.state_dir.join("tmp");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        EngineError::OrchParse(format!("failed to create tmp dir: {}", e))
-    })?;
-
-    let path = dir.join("orchd-vars.orch");
-    let content = format!(
+/// The in-memory ARG overlay declaring orchd's built-in variables.
+fn vars_overlay_content(config: &Config) -> String {
+    format!(
         "# Auto-generated by orchd — built-in variable declarations\n\
          ARG ORCH_DATA={}\n\
          ARG ORCH_PROJECT={}\n\
@@ -379,13 +361,7 @@ fn write_vars_overlay(config: &Config) -> Result<std::path::PathBuf, EngineError
         config.project_dir.display(),
         config.state_dir.display(),
         config.project_dir.display(), // ORCH_CONTAINERS_DIR defaults to project_dir
-    );
-
-    std::fs::write(&path, content).map_err(|e| {
-        EngineError::OrchParse(format!("failed to write vars overlay: {}", e))
-    })?;
-
-    Ok(path)
+    )
 }
 
 #[cfg(test)]
@@ -399,15 +375,6 @@ mod tests {
     fn test_engine_error_display__orch_parse() {
         let err = EngineError::OrchParse("file not found".to_string());
         assert_eq!(format!("{}", err), "orch parse failed: file not found");
-    }
-
-    #[test]
-    fn test_engine_error_display__json_deserialize() {
-        let err = EngineError::JsonDeserialize("unexpected token".to_string());
-        assert_eq!(
-            format!("{}", err),
-            "JSON deserialization failed: unexpected token"
-        );
     }
 
     #[test]
@@ -446,24 +413,19 @@ mod tests {
         assert!(matches!(err, EngineError::Platform(_)));
     }
 
-    // --- write_vars_overlay ---
+    // --- vars_overlay_content ---
 
     #[test]
-    fn test_write_vars_overlay__creates_file_with_arg_declarations() {
-        let tmp = std::env::temp_dir().join("orchd-test-vars-overlay");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
+    fn test_vars_overlay_content__has_arg_declarations() {
         let cli = crate::cli::Cli {
             command: crate::cli::Commands::Survey { json: false },
             orchfile: None,
             overlay: vec![],
             runtime: None,
             platform: None,
-            state_dir: Some(tmp.clone()),
+            state_dir: Some(std::path::PathBuf::from("/tmp/orchd-test-state")),
             project_dir: Some(std::path::PathBuf::from("/srv/project")),
             data_dir: Some(std::path::PathBuf::from("/srv/data")),
-            orch_bin: None,
             namespace: None,
             user: false,
             system: false,
@@ -473,16 +435,11 @@ mod tests {
         };
         let config = Config::load(&cli);
 
-        let path = write_vars_overlay(&config).unwrap();
-        assert!(path.exists());
-
-        let content = std::fs::read_to_string(&path).unwrap();
+        let content = vars_overlay_content(&config);
         assert!(content.contains("ARG ORCH_DATA=/srv/data"));
         assert!(content.contains("ARG ORCH_PROJECT=/srv/project"));
         assert!(content.contains("ARG ORCH_STATE_DIR="));
         assert!(content.contains("ARG ORCH_CONTAINERS_DIR="));
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // --- Integration: orch parse → bare runtime → systemd generate ---
@@ -517,7 +474,6 @@ mod tests {
             state_dir: Some(state_dir.clone()),
             project_dir: Some(tmp.clone()),
             data_dir: Some(data_dir.clone()),
-            orch_bin: None, // defaults to "orch" in PATH
             namespace: Some("integ".to_string()),
             user: false,
             system: false,
@@ -527,14 +483,10 @@ mod tests {
         };
         let config = Config::load(&cli);
 
-        // Step 1: call_orch_parse should succeed and return valid JSON
-        let json = call_orch_parse(&config)
+        // Step 1: in-process parse should succeed and return the OrchFile
+        let orchfile: crate::types::OrchFile = parse_orchfile(&config)
             .expect("orch parse should succeed on fixture Orchfile");
 
-        let orchfile: crate::types::OrchFile = serde_json::from_str(&json)
-            .expect("JSON should deserialize into OrchFile");
-
-        assert_eq!(orchfile.version, "0.2.0");
         assert_eq!(orchfile.services.len(), 3);
 
         // Verify services parsed correctly

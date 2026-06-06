@@ -307,7 +307,6 @@ mod tests {
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),
-            orch_bin: PathBuf::from("orch"),
             namespace: "orch".to_string(),
             args: Vec::new(),
             verbose: false,

@@ -35,10 +35,6 @@ pub struct Cli {
     #[arg(long)]
     pub data_dir: Option<PathBuf>,
 
-    /// Path to orch parser binary
-    #[arg(long)]
-    pub orch_bin: Option<PathBuf>,
-
     /// Namespace for isolation
     #[arg(long)]
     pub namespace: Option<String>,
