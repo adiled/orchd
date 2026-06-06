@@ -1,7 +1,7 @@
 .{
     .name = .orchd_osx,
     .fingerprint = 0x33c4862673ba2dd0,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .minimum_zig_version = "0.16.0",
 
     // No dependencies: orchd-osx talks to Virtualization.framework via the
