@@ -1,7 +1,9 @@
 # orchd build + packaging. Run `just` (or `just --list`) to see recipes.
 #
-# Requires: rust (cargo), zig 0.16. The osx runtime also needs zstd + curl for
-# the one-time kernel fetch. Install just itself with `brew install just`.
+# Cross-platform: on macOS it also builds the Apple container runtimes (orchd-apple,
+# orchd-osx) and fetches the kernel; on Linux it builds just orchd (the systemd +
+# podman/containerd path needs no extra binaries). Requires rust (cargo); macOS
+# also needs zig 0.16 + zstd/curl for the kernel. Install just with `brew install just`.
 
 set shell := ["bash", "-uc"]
 
@@ -14,21 +16,28 @@ opt      := "ReleaseSafe"
 default:
     @just --list
 
-# Build everything (orchd + both Zig co-processes), release mode.
-build: build-orchd build-apple build-osx
+# Build for this platform: orchd everywhere, plus the Apple runtimes on macOS.
+build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just build-orchd
+    if [ "{{os()}}" = "macos" ]; then just build-apple && just build-osx; fi
 
 build-orchd:
     cargo build --release
 
+[macos]
 build-apple:
     cd orchd-apple && zig build -Doptimize={{opt}}
 
 # Build the host runtime + guest init, then ad-hoc sign for VZ.
+[macos]
 build-osx:
     cd orchd-osx && zig build -Doptimize={{opt}}
     cd orchd-osx && ./scripts/sign.sh
 
-# Fetch our pinned Linux kernel into the user asset store (once). macOS/arm64.
+# Fetch our pinned Linux kernel into the user asset store (once).
+[macos]
 kernel:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -43,32 +52,40 @@ kernel:
     rm -rf "$tmp"
     echo "kernel -> {{kernel}}"
 
-# Stage a self-contained dist/bin (binaries side by side, no env vars needed).
+# Stage a self-contained dist/bin for this platform.
 dist: build
     #!/usr/bin/env bash
     set -euo pipefail
     root="$PWD"
     rm -rf dist && mkdir -p dist/bin
-    cp target/release/orchd                 dist/bin/
-    cp orchd-apple/zig-out/bin/orchd-apple  dist/bin/
-    cp orchd-osx/zig-out/bin/orchd-osx      dist/bin/
-    cp orchd-osx/zig-out/bin/orchd-osx-init dist/bin/
-    if command -v orch >/dev/null; then cp "$(command -v orch)" dist/bin/; \
-      else echo "note: 'orch' not on PATH; optional, only for the manual parse pipe"; fi
-    (cd orchd-osx && ./scripts/sign.sh "$root/dist/bin/orchd-osx" >/dev/null)
+    cp target/release/orchd dist/bin/
+    if [ "{{os()}}" = "macos" ]; then
+        cp orchd-apple/zig-out/bin/orchd-apple  dist/bin/
+        cp orchd-osx/zig-out/bin/orchd-osx       dist/bin/
+        cp orchd-osx/zig-out/bin/orchd-osx-init  dist/bin/
+        (cd orchd-osx && ./scripts/sign.sh "$root/dist/bin/orchd-osx" >/dev/null)
+    fi
+    if command -v orch >/dev/null; then cp "$(command -v orch)" dist/bin/; fi
     echo "staged -> dist/bin ($(ls dist/bin | tr '\n' ' '))"
 
-# Install dist into PREFIX/bin and fetch the kernel. PREFIX defaults to /usr/local.
-install: dist kernel
+# Install dist into PREFIX/bin (and, on macOS, fetch the kernel).
+install: dist
+    #!/usr/bin/env bash
+    set -euo pipefail
     install -d "{{prefix}}/bin"
     install dist/bin/* "{{prefix}}/bin/"
-    @echo "installed -> {{prefix}}/bin   (kernel at {{kernel}})"
+    if [ "{{os()}}" = "macos" ]; then just kernel; fi
+    echo "installed -> {{prefix}}/bin"
 
-# Run every test suite.
+# Run the test suites for this platform.
 test:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo test
-    cd orchd-apple && zig build test
-    cd orchd-osx && ORCHD_OCI_SKIP_NET=1 zig build test
+    if [ "{{os()}}" = "macos" ]; then
+        (cd orchd-apple && zig build test)
+        (cd orchd-osx && ORCHD_OCI_SKIP_NET=1 zig build test)
+    fi
 
 clean:
     cargo clean
