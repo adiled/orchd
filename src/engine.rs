@@ -116,6 +116,16 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
             platform.install(config)?;
             g
         }
+        "orchdi" => {
+            let platform = crate::platform::orchdi::OrchdiPlatform::new();
+            platform.check()?;
+            let g = platform.generate_all(&orchfile.services, &exec_sets, config)?;
+            if !config.quiet {
+                for path in &g { eprintln!("  wrote: {}", path); }
+            }
+            platform.install(config)?;
+            g
+        }
         _ => {
             let platform = SystemdPlatform::new();
             platform.check()?;
@@ -156,6 +166,7 @@ pub fn up(
 
     match config.platform.as_str() {
         "launchd" => crate::platform::launchd::lifecycle::start(services, config)?,
+        "orchdi" => crate::platform::orchdi::lifecycle::start(services, config)?,
         _ => crate::platform::systemd::lifecycle::start(services, config)?,
     }
 
@@ -184,6 +195,7 @@ pub fn grow(config: &Config, services: &[String], no_start: bool) -> Result<(), 
 pub fn status(config: &Config, as_json: bool) -> Result<(), EngineError> {
     match config.platform.as_str() {
         "launchd" => crate::platform::launchd::lifecycle::status(config, as_json)?,
+        "orchdi" => crate::platform::orchdi::lifecycle::status(config, as_json)?,
         _ => crate::platform::systemd::lifecycle::status(config, as_json)?,
     }
     Ok(())
@@ -193,6 +205,7 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), EngineError> {
 pub fn logs(config: &Config, service: &str, follow: bool, lines: u32) -> Result<(), EngineError> {
     match config.platform.as_str() {
         "launchd" => crate::platform::launchd::lifecycle::logs(service, follow, lines, config)?,
+        "orchdi" => crate::platform::orchdi::lifecycle::logs(service, follow, lines, config)?,
         _ => crate::platform::systemd::lifecycle::logs(service, follow, lines, config)?,
     }
     Ok(())
@@ -203,6 +216,7 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     // Stop all services first (ignore errors — they might not be running)
     match config.platform.as_str() {
         "launchd" => { let _ = crate::platform::launchd::lifecycle::stop(&[], config); }
+        "orchdi" => { let _ = crate::platform::orchdi::lifecycle::stop(&[], config); }
         _ => { let _ = crate::platform::systemd::lifecycle::stop(&[], config); }
     }
 
@@ -210,6 +224,10 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     match config.platform.as_str() {
         "launchd" => {
             let platform = crate::platform::launchd::LaunchdPlatform::new();
+            platform.clean(config)?;
+        }
+        "orchdi" => {
+            let platform = crate::platform::orchdi::OrchdiPlatform::new();
             platform.clean(config)?;
         }
         _ => {
