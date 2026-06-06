@@ -22,6 +22,8 @@ const std = @import("std");
 const types = @import("types.zig");
 const exec_set_mod = @import("exec_set.zig");
 const vz = @import("vz.zig");
+const vm = @import("vm.zig");
+const kernel = @import("kernel.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -64,6 +66,8 @@ pub fn main(init: std.process.Init) !void {
         cmdStop(allocator, slot);
     } else if (std.mem.eql(u8, command, "delete")) {
         cmdDelete(allocator, slot);
+    } else if (std.mem.eql(u8, command, "vz-selftest")) {
+        try cmdSelftest(allocator);
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(2);
@@ -81,6 +85,46 @@ fn cmdCheck() void {
     }
     std.debug.print("error: Virtualization.framework backend unavailable on this host\n", .{});
     std.process.exit(1);
+}
+
+/// vz-selftest: boot our pinned kernel with NO rootfs and confirm VZ's start
+/// completion fires without error. The kernel will panic ("unable to mount
+/// root") inside the guest, but that happens AFTER a successful start, so a
+/// clean start proves the entitlement + kernel + our VZ config all work. The
+/// serial console is wired to stderr, so guest boot logs print here.
+fn cmdSelftest(allocator: std.mem.Allocator) !void {
+    const kpath = kernel.kernelPath(allocator) catch |err| {
+        std.debug.print("vz-selftest: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(kpath);
+    const kpath_z = try allocator.dupeZ(u8, kpath);
+    defer allocator.free(kpath_z);
+
+    std.debug.print("vz-selftest: booting {s} (no rootfs)\n", .{kpath_z});
+
+    const spec = vm.BootSpec{
+        .kernel_path = kpath_z,
+        .cmdline = "console=hvc0",
+        .rootfs_path = "/nonexistent-rootfs",
+        .cpu_count = 1,
+        .memory_bytes = 512 * 1024 * 1024,
+        .vsock_port = 1024,
+    };
+
+    var machine = vm.boot(spec) catch |err| {
+        std.debug.print("vz-selftest: BOOT FAILED ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    std.debug.print("vz-selftest: VZ start SUCCEEDED (entitlement + kernel + config OK)\n", .{});
+    _ = csleep(3); // let the kernel print to the console
+    machine.shutdown();
+    std.debug.print("vz-selftest: shut down. ok.\n", .{});
+}
+
+extern "c" fn sleep(seconds: c_uint) c_uint;
+fn csleep(seconds: c_uint) c_uint {
+    return sleep(seconds);
 }
 
 fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
