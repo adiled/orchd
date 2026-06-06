@@ -1,7 +1,7 @@
 .{
     .name = .orchd_apple,
     .fingerprint = 0xd1da7541c6e53418,
-    .version = "0.3.0",
+    .version = "0.3.1",
     .minimum_zig_version = "0.16.0",
 
     .dependencies = .{

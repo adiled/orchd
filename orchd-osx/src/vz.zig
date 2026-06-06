@@ -22,6 +22,8 @@ const vm = @import("vm.zig");
 const vsock = @import("vsock.zig");
 const kernel = @import("kernel.zig");
 const proto = @import("proto.zig");
+const types = @import("types.zig");
+const portfwd = @import("portfwd.zig");
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 extern "c" fn getpid() c_int;
@@ -59,8 +61,17 @@ const VSOCK_PORT: u32 = 1024;
 // initramfs boot: the kernel unpacks our cpio as root and runs /init from it.
 // ip=dhcp makes the kernel autoconfigure eth0 from VZ's NAT DHCP at boot.
 const KERNEL_CMDLINE = "console=hvc0 ip=dhcp";
-const MEMORY: u64 = 1024 * 1024 * 1024;
-const CPUS: usize = 2;
+const MEMORY_DEFAULT_BYTES: u64 = 1024 * 1024 * 1024;
+const CPUS_DEFAULT: usize = 2;
+
+/// VM-level options resolved from the Service spec, applied at boot. Distinct
+/// from Overrides (which shapes the guest *process*): these shape the VM itself.
+pub const RunOpts = struct {
+    memory_bytes: u64 = MEMORY_DEFAULT_BYTES,
+    cpu_count: usize = CPUS_DEFAULT,
+    shares: []const vm.Share = &.{},
+    publish: []const portfwd.Forward = &.{},
+};
 
 /// Cached image process config, stored next to the unpacked rootfs so re-runs
 /// need no re-pull. Entrypoint and Cmd are kept separate for override semantics.
@@ -77,6 +88,18 @@ pub const Overrides = struct {
     entrypoint: ?[]const u8 = null,
     cmd: ?[]const u8 = null,
     workdir: ?[]const u8 = null,
+    /// VM RAM in megabytes (from resources.memory). null -> default.
+    memory_mb: ?u64 = null,
+    /// VM vCPU count (from resources.cpus). null -> default.
+    cpus: ?usize = null,
+    /// uid[:gid] or username to switch to before exec (from service.user).
+    user: ?[]const u8 = null,
+    /// cgroup v2 + rlimit caps applied by the guest (from resources.*).
+    limits: proto.Limits = .{},
+    /// Host directories to share into the guest via virtio-fs (service.volumes).
+    volumes: []const types.Volume = &.{},
+    /// Ports to forward host->guest (from service.publish).
+    publish: []const types.Port = &.{},
 };
 
 /// Boot a container for `image` and block until its process exits; returns the
@@ -105,8 +128,34 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []co
     const base = std.json.parseFromSliceLeaky(CacheMeta, arena, data, .{}) catch
         return Error.ImageFailed;
 
-    const spec = applyOverrides(arena, base, ov) catch return Error.ImageFailed;
-    return runRootfs(allocator, io, id, rootfs, spec);
+    var spec = applyOverrides(arena, base, ov) catch return Error.ImageFailed;
+
+    // Volumes -> virtio-fs shares (host side) + guest mounts (tag -> dest). One
+    // tag per volume links the two ends.
+    var shares: std.ArrayList(vm.Share) = .empty;
+    var mounts: std.ArrayList(proto.Mount) = .empty;
+    for (ov.volumes, 0..) |vol, i| {
+        const tag_s = std.fmt.allocPrint(arena, "vol{d}", .{i}) catch continue;
+        const tag = arena.dupeZ(u8, tag_s) catch continue;
+        const host = arena.dupeZ(u8, vol.source) catch continue;
+        shares.append(arena, .{ .tag = tag, .host_path = host }) catch continue;
+        mounts.append(arena, .{ .tag = tag, .dest = vol.destination }) catch continue;
+    }
+    spec.mounts = mounts.items;
+
+    // Published ports -> host->guest TCP forwarders (host:port -> guest:container).
+    var fwds: std.ArrayList(portfwd.Forward) = .empty;
+    for (ov.publish) |p| {
+        fwds.append(arena, .{ .host_port = p.host, .guest_port = p.container, .address = p.address }) catch continue;
+    }
+
+    const opts = RunOpts{
+        .memory_bytes = if (ov.memory_mb) |m| m * 1024 * 1024 else MEMORY_DEFAULT_BYTES,
+        .cpu_count = ov.cpus orelse CPUS_DEFAULT,
+        .shares = shares.items,
+        .publish = fwds.items,
+    };
+    return runRootfs(allocator, io, id, rootfs, spec, opts);
 }
 
 /// Pull `image` into the cache if it is not already there. Idempotent: a no-op
@@ -156,6 +205,8 @@ fn applyOverrides(arena: std.mem.Allocator, base: CacheMeta, ov: Overrides) !pro
         .argv = try argv.toOwnedSlice(arena),
         .env = try env.toOwnedSlice(arena),
         .cwd = if (ov.workdir) |w| w else base.cwd,
+        .user = ov.user orelse "",
+        .limits = ov.limits,
     };
 }
 
@@ -173,6 +224,7 @@ pub fn runRootfs(
     id: []const u8,
     rootfs_dir: []const u8,
     spec: proto.ExecSpec,
+    opts: RunOpts,
 ) Error!i64 {
     const work = try workDir(allocator, id);
     defer allocator.free(work);
@@ -223,9 +275,10 @@ pub fn runRootfs(
         .cmdline = KERNEL_CMDLINE,
         .rootfs_path = "/nonexistent-no-block",
         .ramdisk_path = cpio_z,
-        .cpu_count = CPUS,
-        .memory_bytes = MEMORY,
+        .cpu_count = opts.cpu_count,
+        .memory_bytes = opts.memory_bytes,
         .vsock_port = VSOCK_PORT,
+        .shares = opts.shares,
     }) catch |e| {
         std.debug.print("orchd-osx run: VM boot failed ({s})\n", .{@errorName(e)});
         return Error.BootFailed;
@@ -238,7 +291,7 @@ pub fn runRootfs(
         return Error.ExecFailed;
     };
 
-    const code = vsock.runStdio(allocator, fd, spec) catch |e| {
+    const code = vsock.runStdio(allocator, fd, spec, opts.publish) catch |e| {
         std.debug.print("orchd-osx run: exec over vsock failed ({s})\n", .{@errorName(e)});
         return Error.ExecFailed;
     };

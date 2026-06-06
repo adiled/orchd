@@ -70,6 +70,9 @@ fn run() !void {
     const spec = try proto.ExecSpec.decode(a, frame.body);
     defer spec.free(a);
 
+    // Mount virtio-fs shares (PID 1, pre-fork) so the child inherits them.
+    mountShares(a, spec.mounts);
+
     const code = try runChild(a, conn, spec);
     try writeFrame(conn, .exit, &std.mem.toBytes(@as(i32, code)));
     _ = linux.close(conn);
@@ -83,6 +86,43 @@ fn mountEssentials() void {
     _ = linux.mount("proc", "/proc", "proc", 0, 0);
     _ = linux.mount("sysfs", "/sys", "sysfs", 0, 0);
     _ = linux.mount("devtmpfs", "/dev", "devtmpfs", 0, 0);
+    // cgroup v2 unified hierarchy, for resource caps (best-effort).
+    _ = linux.mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0, 0);
+}
+
+/// Mount each virtio-fs share at its destination (tag -> dest). Runs in PID 1
+/// before the fork so the child inherits the mounts. Best-effort per share.
+fn mountShares(a: std.mem.Allocator, mounts: []const proto.Mount) void {
+    for (mounts) |m| {
+        if (m.dest.len == 0) continue;
+        mkdirAll(m.dest);
+        const tag = dupZ(a, m.tag) catch continue;
+        defer a.free(tag);
+        const dest = dupZ(a, m.dest) catch continue;
+        defer a.free(dest);
+        if (linux.errno(linux.mount(tag.ptr, dest.ptr, "virtiofs", 0, 0)) != .SUCCESS) {
+            report("orchd-init: virtiofs mount failed: ");
+            report(m.dest);
+            report("\n");
+        }
+    }
+}
+
+/// `mkdir -p`: create `path` and any missing parents (best-effort).
+fn mkdirAll(path: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    if (path.len == 0 or path.len >= buf.len) return;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    var i: usize = 1;
+    while (i < path.len) : (i += 1) {
+        if (buf[i] == '/') {
+            buf[i] = 0;
+            _ = linux.mkdir(@ptrCast(&buf), 0o755);
+            buf[i] = '/';
+        }
+    }
+    _ = linux.mkdir(@ptrCast(&buf), 0o755);
 }
 
 /// Read eth0's IPv4 (set by the kernel's ip=dhcp) and send it to the host as an
@@ -138,6 +178,190 @@ fn findPath(env: []const []const u8) []const u8 {
     return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 }
 
+// ── resource caps + user switching (applied in the child before exec) ───────
+
+const RLIMIT_NOFILE: usize = 7;
+const RLIMIT_NPROC: usize = 6;
+const Rlimit64 = extern struct { cur: u64, max: u64 };
+
+fn setLimit(resource: usize, val: u64) void {
+    const rl = Rlimit64{ .cur = val, .max = val };
+    const r = linux.syscall4(.prlimit64, 0, resource, @intFromPtr(&rl), 0);
+    if (linux.errno(r) != .SUCCESS) report("orchd-init: setrlimit failed\n");
+}
+
+fn applyLimits(limits: proto.Limits) void {
+    if (limits.nofile != 0) setLimit(RLIMIT_NOFILE, limits.nofile);
+    if (limits.nproc != 0) setLimit(RLIMIT_NPROC, limits.nproc);
+}
+
+const Ids = struct { uid: u32, gid: u32 };
+
+fn isAllDigits(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| if (c < '0' or c > '9') return false;
+    return true;
+}
+
+/// Read a whole small file into `buf`; returns the populated prefix or null.
+fn readSmall(path: [*:0]const u8, buf: []u8) ?[]const u8 {
+    const fd_u = linux.open(path, .{ .ACCMODE = .RDONLY }, 0);
+    if (@as(isize, @bitCast(fd_u)) < 0) return null;
+    const fd: fd_t = @intCast(fd_u);
+    defer _ = linux.close(fd);
+    var off: usize = 0;
+    while (off < buf.len) {
+        const r = linux.read(fd, buf[off..].ptr, buf.len - off);
+        if (linux.errno(r) != .SUCCESS) return null;
+        if (r == 0) break;
+        off += r;
+    }
+    return buf[0..off];
+}
+
+/// name:passwd:uid:gid:... lookup in /etc/passwd.
+fn lookupPasswd(name: []const u8, buf: []u8) ?Ids {
+    const data = readSmall("/etc/passwd", buf) orelse return null;
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var f = std.mem.splitScalar(u8, line, ':');
+        const fname = f.next() orelse continue;
+        if (!std.mem.eql(u8, fname, name)) continue;
+        _ = f.next(); // passwd field
+        const uid_s = f.next() orelse continue;
+        const gid_s = f.next() orelse continue;
+        const uid = std.fmt.parseInt(u32, uid_s, 10) catch continue;
+        const gid = std.fmt.parseInt(u32, gid_s, 10) catch continue;
+        return .{ .uid = uid, .gid = gid };
+    }
+    return null;
+}
+
+/// name:passwd:gid:... lookup in /etc/group.
+fn lookupGroup(name: []const u8, buf: []u8) ?u32 {
+    const data = readSmall("/etc/group", buf) orelse return null;
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var f = std.mem.splitScalar(u8, line, ':');
+        const gname = f.next() orelse continue;
+        if (!std.mem.eql(u8, gname, name)) continue;
+        _ = f.next(); // passwd field
+        const gid_s = f.next() orelse continue;
+        return std.fmt.parseInt(u32, gid_s, 10) catch continue;
+    }
+    return null;
+}
+
+/// Resolve a USER directive ("uid", "uid:gid", "name", "name:group") to ids.
+fn parseUser(user: []const u8) ?Ids {
+    if (user.len == 0) return null;
+    var buf: [64 * 1024]u8 = undefined;
+    var uid_part = user;
+    var gid_part: ?[]const u8 = null;
+    if (std.mem.indexOfScalar(u8, user, ':')) |c| {
+        uid_part = user[0..c];
+        gid_part = user[c + 1 ..];
+    }
+    var ids: Ids = undefined;
+    if (isAllDigits(uid_part)) {
+        const uid = std.fmt.parseInt(u32, uid_part, 10) catch return null;
+        ids = .{ .uid = uid, .gid = uid };
+    } else {
+        ids = lookupPasswd(uid_part, &buf) orelse return null;
+    }
+    if (gid_part) |g| {
+        if (isAllDigits(g)) {
+            ids.gid = std.fmt.parseInt(u32, g, 10) catch ids.gid;
+        } else if (lookupGroup(g, &buf)) |gid| {
+            ids.gid = gid;
+        }
+    }
+    return ids;
+}
+
+/// Drop to the requested user: clear supplementary groups, setgid, then setuid
+/// (uid last, so the gid change is still privileged). No-op for root/empty.
+fn applyUser(user: []const u8) void {
+    if (user.len == 0) return;
+    const ids = parseUser(user) orelse {
+        report("orchd-init: user parse failed: ");
+        report(user);
+        report("\n");
+        return;
+    };
+    const sg = linux.syscall2(.setgroups, 0, 0);
+    const rg = linux.syscall1(.setgid, ids.gid);
+    const ru = linux.syscall1(.setuid, ids.uid);
+    if (linux.errno(sg) != .SUCCESS) report("orchd-init: setgroups failed\n");
+    if (linux.errno(rg) != .SUCCESS) report("orchd-init: setgid failed\n");
+    if (linux.errno(ru) != .SUCCESS) report("orchd-init: setuid failed\n");
+}
+
+// ── cgroup v2 caps (unified hierarchy at /sys/fs/cgroup) ────────────────────
+
+const cgroup_dir = "/sys/fs/cgroup/orchd";
+
+/// Open `path`, write `data`, close. Best-effort (cgroup files reject some
+/// writes depending on controller availability; we never make it fatal).
+fn writeFileStr(path: [*:0]const u8, data: []const u8) void {
+    const fd_u = linux.open(path, .{ .ACCMODE = .WRONLY }, 0);
+    if (@as(isize, @bitCast(fd_u)) < 0) return;
+    const fd: fd_t = @intCast(fd_u);
+    defer _ = linux.close(fd);
+    _ = linux.write(fd, data.ptr, data.len);
+}
+
+/// Create the container cgroup and write its caps. Runs once in PID 1 before
+/// the fork. Returns true if a cgroup was created (so the child should join it).
+/// memory is intentionally NOT capped here: the VM's RAM size is the memory
+/// boundary. Caps cpu (cpu.max), pids (pids.max), io (io.weight).
+fn setupCgroup(limits: proto.Limits) bool {
+    if (limits.cpu_quota_us == 0 and limits.pids_max == 0 and limits.io_weight == 0 and limits.memory_max == 0)
+        return false;
+
+    // Delegate controllers from the root to its subtree (root is exempt from
+    // the no-internal-process rule). One write per controller: a missing
+    // controller fails only its own write.
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+cpu");
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+memory");
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+pids");
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+io");
+
+    if (linux.errno(linux.mkdir(cgroup_dir, 0o755)) != .SUCCESS) {
+        // EEXIST is fine; anything else and the cgroup is unusable.
+    }
+
+    var b: [96]u8 = undefined;
+    if (limits.memory_max != 0) {
+        const s = std.fmt.bufPrint(&b, "{d}", .{limits.memory_max}) catch return true;
+        writeFileStr(cgroup_dir ++ "/memory.max", s);
+    }
+    if (limits.cpu_quota_us != 0) {
+        const period = if (limits.cpu_period_us != 0) limits.cpu_period_us else 100000;
+        const s = std.fmt.bufPrint(&b, "{d} {d}", .{ limits.cpu_quota_us, period }) catch return true;
+        writeFileStr(cgroup_dir ++ "/cpu.max", s);
+    }
+    if (limits.pids_max != 0) {
+        const s = std.fmt.bufPrint(&b, "{d}", .{limits.pids_max}) catch return true;
+        writeFileStr(cgroup_dir ++ "/pids.max", s);
+    }
+    if (limits.io_weight != 0) {
+        const s = std.fmt.bufPrint(&b, "default {d}", .{limits.io_weight}) catch return true;
+        writeFileStr(cgroup_dir ++ "/io.weight", s);
+    }
+    return true;
+}
+
+/// Move the calling process into the container cgroup. Runs in the child as
+/// root, before dropping privileges (cgroup files are root-owned).
+fn joinCgroup() void {
+    var b: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&b, "{d}", .{linux.getpid()}) catch return;
+    writeFileStr(cgroup_dir ++ "/cgroup.procs", s);
+}
+
 fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
     if (spec.argv.len == 0) return error.EmptyArgv;
 
@@ -152,6 +376,9 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
     var err_pipe: [2]fd_t = undefined;
     if (linux.errno(linux.pipe2(&out_pipe, .{})) != .SUCCESS) return error.PipeFailed;
     if (linux.errno(linux.pipe2(&err_pipe, .{})) != .SUCCESS) return error.PipeFailed;
+
+    // Create the container cgroup (PID 1, pre-fork); the child joins it below.
+    const in_cgroup = setupCgroup(spec.limits);
 
     const pid: i32 = @bitCast(@as(u32, @truncate(linux.fork())));
     if (pid < 0) return error.ForkFailed;
@@ -169,6 +396,11 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
         _ = linux.close(err_pipe[0]);
         _ = linux.close(err_pipe[1]);
         if (null_fd >= 0) _ = linux.close(null_fd);
+
+        // Join the cgroup, apply rlimits (as root), then drop to the user.
+        if (in_cgroup) joinCgroup();
+        applyLimits(spec.limits);
+        applyUser(spec.user);
 
         _ = linux.chdir(cwd.ptr);
 

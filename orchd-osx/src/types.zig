@@ -25,7 +25,11 @@ pub const Volume = struct {
 pub const Resources = struct {
     memory: ?[]const u8 = null,
     cpus: ?f64 = null,
+    cpu_quota: ?[]const u8 = null,
     limit_nofile: ?u64 = null,
+    limit_nproc: ?u64 = null,
+    tasks_max: ?u64 = null,
+    io_weight: ?u32 = null,
 };
 
 /// A parsed service definition from the orch Orchfile.

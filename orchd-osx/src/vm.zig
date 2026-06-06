@@ -21,6 +21,14 @@ const objc = @import("objc.zig");
 
 pub const Error = error{ NotImplemented, BootFailed, ConnectFailed };
 
+/// A host directory shared into the guest over virtio-fs. `tag` is the mount
+/// tag the guest mounts (`mount -t virtiofs <tag> <dest>`); `host_path` is the
+/// directory on the macOS host. Both NUL-terminated for the ObjC bridge.
+pub const Share = struct {
+    tag: [:0]const u8,
+    host_path: [:0]const u8,
+};
+
 pub const BootSpec = struct {
     kernel_path: [:0]const u8,
     cmdline: [:0]const u8,
@@ -31,6 +39,8 @@ pub const BootSpec = struct {
     cpu_count: usize,
     memory_bytes: u64,
     vsock_port: u32,
+    /// virtio-fs directory shares (from service.volumes).
+    shares: []const Share = &.{},
 };
 
 // --- dispatch primitives not surfaced by objc.zig ---
@@ -229,7 +239,53 @@ fn buildConfig(spec: BootSpec) BuildError!objc.Id {
         objc.msgSend(void, config, objc.sel("setNetworkDevices:"), .{singletonArray(d)});
     }
 
+    // virtio-fs directory shares (service.volumes). Each becomes a
+    // VZVirtioFileSystemDeviceConfiguration with a single-directory share.
+    if (spec.shares.len > 0) {
+        var devs: [16]objc.Id = undefined;
+        var n: usize = 0;
+        for (spec.shares) |sh| {
+            if (n >= devs.len) break;
+            if (buildFsDevice(sh)) |d| {
+                devs[n] = d;
+                n += 1;
+            }
+        }
+        if (n > 0) {
+            objc.msgSend(void, config, objc.sel("setDirectorySharingDevices:"), .{arrayOf(devs[0..n])});
+        }
+    }
+
     return config;
+}
+
+/// Build a VZVirtioFileSystemDeviceConfiguration for one share: a
+/// VZSingleDirectoryShare over a VZSharedDirectory(host_path, readOnly=NO),
+/// tagged so the guest can `mount -t virtiofs <tag>`. Returns null if any class
+/// is unavailable (older macOS); the share is then simply skipped.
+fn buildFsDevice(share: Share) ?objc.Id {
+    const dev_cls = objc.class("VZVirtioFileSystemDeviceConfiguration") orelse return null;
+    const dev_alloc = objc.msgSend(?objc.Id, dev_cls, objc.sel("alloc"), .{}) orelse return null;
+    const dev = objc.msgSend(?objc.Id, dev_alloc, objc.sel("initWithTag:"), .{objc.nsString(share.tag)}) orelse return null;
+
+    const sd_cls = objc.class("VZSharedDirectory") orelse return null;
+    const sd_alloc = objc.msgSend(?objc.Id, sd_cls, objc.sel("alloc"), .{}) orelse return null;
+    const shared = objc.msgSend(?objc.Id, sd_alloc, objc.sel("initWithURL:readOnly:"), .{ objc.fileURL(share.host_path), @as(u8, 0) }) orelse return null;
+
+    const single_cls = objc.class("VZSingleDirectoryShare") orelse return null;
+    const single_alloc = objc.msgSend(?objc.Id, single_cls, objc.sel("alloc"), .{}) orelse return null;
+    const single = objc.msgSend(?objc.Id, single_alloc, objc.sel("initWithDirectory:"), .{shared}) orelse return null;
+
+    objc.msgSend(void, dev, objc.sel("setShare:"), .{single});
+    return dev;
+}
+
+/// An NSArray of N objects, via NSMutableArray addObject: (avoids varargs).
+fn arrayOf(objs: []const objc.Id) objc.Id {
+    const cls = objc.class("NSMutableArray").?;
+    const arr = objc.msgSend(objc.Id, cls, objc.sel("array"), .{});
+    for (objs) |o| objc.msgSend(void, arr, objc.sel("addObject:"), .{o});
+    return arr;
 }
 
 /// VZVirtioConsoleDeviceSerialPortConfiguration backed by stderr. Returns null
