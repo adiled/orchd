@@ -9,11 +9,16 @@
 //!   - reference parsing (registry/repo/tag/digest split, docker.io defaults)
 //!   - OCI image-config JSON parsing (Entrypoint++Cmd -> argv, Env, WorkingDir)
 //!   - a gzip+tar layer extractor that writes a directory tree (files, dirs,
-//!     symlinks) and honours whiteouts (.wh. entries)
+//!     symlinks) and honours whiteouts (.wh. entries); multi-file tars stream
+//!     through the iterator so block padding stays in sync.
+//!   - unpackLayout(): an OFFLINE image->rootfs path that reads a local OCI
+//!     image layout on disk (index.json -> manifest -> config + layer blobs
+//!     under blobs/<algo>/) and unpacks it, fully unit-tested by building a
+//!     tiny layout in a temp dir.
 //! resolve() wires these together over a Docker Registry v2 / OCI pull with
-//! the docker.io bearer-token auth flow. The network pull is implemented but
-//! lightly exercised (no integration test here, since these tests import only
-//! std and must run offline). See TODOs for the rough edges.
+//! the docker.io bearer-token auth flow, sharing rootfs assembly with
+//! unpackLayout(). The network pull has no test here (tests run offline); see
+//! the TODO on resolve() for the gated integration test.
 
 const std = @import("std");
 
@@ -289,16 +294,14 @@ pub fn extractLayerTar(
                 );
                 var f = try dest.createFile(io, name, .{ .permissions = perms });
                 defer f.close(io);
-                // Stream exactly entry.size bytes from the tar reader.
-                var remaining = entry.size;
-                var buf: [64 * 1024]u8 = undefined;
-                while (remaining > 0) {
-                    const want: usize = @intCast(@min(remaining, buf.len));
-                    const got = try tar_reader.readSliceShort(buf[0..want]);
-                    if (got == 0) return error.UnexpectedEndOfTar;
-                    try f.writeStreamingAll(io, buf[0..got]);
-                    remaining -= got;
-                }
+                // Stream the body through the iterator so it keeps its own
+                // accounting (unread_file_bytes + block padding) in sync. We
+                // must NOT read the tar reader directly here, or the next
+                // header lands mid-stream and parsing fails (TarHeader).
+                var wbuf: [64 * 1024]u8 = undefined;
+                var fw = f.writerStreaming(io, &wbuf);
+                try it.streamRemaining(entry, &fw.interface);
+                try fw.interface.flush();
                 _ = allocator;
             },
         }
@@ -352,6 +355,150 @@ const ManifestDoc = struct {
     layers: []const Descriptor = &.{},
 };
 
+// ---------------------------------------------------------------------------
+// Shared rootfs assembly (used by both the offline layout path and the live
+// registry pull). Given a config blob and an ordered list of layer blobs, this
+// parses the process config and unpacks the layers into <work_dir>/rootfs.
+// ---------------------------------------------------------------------------
+
+/// Open (creating if needed) the rootfs directory under `work_dir` and return
+/// the absolute-ish path plus the open iterable dir. Caller closes the dir and
+/// owns the returned path string.
+fn openRootfs(allocator: std.mem.Allocator, io: std.Io, work_dir: []const u8) !struct { path: []u8, dir: std.Io.Dir } {
+    const rootfs_dir = try std.fmt.allocPrint(allocator, "{s}/rootfs", .{work_dir});
+    errdefer allocator.free(rootfs_dir);
+    std.Io.Dir.cwd().createDirPath(io, rootfs_dir) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => return e,
+    };
+    const dir = try std.Io.Dir.cwd().openDir(io, rootfs_dir, .{ .iterate = true });
+    return .{ .path = rootfs_dir, .dir = dir };
+}
+
+/// Detect whether `blob` is a gzip stream (magic 0x1f 0x8b) vs a plain tar.
+/// docker.io ships gzip'd tar; OCI also permits uncompressed tar layers.
+fn isGzip(blob: []const u8) bool {
+    return blob.len >= 2 and blob[0] == 0x1f and blob[1] == 0x8b;
+}
+
+/// Extract one layer blob into `dest`, dispatching on gzip vs plain tar.
+/// TODO: zstd layers (application/vnd.oci.image.layer.v1.tar+zstd).
+fn extractLayerBlob(allocator: std.mem.Allocator, io: std.Io, dest: std.Io.Dir, blob: []const u8) !void {
+    if (isGzip(blob)) {
+        try extractLayerGzip(allocator, io, dest, blob);
+    } else {
+        var reader: std.Io.Reader = .fixed(blob);
+        try extractLayerTar(allocator, io, dest, &reader);
+    }
+}
+
+// --- offline OCI image layout (on-disk) ---
+
+const IndexManifestRef = struct {
+    mediaType: ?[]const u8 = null,
+    digest: []const u8,
+    size: ?u64 = null,
+    platform: ?struct {
+        architecture: ?[]const u8 = null,
+        os: ?[]const u8 = null,
+    } = null,
+};
+
+const LayoutIndexDoc = struct {
+    manifests: []const IndexManifestRef = &.{},
+};
+
+/// Map a "sha256:<hex>" digest to its blob path under an OCI layout's
+/// blobs/<algo>/<hex>. Caller frees the returned path.
+fn blobPath(allocator: std.mem.Allocator, layout_dir: []const u8, digest: []const u8) ![]u8 {
+    const colon = std.mem.indexOfScalar(u8, digest, ':') orelse return Error.ManifestError;
+    const algo = digest[0..colon];
+    const hex = digest[colon + 1 ..];
+    return std.fmt.allocPrint(allocator, "{s}/blobs/{s}/{s}", .{ layout_dir, algo, hex });
+}
+
+/// Read a blob by digest from an on-disk OCI layout. Caller frees the bytes.
+fn readBlob(allocator: std.mem.Allocator, io: std.Io, layout_dir: []const u8, digest: []const u8) ![]u8 {
+    const path = try blobPath(allocator, layout_dir, digest);
+    defer allocator.free(path);
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
+}
+
+/// Unpack a local OCI image layout (the directory produced by e.g. `skopeo copy
+/// docker://... oci:DIR` or `podman save --format oci-dir`). Reads index.json
+/// -> picks the linux/arm64 image manifest (or the sole manifest) -> reads its
+/// config + layer blobs from blobs/<algo>/ -> unpacks into <out_rootfs_dir>'s
+/// parent as <out_rootfs_dir>/rootfs, returning the process defaults.
+///
+/// This is the offline, network-free image->rootfs path. The returned Image's
+/// slices are allocated with `allocator`; rootfs_dir is owned by the caller.
+pub fn unpackLayout(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    oci_layout_dir: []const u8,
+    out_rootfs_dir: []const u8,
+) !Image {
+    // 1. index.json -> choose an image manifest.
+    const index_path = try std.fmt.allocPrint(allocator, "{s}/index.json", .{oci_layout_dir});
+    defer allocator.free(index_path);
+    const index_body = std.Io.Dir.cwd().readFileAlloc(io, index_path, allocator, .unlimited) catch |e| switch (e) {
+        error.FileNotFound => return Error.ManifestError,
+        else => return e,
+    };
+    defer allocator.free(index_body);
+
+    const index = try std.json.parseFromSlice(LayoutIndexDoc, allocator, index_body, .{ .ignore_unknown_fields = true });
+    defer index.deinit();
+    if (index.value.manifests.len == 0) return Error.ManifestError;
+
+    const chosen_digest = pickLayoutManifest(index.value.manifests, "arm64", "linux") orelse
+        return Error.NoMatchingPlatform;
+
+    // 2. image manifest -> config + layers.
+    const manifest_body = try readBlob(allocator, io, oci_layout_dir, chosen_digest);
+    defer allocator.free(manifest_body);
+    const manifest = try std.json.parseFromSlice(ManifestDoc, allocator, manifest_body, .{ .ignore_unknown_fields = true });
+    defer manifest.deinit();
+
+    // 3. config blob -> process defaults.
+    const config_body = try readBlob(allocator, io, oci_layout_dir, manifest.value.config.digest);
+    defer allocator.free(config_body);
+    const pcfg = try parseConfig(allocator, config_body);
+
+    // 4. unpack layers in order into out_rootfs_dir/rootfs.
+    var rf = try openRootfs(allocator, io, out_rootfs_dir);
+    defer rf.dir.close(io);
+
+    for (manifest.value.layers) |layer| {
+        const blob = try readBlob(allocator, io, oci_layout_dir, layer.digest);
+        defer allocator.free(blob);
+        try extractLayerBlob(allocator, io, rf.dir, blob);
+    }
+
+    return .{
+        .rootfs_dir = rf.path,
+        .argv = pcfg.argv,
+        .env = pcfg.env,
+        .cwd = pcfg.cwd,
+    };
+}
+
+/// Choose an image manifest from an index. Prefer the entry matching
+/// arch/os; if no entry carries platform info (single-manifest layouts often
+/// omit it), fall back to the first manifest.
+fn pickLayoutManifest(manifests: []const IndexManifestRef, arch: []const u8, os: []const u8) ?[]const u8 {
+    var any_platform = false;
+    for (manifests) |m| {
+        const p = m.platform orelse continue;
+        any_platform = true;
+        const a = p.architecture orelse continue;
+        const o = p.os orelse continue;
+        if (std.mem.eql(u8, a, arch) and std.mem.eql(u8, o, os)) return m.digest;
+    }
+    if (!any_platform) return manifests[0].digest;
+    return null;
+}
+
 /// Resolve and unpack `reference` into a rootfs under `work_dir`.
 ///
 /// Returns an `Image` whose `rootfs_dir` is `work_dir/rootfs` and whose
@@ -359,6 +506,14 @@ const ManifestDoc = struct {
 /// with `allocator` and leak by design here (the caller owns `work_dir` and the
 /// process config for the lifetime of the run); a future cleanup pass can hand
 /// back an owned struct with a deinit.
+///
+/// This is the LIVE network path. It shares rootfs assembly (openRootfs,
+/// extractLayerBlob, parseConfig) with the offline `unpackLayout`, so the two
+/// converge on the same unpack logic. There is intentionally no test here: the
+/// unit tests must run offline, and a blocked outbound connection would hang
+/// the suite. TODO: add a gated integration test (e.g. behind an env var like
+/// ORCHD_OCI_NET_TEST=1) that pulls a tiny public image and asserts the rootfs;
+/// keep it out of the default `zig test` run so CI stays hermetic.
 pub fn resolve(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -414,14 +569,10 @@ pub fn resolve(
 
     const pcfg = try parseConfig(allocator, config_body);
 
-    // 3. Layers -> unpack into work_dir/rootfs in order.
-    const rootfs_dir = try std.fmt.allocPrint(allocator, "{s}/rootfs", .{work_dir});
-    std.Io.Dir.cwd().createDirPath(io, rootfs_dir) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        else => return e,
-    };
-    var dest = try std.Io.Dir.cwd().openDir(io, rootfs_dir, .{ .iterate = true });
-    defer dest.close(io);
+    // 3. Layers -> unpack into work_dir/rootfs in order. Same rootfs assembly
+    // as the offline layout path (openRootfs + extractLayerBlob).
+    var rf = try openRootfs(allocator, io, work_dir);
+    defer rf.dir.close(io);
 
     for (manifest.value.layers) |layer| {
         const url = try std.fmt.allocPrint(allocator, "https://{s}/v2/{s}/blobs/{s}", .{
@@ -430,13 +581,11 @@ pub fn resolve(
         defer allocator.free(url);
         const blob = try getWithAuth(allocator, &client, &auth, ref.repo, url, "*/*");
         defer allocator.free(blob);
-        // TODO: dispatch on layer.mediaType for uncompressed (+tar) and zstd
-        // layers. Today we assume gzip'd tar, which is the docker.io default.
-        try extractLayerGzip(allocator, io, dest, blob);
+        try extractLayerBlob(allocator, io, rf.dir, blob);
     }
 
     return .{
-        .rootfs_dir = rootfs_dir,
+        .rootfs_dir = rf.path,
         .argv = pcfg.argv,
         .env = pcfg.env,
         .cwd = pcfg.cwd,
@@ -792,4 +941,214 @@ test "extractLayerGzip: gzip round-trip of a tar layer" {
     const got = try dest.readFileAlloc(io, "etc/motd", a, .unlimited);
     defer a.free(got);
     try std.testing.expectEqualStrings("hi from gzip\n", got);
+}
+
+// --- offline OCI image layout round-trip ---
+
+/// gzip-compress `bytes` into a fresh allocation (caller frees).
+fn gzipAlloc(a: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try .initCapacity(a, bytes.len + 64);
+    defer aw.deinit();
+    var cbuf: [std.compress.flate.max_window_len]u8 = undefined;
+    var comp = try std.compress.flate.Compress.init(&aw.writer, &cbuf, .gzip, .default);
+    try comp.writer.writeAll(bytes);
+    try comp.finish();
+    try aw.writer.flush();
+    return a.dupe(u8, aw.written());
+}
+
+/// sha256 hex digest of `bytes` (lowercase, no prefix). Caller frees.
+fn sha256Hex(a: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return std.fmt.allocPrint(a, "{x}", .{&digest});
+}
+
+/// Write a blob into <layout>/blobs/sha256/<hex> and return its "sha256:<hex>"
+/// digest (caller frees).
+fn putBlob(a: std.mem.Allocator, io: std.Io, layout: std.Io.Dir, bytes: []const u8) ![]u8 {
+    const hex = try sha256Hex(a, bytes);
+    defer a.free(hex);
+    const path = try std.fmt.allocPrint(a, "blobs/sha256/{s}", .{hex});
+    defer a.free(path);
+    try layout.writeFile(io, .{ .sub_path = path, .data = bytes });
+    return std.fmt.allocPrint(a, "sha256:{s}", .{hex});
+}
+
+/// Free an Image returned by unpackLayout in tests (mirrors how the live path
+/// would eventually hand back an owned struct).
+fn freeImage(a: std.mem.Allocator, img: Image) void {
+    a.free(img.rootfs_dir);
+    for (img.argv) |s| a.free(s);
+    a.free(img.argv);
+    for (img.env) |s| a.free(s);
+    a.free(img.env);
+    a.free(img.cwd);
+}
+
+test "unpackLayout: builds a local OCI layout and unpacks it offline" {
+    const a = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(a, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const layout_dir = "oci_test_layout";
+    const work_dir = "oci_test_layout_work";
+    std.Io.Dir.cwd().deleteTree(io, layout_dir) catch {};
+    std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, layout_dir);
+    try std.Io.Dir.cwd().createDirPath(io, work_dir);
+    defer std.Io.Dir.cwd().deleteTree(io, layout_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
+
+    var layout = try std.Io.Dir.cwd().openDir(io, layout_dir, .{ .iterate = true });
+    defer layout.close(io);
+    try layout.createDirPath(io, "blobs/sha256");
+
+    // Two gzip'd tar layers: layer 2 overlays a file from layer 1.
+    var layer1: std.ArrayList(u8) = .empty;
+    defer layer1.deinit(a);
+    try tarAppendFile(&layer1, a, "etc/hostname", "base\n");
+    try tarAppendFile(&layer1, a, "bin/sh", "#!fake-shell\n");
+    try layer1.appendNTimes(a, 0, 1024);
+
+    var layer2: std.ArrayList(u8) = .empty;
+    defer layer2.deinit(a);
+    try tarAppendFile(&layer2, a, "etc/hostname", "override\n");
+    try tarAppendFile(&layer2, a, "app/run", "payload\n");
+    try layer2.appendNTimes(a, 0, 1024);
+
+    const gz1 = try gzipAlloc(a, layer1.items);
+    defer a.free(gz1);
+    const gz2 = try gzipAlloc(a, layer2.items);
+    defer a.free(gz2);
+
+    const layer1_digest = try putBlob(a, io, layout, gz1);
+    defer a.free(layer1_digest);
+    const layer2_digest = try putBlob(a, io, layout, gz2);
+    defer a.free(layer2_digest);
+
+    // Config blob with process defaults.
+    const config_json =
+        \\{"architecture":"arm64","os":"linux","config":{
+        \\  "Entrypoint":["/bin/sh"],
+        \\  "Cmd":["-c","echo hi"],
+        \\  "Env":["PATH=/usr/bin:/bin"],
+        \\  "WorkingDir":"/app"
+        \\}}
+    ;
+    const config_digest = try putBlob(a, io, layout, config_json);
+    defer a.free(config_digest);
+
+    // Image manifest referencing the config + ordered layers.
+    const manifest_json = try std.fmt.allocPrint(a,
+        \\{{"schemaVersion":2,
+        \\"mediaType":"application/vnd.oci.image.manifest.v1+json",
+        \\"config":{{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"{s}","size":{d}}},
+        \\"layers":[
+        \\{{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"{s}","size":{d}}},
+        \\{{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"{s}","size":{d}}}
+        \\]}}
+    , .{ config_digest, config_json.len, layer1_digest, gz1.len, layer2_digest, gz2.len });
+    defer a.free(manifest_json);
+    const manifest_digest = try putBlob(a, io, layout, manifest_json);
+    defer a.free(manifest_digest);
+
+    // index.json points at the manifest, tagged linux/arm64.
+    const index_json = try std.fmt.allocPrint(a,
+        \\{{"schemaVersion":2,
+        \\"manifests":[
+        \\{{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"{s}","size":{d},
+        \\"platform":{{"architecture":"arm64","os":"linux"}}}}
+        \\]}}
+    , .{ manifest_digest, manifest_json.len });
+    defer a.free(index_json);
+    try layout.writeFile(io, .{ .sub_path = "index.json", .data = index_json });
+
+    // Unpack offline.
+    const img = try unpackLayout(a, io, layout_dir, work_dir);
+    defer freeImage(a, img);
+
+    // Process config came through correctly (Entrypoint ++ Cmd).
+    try std.testing.expectEqual(@as(usize, 3), img.argv.len);
+    try std.testing.expectEqualStrings("/bin/sh", img.argv[0]);
+    try std.testing.expectEqualStrings("-c", img.argv[1]);
+    try std.testing.expectEqualStrings("echo hi", img.argv[2]);
+    try std.testing.expectEqual(@as(usize, 1), img.env.len);
+    try std.testing.expectEqualStrings("PATH=/usr/bin:/bin", img.env[0]);
+    try std.testing.expectEqualStrings("/app", img.cwd);
+
+    // Rootfs files: layer 1 base files, layer 2 additions, and the override.
+    var rootfs = try std.Io.Dir.cwd().openDir(io, img.rootfs_dir, .{ .iterate = true });
+    defer rootfs.close(io);
+
+    const hostname = try rootfs.readFileAlloc(io, "etc/hostname", a, .unlimited);
+    defer a.free(hostname);
+    try std.testing.expectEqualStrings("override\n", hostname); // layer 2 wins
+
+    const sh = try rootfs.readFileAlloc(io, "bin/sh", a, .unlimited);
+    defer a.free(sh);
+    try std.testing.expectEqualStrings("#!fake-shell\n", sh);
+
+    const run = try rootfs.readFileAlloc(io, "app/run", a, .unlimited);
+    defer a.free(run);
+    try std.testing.expectEqualStrings("payload\n", run);
+}
+
+test "unpackLayout: single manifest without platform falls back to first" {
+    const a = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(a, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const layout_dir = "oci_test_layout2";
+    const work_dir = "oci_test_layout2_work";
+    std.Io.Dir.cwd().deleteTree(io, layout_dir) catch {};
+    std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, layout_dir);
+    try std.Io.Dir.cwd().createDirPath(io, work_dir);
+    defer std.Io.Dir.cwd().deleteTree(io, layout_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
+
+    var layout = try std.Io.Dir.cwd().openDir(io, layout_dir, .{ .iterate = true });
+    defer layout.close(io);
+    try layout.createDirPath(io, "blobs/sha256");
+
+    var layer: std.ArrayList(u8) = .empty;
+    defer layer.deinit(a);
+    try tarAppendFile(&layer, a, "only.txt", "lonely\n");
+    try layer.appendNTimes(a, 0, 1024);
+    const gz = try gzipAlloc(a, layer.items);
+    defer a.free(gz);
+    const layer_digest = try putBlob(a, io, layout, gz);
+    defer a.free(layer_digest);
+
+    const config_json = "{}";
+    const config_digest = try putBlob(a, io, layout, config_json);
+    defer a.free(config_digest);
+
+    const manifest_json = try std.fmt.allocPrint(a,
+        \\{{"schemaVersion":2,"config":{{"digest":"{s}","size":{d}}},
+        \\"layers":[{{"digest":"{s}","size":{d}}}]}}
+    , .{ config_digest, config_json.len, layer_digest, gz.len });
+    defer a.free(manifest_json);
+    const manifest_digest = try putBlob(a, io, layout, manifest_json);
+    defer a.free(manifest_digest);
+
+    // No platform on the manifest entry -> fall back to first.
+    const index_json = try std.fmt.allocPrint(a,
+        \\{{"schemaVersion":2,"manifests":[{{"digest":"{s}","size":{d}}}]}}
+    , .{ manifest_digest, manifest_json.len });
+    defer a.free(index_json);
+    try layout.writeFile(io, .{ .sub_path = "index.json", .data = index_json });
+
+    const img = try unpackLayout(a, io, layout_dir, work_dir);
+    defer freeImage(a, img);
+    try std.testing.expectEqualStrings("/", img.cwd);
+
+    var rootfs = try std.Io.Dir.cwd().openDir(io, img.rootfs_dir, .{ .iterate = true });
+    defer rootfs.close(io);
+    const only = try rootfs.readFileAlloc(io, "only.txt", a, .unlimited);
+    defer a.free(only);
+    try std.testing.expectEqualStrings("lonely\n", only);
 }

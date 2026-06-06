@@ -193,19 +193,61 @@ fn cmdResolve(allocator: std.mem.Allocator, io: std.Io, reference: []const u8) !
     std.debug.print("environment: {d} vars\n", .{r.environment.len});
 }
 
-/// `run <id> <image>`: create and start a container entirely over XPC.
+/// `run <id> <image> [--spec <base64>]`: create and start a container entirely
+/// over XPC. The optional `--spec` carries the full service config as a base64
+/// JSON blob (env, env_files, memory, cpus, workdir, entrypoint, cmd); when
+/// absent, behaviour matches the old hardcoded defaults so nothing regresses.
 fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const u8) !void {
     if (positionals.len < 3) {
-        std.debug.print("usage: orchd-apple run <id> <image>\n", .{});
+        std.debug.print("usage: orchd-apple run <id> <image> [--spec <base64>]\n", .{});
         std.process.exit(1);
     }
     const id = positionals[1];
     const reference = positionals[2];
 
+    // Optional `--spec <base64>` anywhere after the image positional.
+    var spec_b64: ?[]const u8 = null;
+    var i: usize = 3;
+    while (i < positionals.len) : (i += 1) {
+        if (std.mem.eql(u8, positionals[i], "--spec")) {
+            if (i + 1 >= positionals.len) {
+                std.debug.print("usage: orchd-apple run <id> <image> [--spec <base64>]\n", .{});
+                std.process.exit(1);
+            }
+            spec_b64 = positionals[i + 1];
+            i += 1;
+        }
+    }
+
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    oci_mod.run(arena_state.allocator(), allocator, io, id, reference) catch |err| {
+    // Decode --spec (base64 -> JSON -> Service) into overrides, if present.
+    var overrides: ?types.Service = null;
+    var parsed: ?std.json.Parsed(types.Service) = null;
+    defer if (parsed) |p| p.deinit();
+    if (spec_b64) |b64| {
+        const dec = std.base64.standard.Decoder;
+        const json = arena.alloc(u8, dec.calcSizeForSlice(b64) catch {
+            std.debug.print("error: --spec is not valid base64\n", .{});
+            std.process.exit(1);
+        }) catch return error.OutOfMemory;
+        dec.decode(json, b64) catch {
+            std.debug.print("error: --spec is not valid base64\n", .{});
+            std.process.exit(1);
+        };
+        parsed = std.json.parseFromSlice(types.Service, allocator, json, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        }) catch |err| {
+            std.debug.print("error: --spec JSON parse failed ({s})\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        overrides = parsed.?.value;
+    }
+
+    oci_mod.run(arena, allocator, io, id, reference, overrides) catch |err| {
         std.debug.print("error: run failed ({s})\n", .{@errorName(err)});
         std.process.exit(1);
     };

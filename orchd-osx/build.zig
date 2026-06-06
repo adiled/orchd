@@ -50,6 +50,7 @@ pub fn build(b: *std.Build) void {
     for ([_][]const u8{
         "src/exec_set.zig",
         "src/proto.zig",
+        "src/vsock.zig",
         "src/kernel.zig",
         "src/oci.zig",
         "src/ext4.zig",

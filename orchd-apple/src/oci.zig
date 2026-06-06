@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const client = @import("client.zig");
+const types = @import("types.zig");
 
 extern "c" fn close(fd: c_int) c_int;
 
@@ -22,6 +23,10 @@ pub const Resolved = struct {
     arguments: []const []const u8,
     environment: []const []const u8,
     working_directory: []const u8,
+    /// The image's raw Entrypoint/Cmd, kept separate so Docker-style overrides
+    /// can be applied (executable/arguments above are the merged default).
+    image_entrypoint: []const []const u8,
+    image_cmd: []const []const u8,
 };
 
 fn find(v: std.json.Value, key: []const u8) ?std.json.Value {
@@ -84,9 +89,16 @@ pub fn resolve(arena: std.mem.Allocator, io: std.Io, reference: []const u8) !Res
     const oci = try std.json.parseFromSliceLeaky(std.json.Value, arena, config_blob, .{});
     const cfg = find(oci, "config") orelse return error.NoOciConfig;
 
+    var entrypoint = std.ArrayList([]const u8).empty;
+    if (find(cfg, "Entrypoint")) |ep| if (ep == .array) for (ep.array.items) |a| try entrypoint.append(arena, str(a));
+
+    var cmd = std.ArrayList([]const u8).empty;
+    if (find(cfg, "Cmd")) |c| if (c == .array) for (c.array.items) |a| try cmd.append(arena, str(a));
+
+    // Merged default argv (entrypoint then cmd), as the image would run it.
     var argv = std.ArrayList([]const u8).empty;
-    if (find(cfg, "Entrypoint")) |ep| if (ep == .array) for (ep.array.items) |a| try argv.append(arena, str(a));
-    if (find(cfg, "Cmd")) |cmd| if (cmd == .array) for (cmd.array.items) |a| try argv.append(arena, str(a));
+    try argv.appendSlice(arena, entrypoint.items);
+    try argv.appendSlice(arena, cmd.items);
     if (argv.items.len == 0) return error.NoEntrypoint;
 
     var env = std.ArrayList([]const u8).empty;
@@ -102,7 +114,83 @@ pub fn resolve(arena: std.mem.Allocator, io: std.Io, reference: []const u8) !Res
         .arguments = argv.items[1..],
         .environment = env.items,
         .working_directory = if (wd.len == 0) "/" else wd,
+        .image_entrypoint = entrypoint.items,
+        .image_cmd = cmd.items,
     };
+}
+
+// ─── Spec overrides ─────────────────────────────────────────────────────────
+
+const DEFAULT_CPUS: i64 = 2;
+const DEFAULT_MEMORY: u64 = 1024 * 1024 * 1024;
+
+/// Parse a memory string into bytes. Suffixes K/M/G are 1024-based; a bare
+/// number is already bytes. Empty/unset yields the default 1 GiB.
+pub fn parseMemory(s: []const u8) !u64 {
+    if (s.len == 0) return DEFAULT_MEMORY;
+    var end = s.len;
+    var mult: u64 = 1;
+    switch (s[s.len - 1]) {
+        'K', 'k' => {
+            mult = 1024;
+            end -= 1;
+        },
+        'M', 'm' => {
+            mult = 1024 * 1024;
+            end -= 1;
+        },
+        'G', 'g' => {
+            mult = 1024 * 1024 * 1024;
+            end -= 1;
+        },
+        else => {},
+    }
+    const n = try std.fmt.parseInt(u64, s[0..end], 10);
+    return n * mult;
+}
+
+/// Split a command string on ASCII spaces into argv, dropping empty fields.
+/// Allocations come from `arena`.
+fn splitArgs(arena: std.mem.Allocator, s: []const u8) ![]const []const u8 {
+    var out = std.ArrayList([]const u8).empty;
+    var it = std.mem.tokenizeScalar(u8, s, ' ');
+    while (it.next()) |tok| try out.append(arena, tok);
+    return out.items;
+}
+
+/// Build the merged environment: image env first, then service env (KEY=VALUE),
+/// then each env_files path's KEY=VALUE lines. Later entries win at runtime, so
+/// service config overrides image defaults.
+fn mergeEnv(arena: std.mem.Allocator, io: std.Io, image_env: []const []const u8, svc: types.Service) ![]const []const u8 {
+    var out = std.ArrayList([]const u8).empty;
+    try out.appendSlice(arena, image_env);
+
+    // Service env: a JSON object of KEY -> VALUE.
+    if (svc.env == .object) {
+        var it = svc.env.object.iterator();
+        while (it.next()) |kv| {
+            const val = switch (kv.value_ptr.*) {
+                .string => |v| v,
+                else => "",
+            };
+            const line = try std.fmt.allocPrint(arena, "{s}={s}", .{ kv.key_ptr.*, val });
+            try out.append(arena, line);
+        }
+    }
+
+    // env_files: append each non-empty, non-comment KEY=VALUE line verbatim.
+    for (svc.env_files) |path| {
+        const data = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited) catch continue;
+        var lines = std.mem.splitScalar(u8, data, '\n');
+        while (lines.next()) |raw| {
+            const line = std.mem.trim(u8, raw, " \t\r");
+            if (line.len == 0 or line[0] == '#') continue;
+            if (std.mem.indexOfScalar(u8, line, '=') == null) continue;
+            try out.append(arena, try arena.dupe(u8, line));
+        }
+    }
+
+    return out.items;
 }
 
 // ─── ContainerConfiguration (mirrors the daemon's snapshot shape) ───────────
@@ -161,13 +249,80 @@ const INIT_IMAGE = "ghcr.io/apple/containerization/vminit:0.31.0";
 
 /// Create and start a container entirely over XPC: resolve OCI -> kernel ->
 /// build ContainerConfiguration -> create -> bootstrap -> start.
-pub fn run(arena: std.mem.Allocator, allocator: std.mem.Allocator, io: std.Io, id: []const u8, reference: []const u8) !void {
+///
+/// When `overrides` is non-null, the service spec is applied on top of the
+/// image defaults: env merge (image then service then env_files), resources
+/// (cpus/memory), workingDirectory, and Docker-style entrypoint/cmd. When null,
+/// behaviour is identical to before (image defaults, cpus=2, 1 GiB).
+pub fn run(
+    arena: std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    id: []const u8,
+    reference: []const u8,
+    overrides: ?types.Service,
+) !void {
     const r = try resolve(arena, io, reference);
 
     const c = client.Client.init();
     defer c.deinit();
 
     const kernel_json = try c.getDefaultKernel(arena, "{\"os\":\"linux\",\"architecture\":\"arm64\"}");
+
+    // Start from the image defaults, then layer the service spec on top.
+    var executable = r.executable;
+    var arguments = r.arguments;
+    var environment = r.environment;
+    var working_directory = r.working_directory;
+    var cpus: i64 = DEFAULT_CPUS;
+    var memory_bytes: u64 = DEFAULT_MEMORY;
+
+    if (overrides) |svc| {
+        // env: image env first, then service env, then env_files (service wins).
+        environment = try mergeEnv(arena, io, r.environment, svc);
+
+        // resources: round cpus to int; parse memory suffix.
+        if (svc.resources.cpus) |n| cpus = @intFromFloat(@round(n));
+        if (svc.resources.memory) |m| memory_bytes = try parseMemory(m);
+
+        // workingDirectory: service.workdir overrides the image WorkingDir.
+        if (svc.workdir) |wd| if (wd.len != 0) {
+            working_directory = wd;
+        };
+
+        // entrypoint/cmd: Docker semantics.
+        if (svc.entrypoint) |ep| {
+            // entrypoint set -> executable = entrypoint, args = cmd (or empty).
+            const ep_argv = try splitArgs(arena, ep);
+            if (ep_argv.len == 0) return error.NoEntrypoint;
+            executable = ep_argv[0];
+            var args = std.ArrayList([]const u8).empty;
+            try args.appendSlice(arena, ep_argv[1..]);
+            if (svc.cmd) |cmd| try args.appendSlice(arena, try splitArgs(arena, cmd));
+            arguments = args.items;
+        } else if (svc.cmd) |cmd| {
+            // only cmd set -> keep image entrypoint, replace args with cmd.
+            const cmd_argv = try splitArgs(arena, cmd);
+            if (r.image_entrypoint.len == 0) {
+                // No image entrypoint: cmd is the full argv.
+                if (cmd_argv.len == 0) return error.NoEntrypoint;
+                executable = cmd_argv[0];
+                arguments = cmd_argv[1..];
+            } else {
+                executable = r.image_entrypoint[0];
+                var args = std.ArrayList([]const u8).empty;
+                try args.appendSlice(arena, r.image_entrypoint[1..]);
+                try args.appendSlice(arena, cmd_argv);
+                arguments = args.items;
+            }
+        }
+        // neither set -> keep image defaults (executable/arguments unchanged).
+    }
+
+    // TODO: publish ports and volumes are deliberately skipped here. The
+    // daemon's PublishPort/Filesystem encodings at 0.12.3 are unverified, and
+    // Apple gives each container a dedicated IP, so port mapping is not needed
+    // for reachability. Wire these once the 0.12.3 shapes are confirmed.
 
     const cfg = Config{
         .id = id,
@@ -176,12 +331,12 @@ pub fn run(arena: std.mem.Allocator, allocator: std.mem.Allocator, io: std.Io, i
             .reference = reference,
         },
         .initProcess = .{
-            .executable = r.executable,
-            .arguments = r.arguments,
-            .environment = r.environment,
-            .workingDirectory = r.working_directory,
+            .executable = executable,
+            .arguments = arguments,
+            .environment = environment,
+            .workingDirectory = working_directory,
         },
-        .resources = .{ .cpus = 2, .memoryInBytes = 1024 * 1024 * 1024 },
+        .resources = .{ .cpus = cpus, .memoryInBytes = memory_bytes },
         .networks = &.{.{ .options = .{ .hostname = id } }},
     };
     const config_json = try std.json.Stringify.valueAlloc(arena, cfg, .{});
@@ -195,4 +350,46 @@ pub fn run(arena: std.mem.Allocator, allocator: std.mem.Allocator, io: std.Io, i
 
     try c.containerBootstrap(allocator, id, fd);
     try c.containerStartProcess(allocator, id);
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+test "parseMemory understands suffixes and bare bytes" {
+    try std.testing.expectEqual(@as(u64, 536870912), try parseMemory("512M"));
+    try std.testing.expectEqual(@as(u64, 1073741824), try parseMemory("1G"));
+    try std.testing.expectEqual(@as(u64, 2048), try parseMemory("2048"));
+    try std.testing.expectEqual(@as(u64, 1024), try parseMemory("1K"));
+    try std.testing.expectEqual(DEFAULT_MEMORY, try parseMemory(""));
+}
+
+test "mergeEnv puts service env after image env" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    var env_map: std.json.ObjectMap = .empty;
+    try env_map.put(arena, "FOO", .{ .string = "service" });
+    const svc = types.Service{
+        .name = "x",
+        .mode = "container",
+        .env = .{ .object = env_map },
+    };
+    const image_env: []const []const u8 = &.{ "FOO=image", "PATH=/usr/bin" };
+    const merged = try mergeEnv(arena, io, image_env, svc);
+
+    // Image entries come first; service FOO appended after, so it wins.
+    try std.testing.expectEqualStrings("FOO=image", merged[0]);
+    try std.testing.expectEqualStrings("PATH=/usr/bin", merged[1]);
+    try std.testing.expectEqualStrings("FOO=service", merged[merged.len - 1]);
+}
+
+test "splitArgs tokenizes on spaces" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const argv = try splitArgs(arena, "postgres -c max_connections=200");
+    try std.testing.expectEqual(@as(usize, 3), argv.len);
+    try std.testing.expectEqualStrings("postgres", argv[0]);
+    try std.testing.expectEqualStrings("max_connections=200", argv[2]);
 }

@@ -11,8 +11,10 @@
 //!     htree dirs. We set s_rev_level = 1 and a minimal feature set so Linux
 //!     mounts it read-write as ext4 (it falls back to ext2-compatible paths).
 //!   - The full rootfs tree is copied in: directories, regular files, symlinks
-//!     (fast symlinks inline, slow symlinks in a data block). init_bytes is
-//!     installed at init_path (mode 0755).
+//!     (fast symlinks inline, slow symlinks in a data block). The tree is held
+//!     in memory as a DirBuilder graph and serialized in one pass, which lets
+//!     init_bytes be installed at a nested init_path (e.g. /usr/bin/foo,
+//!     creating intermediate dirs) with mode 0755.
 //!
 //! ON-DISK LAYOUT (block numbers, 4 KiB each):
 //!   block 0      : 1024 pad + superblock (1024) + remainder of block
@@ -174,8 +176,8 @@ fn buildIo(
     // Install init binary at init_path (relative to root).
     try installFile(&b, allocator, &root, init_path, init_bytes, 0o755);
 
-    // Now flush the root directory inode + data.
-    try finishDir(&b, &root, S_IFDIR | 0o755);
+    // Now flush the whole directory tree (children before parents).
+    try finishTree(&b, &root, S_IFDIR | 0o755);
 
     // Write fs metadata (superblock, group descriptor, bitmaps).
     try writeMetadata(&b);
@@ -184,10 +186,26 @@ fn buildIo(
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = b.buf });
 }
 
+/// The single-block-group size bound, in blocks. One block group addresses
+/// exactly `blocks_per_group` blocks, and `blocks_per_group` is fixed by the
+/// block bitmap holding 8 bits per byte over one block: 4096 bytes * 8 =
+/// 32768 blocks. At a 4 KiB block size that is 32768 * 4096 = 128 MiB.
+///
+/// Going past this needs a second block group, which means: a per-group block
+/// bitmap, inode bitmap and inode table; a backup superblock + GDT at the
+/// group's start (sparse_super lets us skip most, but group 1 is a backup
+/// group); and a multi-entry block group descriptor table. That is the next
+/// real chunk of work (see the module TODO); until then we hard-cap here so a
+/// caller asking for > 128 MiB fails loudly instead of silently corrupting.
+const max_blocks_single_group: u32 = 8 * block_size; // 32768 blocks = 128 MiB
+
 fn initBuilder(allocator: std.mem.Allocator, size_bytes: u64) !Builder {
     if (size_bytes < 64 * 1024) return Error.TooSmall;
     const total_blocks_u64 = size_bytes / block_size;
-    if (total_blocks_u64 > 8 * block_size) return Error.TooLarge; // one block group cap
+    // Single block group only: see `max_blocks_single_group`. 128 MiB is the
+    // hard bound at a 4 KiB block size. TooLarge fires here, before we allocate
+    // the image buffer, so the caller never gets a half-built fs.
+    if (total_blocks_u64 > max_blocks_single_group) return Error.TooLarge;
     const total_blocks: u32 = @intCast(total_blocks_u64);
 
     // Inode count: a generous ratio. One inode per 16 KiB, capped to fit a
@@ -229,10 +247,16 @@ const DirEntry = struct {
     ino: u32,
     name: []u8, // owned
     file_type: u8,
+    /// If this entry is a subdirectory built in-memory, the child builder is
+    /// kept here so the whole tree can be serialized in one finalize pass at
+    /// the end. null for files, symlinks, and already-finished subtrees.
+    child: ?*DirBuilder = null,
 };
 
-/// Accumulates entries for one directory, then serializes them into data
-/// blocks with ext4 linked-list dir records.
+/// Accumulates entries for one directory. The full directory tree is held in
+/// memory as a DirBuilder graph and serialized in one finalize pass (see
+/// `finishTree`). Holding the tree lets us inject nested install paths (e.g.
+/// /usr/bin/foo) before anything is committed to disk.
 const DirBuilder = struct {
     allocator: std.mem.Allocator,
     ino: u32,
@@ -244,7 +268,13 @@ const DirBuilder = struct {
     }
 
     fn deinit(self: *DirBuilder) void {
-        for (self.entries.items) |e| self.allocator.free(e.name);
+        for (self.entries.items) |e| {
+            if (e.child) |c| {
+                c.deinit();
+                self.allocator.destroy(c);
+            }
+            self.allocator.free(e.name);
+        }
         self.entries.deinit(self.allocator);
     }
 
@@ -255,10 +285,45 @@ const DirBuilder = struct {
             .file_type = file_type,
         });
     }
+
+    /// Find an existing subdirectory entry by name that is still an in-memory
+    /// child builder (i.e. injectable). Returns null if absent or if the name
+    /// exists but is not an injectable directory.
+    fn findChildDir(self: *DirBuilder, name: []const u8) ?*DirBuilder {
+        for (self.entries.items) |e| {
+            if (e.file_type == FT_DIR and e.child != null and std.mem.eql(u8, e.name, name)) {
+                return e.child;
+            }
+        }
+        return null;
+    }
+
+    /// Add (or return existing) a child subdirectory builder for `name`,
+    /// allocating a fresh inode if it does not yet exist.
+    fn ensureChildDir(self: *DirBuilder, b: *Builder, name: []const u8) !*DirBuilder {
+        if (self.findChildDir(name)) |c| return c;
+        const child_ino = try b.allocIno();
+        const child = try self.allocator.create(DirBuilder);
+        child.* = DirBuilder.init(self.allocator, child_ino, self.ino);
+        errdefer {
+            child.deinit();
+            self.allocator.destroy(child);
+        }
+        try self.entries.append(self.allocator, .{
+            .ino = child_ino,
+            .name = try self.allocator.dupe(u8, name),
+            .file_type = FT_DIR,
+            .child = child,
+        });
+        return child;
+    }
 };
 
-/// Recurse the source directory, creating inodes and data for each entry, and
-/// recording them in `out` (the DirBuilder for this level).
+/// Recurse the source directory, creating inodes/data for files and symlinks
+/// and in-memory child DirBuilders for subdirectories, recording them in `out`
+/// (the DirBuilder for this level). Directories are NOT serialized here; the
+/// whole tree is serialized once in `finishTree` after install paths are
+/// injected.
 fn writeTree(
     b: *Builder,
     io: std.Io,
@@ -270,15 +335,10 @@ fn writeTree(
     while (try it.next(io)) |entry| {
         switch (entry.kind) {
             .directory => {
-                const child_ino = try b.allocIno();
-                var child = DirBuilder.init(allocator, child_ino, out.ino);
-                defer child.deinit();
-
+                const child = try out.ensureChildDir(b, entry.name);
                 var child_dir = try src.openDir(io, entry.name, .{ .iterate = true });
                 defer child_dir.close(io);
-                try writeTree(b, io, allocator, child_dir, &child);
-                try finishDir(b, &child, S_IFDIR | 0o755);
-                try out.add(child_ino, entry.name, FT_DIR);
+                try writeTree(b, io, allocator, child_dir, child);
             },
             .file => {
                 const data = try src.readFileAlloc(io, entry.name, allocator, .unlimited);
@@ -411,7 +471,9 @@ fn writeSymlink(b: *Builder, target: []const u8) !u32 {
 }
 
 /// Install a file at a (possibly nested) path under root. Creates intermediate
-/// directories as needed. `path` is like "/orchd-init" or "sbin/init".
+/// directories as needed, reusing existing in-memory directories from the
+/// source tree where they exist. `path` is like "/orchd-init", "sbin/init",
+/// or "/usr/bin/foo".
 fn installFile(
     b: *Builder,
     allocator: std.mem.Allocator,
@@ -420,17 +482,35 @@ fn installFile(
     data: []const u8,
     mode: u16,
 ) !void {
+    _ = allocator;
     const trimmed = std.mem.trimStart(u8, path, "/");
     if (trimmed.len == 0) return;
-    // First cut: only top-level install paths (e.g. /orchd-init). Nested paths
-    // would need walking/creating intermediate DirBuilders, which is a TODO.
-    if (std.mem.indexOfScalar(u8, trimmed, '/') != null) {
-        // TODO: support nested install paths. For now require a top-level name.
-        return Error.NotImplemented;
+
+    // Walk the directory components, creating/reusing intermediate dirs. The
+    // final component is the file name.
+    var dir = root;
+    var rest = trimmed;
+    while (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
+        const comp = rest[0..slash];
+        rest = rest[slash + 1 ..];
+        if (comp.len == 0) continue; // tolerate doubled slashes
+        dir = try dir.ensureChildDir(b, comp);
     }
-    _ = allocator;
+    const file_name = rest;
+    if (file_name.len == 0) return Error.NotImplemented; // path ended in '/'
+
     const ino = try writeRegularFile(b, data, mode);
-    try root.add(ino, trimmed, FT_REG);
+    try dir.add(ino, file_name, FT_REG);
+}
+
+/// Serialize the whole in-memory directory tree rooted at `d`, depth-first:
+/// finish children before their parent so child inodes/data exist before the
+/// parent dir block references them. Subdirectories carry FT_DIR entries.
+fn finishTree(b: *Builder, d: *DirBuilder, mode: u16) !void {
+    for (d.entries.items) |e| {
+        if (e.child) |c| try finishTree(b, c, S_IFDIR | 0o755);
+    }
+    try finishDir(b, d, mode);
 }
 
 /// Serialize a DirBuilder into data blocks and write its inode. Adds "." and
@@ -693,4 +773,157 @@ test "root directory inode and its data block are well-formed" {
     try std.testing.expectEqual(@as(u8, '.'), dblock[8]);
     // file type byte == directory.
     try std.testing.expectEqual(FT_DIR, dblock[7]);
+}
+
+// --- image-readback helpers (tests) ---
+
+/// Read the raw inode bytes for `ino` from a built image (fixed layout: inode
+/// table starts at block 4).
+fn inodeSlice(img: []const u8, ino: u32) []const u8 {
+    const off: usize = 4 * block_size + (ino - 1) * inode_size;
+    return img[off .. off + inode_size];
+}
+
+/// Look up a name within a directory inode's first data block. Returns the
+/// child inode number, or null if not found. Walks the ext4 linked-list dir
+/// records (good enough for single-block dirs, which is all we emit today).
+fn lookupEntry(img: []const u8, dir_ino: u32, name: []const u8) ?u32 {
+    const inode = inodeSlice(img, dir_ino);
+    const dblock_num = std.mem.readInt(u32, inode[I_BLOCK..][0..4], .little);
+    if (dblock_num == 0) return null;
+    const block = img[@as(usize, dblock_num) * block_size ..][0..block_size];
+    var pos: usize = 0;
+    while (pos + 8 <= block_size) {
+        const ino = std.mem.readInt(u32, block[pos..][0..4], .little);
+        const rec_len = std.mem.readInt(u16, block[pos + 4 ..][0..2], .little);
+        if (rec_len == 0) break;
+        const name_len = block[pos + 6];
+        if (ino != 0 and name_len == name.len and
+            std.mem.eql(u8, block[pos + 8 .. pos + 8 + name_len], name))
+        {
+            return ino;
+        }
+        pos += rec_len;
+    }
+    return null;
+}
+
+/// Read back a regular file's contents from the image by following its inode's
+/// direct block pointers (sufficient for files <= 12 blocks = 48 KiB).
+fn readFileFromImage(img: []const u8, a: std.mem.Allocator, ino: u32) ![]u8 {
+    const inode = inodeSlice(img, ino);
+    const size = std.mem.readInt(u32, inode[I_SIZE_LO..][0..4], .little);
+    const out = try a.alloc(u8, size);
+    errdefer a.free(out);
+    var remaining: usize = size;
+    var written: usize = 0;
+    var i: usize = 0;
+    while (remaining > 0 and i < 12) : (i += 1) {
+        const bn = std.mem.readInt(u32, inode[I_BLOCK + i * 4 ..][0..4], .little);
+        std.debug.assert(bn != 0);
+        const n = @min(@as(usize, block_size), remaining);
+        @memcpy(out[written .. written + n], img[@as(usize, bn) * block_size ..][0..n]);
+        written += n;
+        remaining -= n;
+    }
+    std.debug.assert(remaining == 0);
+    return out;
+}
+
+test "regular file contents readable back via its inode/blocks" {
+    const a = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(a, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const rootfs = "ext4_test_rootfs3";
+    std.Io.Dir.cwd().deleteTree(io, rootfs) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, rootfs);
+    defer std.Io.Dir.cwd().deleteTree(io, rootfs) catch {};
+
+    // A multi-block payload to exercise more than one direct pointer.
+    const payload = "0123456789ABCDEF" ** 600; // 9600 bytes > 2 blocks
+    {
+        var d = try std.Io.Dir.cwd().openDir(io, rootfs, .{ .iterate = true });
+        defer d.close(io);
+        try d.writeFile(io, .{ .sub_path = "data.bin", .data = payload });
+    }
+
+    const out = "ext4_test_image3.img";
+    std.Io.Dir.cwd().deleteFile(io, out) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, out) catch {};
+    try buildIo(a, io, rootfs, out, 8 * 1024 * 1024, "/orchd-init", "x");
+
+    const img = try std.Io.Dir.cwd().readFileAlloc(io, out, a, .unlimited);
+    defer a.free(img);
+
+    // Reach the file through the root directory's entries, then read its data.
+    const file_ino = lookupEntry(img, root_ino, "data.bin") orelse return error.EntryNotFound;
+    const inode = inodeSlice(img, file_ino);
+    const mode = std.mem.readInt(u16, inode[I_MODE..][0..2], .little);
+    try std.testing.expect(mode & S_IFREG == S_IFREG);
+    try std.testing.expectEqual(@as(u32, payload.len), std.mem.readInt(u32, inode[I_SIZE_LO..][0..4], .little));
+
+    const got = try readFileFromImage(img, a, file_ino);
+    defer a.free(got);
+    try std.testing.expectEqualSlices(u8, payload, got);
+}
+
+test "nested install path reachable through parent dir entries" {
+    const a = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(a, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const rootfs = "ext4_test_rootfs4";
+    std.Io.Dir.cwd().deleteTree(io, rootfs) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, rootfs);
+    defer std.Io.Dir.cwd().deleteTree(io, rootfs) catch {};
+    {
+        // Pre-create /usr so the install reuses the existing dir for one
+        // component and creates /usr/bin fresh.
+        var d = try std.Io.Dir.cwd().openDir(io, rootfs, .{ .iterate = true });
+        defer d.close(io);
+        try d.createDirPath(io, "usr");
+        try d.writeFile(io, .{ .sub_path = "usr/marker", .data = "m" });
+    }
+
+    const out = "ext4_test_image4.img";
+    std.Io.Dir.cwd().deleteFile(io, out) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, out) catch {};
+
+    const init_payload = "#!/bin/sh\nexec /sbin/orchd-init\n";
+    try buildIo(a, io, rootfs, out, 8 * 1024 * 1024, "/usr/bin/foo", init_payload);
+
+    const img = try std.Io.Dir.cwd().readFileAlloc(io, out, a, .unlimited);
+    defer a.free(img);
+
+    // Walk root -> usr -> bin -> foo through the on-disk dir entries.
+    const usr_ino = lookupEntry(img, root_ino, "usr") orelse return error.NoUsr;
+    // The pre-existing usr/marker must survive alongside the injected bin dir.
+    const marker_ino = lookupEntry(img, usr_ino, "marker") orelse return error.NoMarker;
+    try std.testing.expect(marker_ino != 0);
+    const bin_ino = lookupEntry(img, usr_ino, "bin") orelse return error.NoBin;
+    const foo_ino = lookupEntry(img, bin_ino, "foo") orelse return error.NoFoo;
+
+    // /usr/bin must be a directory; /usr/bin/foo a regular file with our bytes.
+    const bin_mode = std.mem.readInt(u16, inodeSlice(img, bin_ino)[I_MODE..][0..2], .little);
+    try std.testing.expect(bin_mode & S_IFDIR == S_IFDIR);
+
+    const got = try readFileFromImage(img, a, foo_ino);
+    defer a.free(got);
+    try std.testing.expectEqualSlices(u8, init_payload, got);
+}
+
+test "TooLarge fires past the single block group bound" {
+    const a = std.testing.allocator;
+    // 128 MiB exactly is the max; one block over must be rejected before any
+    // image buffer is allocated.
+    const over = @as(u64, max_blocks_single_group) * block_size + block_size;
+    try std.testing.expectError(Error.TooLarge, initBuilder(a, over));
+
+    // The bound itself is accepted (free the buffer it allocates).
+    const at = @as(u64, max_blocks_single_group) * block_size;
+    const bld = try initBuilder(a, at);
+    a.free(bld.buf);
 }
