@@ -718,7 +718,19 @@ fn curlGet(
     return result.stdout;
 }
 
-/// GET `url` via `curl -sSL --fail -o <out_path>`, streaming the body straight
+/// GET `url` discarding the body, returning the response headers (for reading a
+/// registry's WWW-Authenticate challenge). No --fail: a 401 is expected here.
+fn curlHeaders(allocator: std.mem.Allocator, io: std.Io, url: []const u8) ![]u8 {
+    const argv = [_][]const u8{ "curl", "-sS", "-D", "-", "-o", "/dev/null", url };
+    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    defer allocator.free(result.stderr);
+    errdefer allocator.free(result.stdout);
+    switch (result.term) {
+        .exited => |code| if (code != 0) return Error.CurlFailed,
+        else => return Error.CurlFailed,
+    }
+    return result.stdout;
+}
 /// to disk so large layer blobs never sit in memory. Adds one `-H` per non-null
 /// header. On a non-zero curl exit, returns Error.CurlFailed.
 fn curlGetToFile(
@@ -769,17 +781,33 @@ fn curlGetToFile(
 /// non-docker.io registry that needs no token we return null and the caller
 /// makes anonymous requests. Returns an owned token string (or null).
 fn fetchToken(allocator: std.mem.Allocator, io: std.Io, registry: []const u8, repo: []const u8) !?[]u8 {
-    // Only the docker.io flow is wired here; other registries pull anonymously.
-    if (!std.mem.eql(u8, registry, "registry-1.docker.io")) return null;
+    // Generic Bearer-token flow: probe the registry's /v2/ endpoint, read the
+    // WWW-Authenticate challenge (realm + service), and fetch a pull token. Works
+    // for any registry (docker.io, ghcr.io, public.ecr.aws, quay.io, ...). A
+    // registry that answers /v2/ without a challenge is pulled anonymously.
+    const probe_url = try std.fmt.allocPrint(allocator, "https://{s}/v2/", .{registry});
+    defer allocator.free(probe_url);
 
-    const token_url = try std.fmt.allocPrint(
-        allocator,
-        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{s}:pull",
-        .{repo},
-    );
-    defer allocator.free(token_url);
+    const headers = curlHeaders(allocator, io, probe_url) catch return null;
+    defer allocator.free(headers);
 
-    const body = try curlGet(allocator, io, token_url, &.{});
+    const chal = findHeader(headers, "www-authenticate") orelse return null; // 200 -> anonymous
+    if (std.ascii.indexOfIgnoreCase(chal, "bearer") == null) return null;
+    const realm = extractAuthParam(allocator, chal, "realm") orelse return Error.AuthFailed;
+
+    // realm?scope=repository:<repo>:pull[&service=<service>]
+    var url_buf: std.ArrayList(u8) = .empty;
+    defer url_buf.deinit(allocator);
+    try url_buf.appendSlice(allocator, realm);
+    try url_buf.appendSlice(allocator, "?scope=repository:");
+    try url_buf.appendSlice(allocator, repo);
+    try url_buf.appendSlice(allocator, ":pull");
+    if (extractAuthParam(allocator, chal, "service")) |service| {
+        try url_buf.appendSlice(allocator, "&service=");
+        try url_buf.appendSlice(allocator, service);
+    }
+
+    const body = try curlGet(allocator, io, url_buf.items, &.{});
     defer allocator.free(body);
 
     const TokenDoc = struct {
@@ -790,6 +818,31 @@ fn fetchToken(allocator: std.mem.Allocator, io: std.Io, registry: []const u8, re
     defer parsed.deinit();
     const tok = parsed.value.token orelse parsed.value.access_token orelse return Error.AuthFailed;
     return try allocator.dupe(u8, tok);
+}
+
+/// Return the trimmed value of the first header named `name` (case-insensitive)
+/// from a raw header block. Slice points into `headers`.
+fn findHeader(headers: []const u8, name: []const u8) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, headers, '\n');
+    while (it.next()) |line| {
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const hname = std.mem.trim(u8, line[0..colon], " \r\t");
+        if (std.ascii.eqlIgnoreCase(hname, name)) {
+            return std.mem.trim(u8, line[colon + 1 ..], " \r\t");
+        }
+    }
+    return null;
+}
+
+/// Extract `key="value"` from a WWW-Authenticate challenge. Slice points into
+/// `chal`. `allocator` is used only for a tiny scratch needle.
+fn extractAuthParam(allocator: std.mem.Allocator, chal: []const u8, key: []const u8) ?[]const u8 {
+    const needle = std.fmt.allocPrint(allocator, "{s}=\"", .{key}) catch return null;
+    defer allocator.free(needle);
+    const start = std.ascii.indexOfIgnoreCase(chal, needle) orelse return null;
+    const vstart = start + needle.len;
+    const end = std.mem.indexOfScalarPos(u8, chal, vstart, '"') orelse return null;
+    return chal[vstart..end];
 }
 
 // ---------------------------------------------------------------------------
