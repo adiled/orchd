@@ -25,6 +25,9 @@ pub const BootSpec = struct {
     kernel_path: [:0]const u8,
     cmdline: [:0]const u8,
     rootfs_path: [:0]const u8,
+    /// Optional initramfs (cpio) image. When set, the kernel unpacks it as the
+    /// root and runs /init from it (no block-device root needed).
+    ramdisk_path: ?[:0]const u8 = null,
     cpu_count: usize,
     memory_bytes: u64,
     vsock_port: u32,
@@ -50,6 +53,8 @@ var g_start_err: ?objc.Id = null;
 var g_connect_sema: ?objc.dispatch_semaphore_t = null;
 var g_connect_conn: ?objc.Id = null;
 var g_connect_err: ?objc.Id = null;
+/// Retained connection so its fileDescriptor stays open after connect returns.
+var g_held_conn: ?objc.Id = null;
 
 // dispatch_async trampoline state: the work to run on the VM queue plus a
 // semaphore to tell the caller that work (and its own completion handler) has
@@ -74,6 +79,13 @@ fn startCompletion(block: *anyopaque, err: ?objc.Id) callconv(.c) void {
 /// connectToPort:completionHandler: block. void(^)(VZVirtioSocketConnection*, NSError*).
 fn connectCompletion(block: *anyopaque, conn: ?objc.Id, err: ?objc.Id) callconv(.c) void {
     _ = block;
+    // Retain the connection HERE, while it is still alive on the VM queue. It is
+    // autoreleased, so by the time connect() reads the global it would otherwise
+    // be freed (its fileDescriptor closed). One VM per process: hold it global.
+    if (conn) |c| {
+        _ = objc.msgSend(?objc.Id, c, objc.sel("retain"), .{});
+        g_held_conn = c;
+    }
     g_connect_conn = conn;
     g_connect_err = err;
     if (g_connect_sema) |s| _ = objc.dispatch_semaphore_signal(s);
@@ -145,6 +157,11 @@ fn buildConfig(spec: BootSpec) BuildError!objc.Id {
     const kernel_url = objc.fileURL(spec.kernel_path);
     const boot_loader = objc.msgSend(?objc.Id, boot_alloc, objc.sel("initWithKernelURL:"), .{kernel_url}) orelse return error.BuildFailed;
     objc.msgSend(void, boot_loader, objc.sel("setCommandLine:"), .{objc.nsString(spec.cmdline)});
+
+    // Optional initramfs: the kernel unpacks it as root and runs /init from it.
+    if (spec.ramdisk_path) |rd| {
+        objc.msgSend(void, boot_loader, objc.sel("setInitialRamdiskURL:"), .{objc.fileURL(rd)});
+    }
 
     // Root disk: VZDiskImageStorageDeviceAttachment initWithURL:readOnly:error:
     // then wrapped in a VZVirtioBlockDeviceConfiguration. A nonexistent rootfs
@@ -263,6 +280,7 @@ pub const Vm = struct {
             _ = objc.dispatch_semaphore_wait(g_connect_sema.?, objc.DISPATCH_TIME_FOREVER);
 
             if (g_connect_err == null and g_connect_conn != null) {
+                // Already retained in connectCompletion (still alive there).
                 const fd = objc.msgSend(c_int, g_connect_conn, objc.sel("fileDescriptor"), .{});
                 return @as(std.posix.fd_t, fd);
             }

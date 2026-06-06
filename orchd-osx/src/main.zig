@@ -24,6 +24,10 @@ const exec_set_mod = @import("exec_set.zig");
 const vz = @import("vz.zig");
 const vm = @import("vm.zig");
 const kernel = @import("kernel.zig");
+const proto = @import("proto.zig");
+
+extern "c" fn chmod(path: [*:0]const u8, mode: c_uint) c_int;
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -59,7 +63,7 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("error: run requires <name> <image>\n", .{});
             std.process.exit(2);
         };
-        cmdRun(allocator, slot, image);
+        cmdRun(allocator, io, slot, image);
     } else if (std.mem.eql(u8, command, "wait")) {
         cmdWait(allocator, slot);
     } else if (std.mem.eql(u8, command, "stop")) {
@@ -68,6 +72,8 @@ pub fn main(init: std.process.Init) !void {
         cmdDelete(allocator, slot);
     } else if (std.mem.eql(u8, command, "vz-selftest")) {
         try cmdSelftest(allocator);
+    } else if (std.mem.eql(u8, command, "vz-run-test")) {
+        try cmdRunTest(allocator, io);
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(2);
@@ -122,6 +128,49 @@ fn cmdSelftest(allocator: std.mem.Allocator) !void {
     std.debug.print("vz-selftest: shut down. ok.\n", .{});
 }
 
+/// vz-run-test: the full pipeline against a controlled rootfs (no network).
+/// Builds an ext4 with a tiny static payload, boots it, and runs the payload
+/// over vsock. Proves ext4 mount + guest init as PID 1 + vsock exec + exit code.
+fn cmdRunTest(allocator: std.mem.Allocator, io: std.Io) !void {
+    const rootfs = "/tmp/orchd-osx-runtest/rootfs";
+    std.Io.Dir.cwd().createDirPath(io, rootfs) catch {};
+
+    const payload = readPayload(allocator, io) catch |e| {
+        std.debug.print("vz-run-test: cannot read payload binary ({s})\n", .{@errorName(e)});
+        std.process.exit(1);
+    };
+    defer allocator.free(payload);
+
+    const ppath = rootfs ++ "/payload";
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = ppath, .data = payload }) catch |e| {
+        std.debug.print("vz-run-test: cannot write payload ({s})\n", .{@errorName(e)});
+        std.process.exit(1);
+    };
+    _ = chmod(ppath, 0o755);
+
+    const spec = proto.ExecSpec{ .argv = &.{"/payload"}, .env = &.{}, .cwd = "/" };
+    std.debug.print("vz-run-test: booting container, exec /payload ...\n", .{});
+
+    const code = vz.runRootfs(allocator, io, "runtest", rootfs, spec) catch |e| {
+        std.debug.print("vz-run-test: FAILED ({s})\n", .{@errorName(e)});
+        std.process.exit(1);
+    };
+    std.debug.print("vz-run-test: container exited with code {d}\n", .{code});
+    std.process.exit(@intCast(code));
+}
+
+/// Read the test payload binary: $ORCHD_OSX_PAYLOAD, else next to this exe.
+fn readPayload(allocator: std.mem.Allocator, io: std.Io) ![]u8 {
+    if (getenv("ORCHD_OSX_PAYLOAD")) |p| {
+        return std.Io.Dir.cwd().readFileAlloc(io, std.mem.span(p), allocator, .unlimited);
+    }
+    const dir = try std.process.executableDirPathAlloc(io, allocator);
+    defer allocator.free(dir);
+    const path = try std.fmt.allocPrint(allocator, "{s}/orchd-osx-payload", .{dir});
+    defer allocator.free(path);
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
+}
+
 extern "c" fn sleep(seconds: c_uint) c_uint;
 fn csleep(seconds: c_uint) c_uint {
     return sleep(seconds);
@@ -167,8 +216,9 @@ fn cmdCleanup(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !
     vz.delete(allocator, name) catch {};
 }
 
-fn cmdRun(allocator: std.mem.Allocator, id: []const u8, image: []const u8) void {
-    vz.run(allocator, id, image) catch |err| backendStub("run", id, err);
+fn cmdRun(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []const u8) void {
+    const code = vz.run(allocator, io, id, image) catch |err| backendStub("run", id, err);
+    std.process.exit(@intCast(code));
 }
 
 fn cmdWait(allocator: std.mem.Allocator, id: []const u8) void {

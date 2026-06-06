@@ -43,6 +43,18 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(guest);
 
+    // Test payload: a tiny static aarch64-linux binary the guest init execs to
+    // prove the full pipeline (ext4 -> boot -> vsock -> init -> exec -> exit).
+    const payload = b.addExecutable(.{
+        .name = "orchd-osx-payload",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/payload/main.zig"),
+            .target = guest_target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(payload);
+
     // ── Tests ───────────────────────────────────────────────────────────────
     const test_step = b.step("test", "Run unit tests");
 
@@ -54,6 +66,7 @@ pub fn build(b: *std.Build) void {
         "src/kernel.zig",
         "src/oci.zig",
         "src/ext4.zig",
+        "src/cpio.zig",
     }) |root| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
