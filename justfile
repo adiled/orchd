@@ -11,6 +11,7 @@ prefix   := env_var_or_default("PREFIX", "/usr/local")
 kernel   := env_var_or_default("HOME", "") / ".orch/osx/kernel/vmlinux"
 kata_ver := "3.31.0"
 opt      := "ReleaseSafe"
+linux_tgt := "aarch64-unknown-linux-musl"
 
 # List recipes.
 default:
@@ -25,6 +26,19 @@ build:
 
 build-orchd:
     cargo build --release
+
+# Cross-compile a static aarch64-linux orchd: drops into any Linux VM with no
+# runtime deps. Feeds the dogfood harness (orchd-osx boots a Linux guest that
+# runs this orchd against containerd). On a Linux host, `just build-orchd` is
+# already a Linux build; this recipe cross-builds from macOS. Needs rustup
+# (`brew install rustup`) and cargo-zigbuild (`cargo install cargo-zigbuild`).
+build-linux:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+    rustup target add {{linux_tgt}} >/dev/null 2>&1 || true
+    cargo zigbuild --target {{linux_tgt}} --release
+    echo "linux orchd -> target/{{linux_tgt}}/release/orchd ($(file -b target/{{linux_tgt}}/release/orchd | cut -d, -f1-2))"
 
 [macos]
 build-apple:
