@@ -83,6 +83,8 @@ fn mountEssentials() void {
     _ = linux.mount("proc", "/proc", "proc", 0, 0);
     _ = linux.mount("sysfs", "/sys", "sysfs", 0, 0);
     _ = linux.mount("devtmpfs", "/dev", "devtmpfs", 0, 0);
+    // cgroup v2 unified hierarchy, for resource caps (best-effort).
+    _ = linux.mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0, 0);
 }
 
 /// Read eth0's IPv4 (set by the kernel's ip=dhcp) and send it to the host as an
@@ -259,6 +261,69 @@ fn applyUser(user: []const u8) void {
     if (linux.errno(ru) != .SUCCESS) report("orchd-init: setuid failed\n");
 }
 
+// ── cgroup v2 caps (unified hierarchy at /sys/fs/cgroup) ────────────────────
+
+const cgroup_dir = "/sys/fs/cgroup/orchd";
+
+/// Open `path`, write `data`, close. Best-effort (cgroup files reject some
+/// writes depending on controller availability; we never make it fatal).
+fn writeFileStr(path: [*:0]const u8, data: []const u8) void {
+    const fd_u = linux.open(path, .{ .ACCMODE = .WRONLY }, 0);
+    if (@as(isize, @bitCast(fd_u)) < 0) return;
+    const fd: fd_t = @intCast(fd_u);
+    defer _ = linux.close(fd);
+    _ = linux.write(fd, data.ptr, data.len);
+}
+
+/// Create the container cgroup and write its caps. Runs once in PID 1 before
+/// the fork. Returns true if a cgroup was created (so the child should join it).
+/// memory is intentionally NOT capped here: the VM's RAM size is the memory
+/// boundary. Caps cpu (cpu.max), pids (pids.max), io (io.weight).
+fn setupCgroup(limits: proto.Limits) bool {
+    if (limits.cpu_quota_us == 0 and limits.pids_max == 0 and limits.io_weight == 0 and limits.memory_max == 0)
+        return false;
+
+    // Delegate controllers from the root to its subtree (root is exempt from
+    // the no-internal-process rule). One write per controller: a missing
+    // controller fails only its own write.
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+cpu");
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+memory");
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+pids");
+    writeFileStr("/sys/fs/cgroup/cgroup.subtree_control", "+io");
+
+    if (linux.errno(linux.mkdir(cgroup_dir, 0o755)) != .SUCCESS) {
+        // EEXIST is fine; anything else and the cgroup is unusable.
+    }
+
+    var b: [96]u8 = undefined;
+    if (limits.memory_max != 0) {
+        const s = std.fmt.bufPrint(&b, "{d}", .{limits.memory_max}) catch return true;
+        writeFileStr(cgroup_dir ++ "/memory.max", s);
+    }
+    if (limits.cpu_quota_us != 0) {
+        const period = if (limits.cpu_period_us != 0) limits.cpu_period_us else 100000;
+        const s = std.fmt.bufPrint(&b, "{d} {d}", .{ limits.cpu_quota_us, period }) catch return true;
+        writeFileStr(cgroup_dir ++ "/cpu.max", s);
+    }
+    if (limits.pids_max != 0) {
+        const s = std.fmt.bufPrint(&b, "{d}", .{limits.pids_max}) catch return true;
+        writeFileStr(cgroup_dir ++ "/pids.max", s);
+    }
+    if (limits.io_weight != 0) {
+        const s = std.fmt.bufPrint(&b, "default {d}", .{limits.io_weight}) catch return true;
+        writeFileStr(cgroup_dir ++ "/io.weight", s);
+    }
+    return true;
+}
+
+/// Move the calling process into the container cgroup. Runs in the child as
+/// root, before dropping privileges (cgroup files are root-owned).
+fn joinCgroup() void {
+    var b: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&b, "{d}", .{linux.getpid()}) catch return;
+    writeFileStr(cgroup_dir ++ "/cgroup.procs", s);
+}
+
 fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
     if (spec.argv.len == 0) return error.EmptyArgv;
 
@@ -273,6 +338,9 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
     var err_pipe: [2]fd_t = undefined;
     if (linux.errno(linux.pipe2(&out_pipe, .{})) != .SUCCESS) return error.PipeFailed;
     if (linux.errno(linux.pipe2(&err_pipe, .{})) != .SUCCESS) return error.PipeFailed;
+
+    // Create the container cgroup (PID 1, pre-fork); the child joins it below.
+    const in_cgroup = setupCgroup(spec.limits);
 
     const pid: i32 = @bitCast(@as(u32, @truncate(linux.fork())));
     if (pid < 0) return error.ForkFailed;
@@ -291,7 +359,8 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
         _ = linux.close(err_pipe[1]);
         if (null_fd >= 0) _ = linux.close(null_fd);
 
-        // Apply resource caps (as root), then drop to the requested user.
+        // Join the cgroup, apply rlimits (as root), then drop to the user.
+        if (in_cgroup) joinCgroup();
         applyLimits(spec.limits);
         applyUser(spec.user);
 
