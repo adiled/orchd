@@ -23,6 +23,7 @@ const vsock = @import("vsock.zig");
 const kernel = @import("kernel.zig");
 const proto = @import("proto.zig");
 const types = @import("types.zig");
+const portfwd = @import("portfwd.zig");
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 extern "c" fn getpid() c_int;
@@ -69,6 +70,7 @@ pub const RunOpts = struct {
     memory_bytes: u64 = MEMORY_DEFAULT_BYTES,
     cpu_count: usize = CPUS_DEFAULT,
     shares: []const vm.Share = &.{},
+    publish: []const portfwd.Forward = &.{},
 };
 
 /// Cached image process config, stored next to the unpacked rootfs so re-runs
@@ -96,6 +98,8 @@ pub const Overrides = struct {
     limits: proto.Limits = .{},
     /// Host directories to share into the guest via virtio-fs (service.volumes).
     volumes: []const types.Volume = &.{},
+    /// Ports to forward host->guest (from service.publish).
+    publish: []const types.Port = &.{},
 };
 
 /// Boot a container for `image` and block until its process exits; returns the
@@ -139,10 +143,17 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []co
     }
     spec.mounts = mounts.items;
 
+    // Published ports -> host->guest TCP forwarders (host:port -> guest:container).
+    var fwds: std.ArrayList(portfwd.Forward) = .empty;
+    for (ov.publish) |p| {
+        fwds.append(arena, .{ .host_port = p.host, .guest_port = p.container, .address = p.address }) catch continue;
+    }
+
     const opts = RunOpts{
         .memory_bytes = if (ov.memory_mb) |m| m * 1024 * 1024 else MEMORY_DEFAULT_BYTES,
         .cpu_count = ov.cpus orelse CPUS_DEFAULT,
         .shares = shares.items,
+        .publish = fwds.items,
     };
     return runRootfs(allocator, io, id, rootfs, spec, opts);
 }
@@ -280,7 +291,7 @@ pub fn runRootfs(
         return Error.ExecFailed;
     };
 
-    const code = vsock.runStdio(allocator, fd, spec) catch |e| {
+    const code = vsock.runStdio(allocator, fd, spec, opts.publish) catch |e| {
         std.debug.print("orchd-osx run: exec over vsock failed ({s})\n", .{@errorName(e)});
         return Error.ExecFailed;
     };

@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const proto = @import("proto.zig");
+const portfwd = @import("portfwd.zig");
 
 // std.posix lacks write in this Zig; go straight to libSystem, same pattern as
 // proto.zig. We only need write here for forwarding guest output.
@@ -30,6 +31,7 @@ pub fn run(
     spec: proto.ExecSpec,
     out_fd: proto.fd_t,
     err_fd: proto.fd_t,
+    publish: []const portfwd.Forward,
 ) !i32 {
     const encoded = try spec.encode(allocator);
     defer allocator.free(encoded);
@@ -42,7 +44,12 @@ pub fn run(
         switch (frame.type) {
             .stdout => try writeAll(out_fd, frame.body),
             .stderr => try writeAll(err_fd, frame.body),
-            .ipinfo => std.debug.print("orchd-osx: container ip {s}\n", .{frame.body}),
+            .ipinfo => {
+                std.debug.print("orchd-osx: container ip {s}\n", .{frame.body});
+                // Now that we know the guest IP, stand up host->guest port
+                // forwarders for the published ports (spawnAll copies the ip).
+                if (publish.len > 0) portfwd.spawnAll(allocator, frame.body, publish);
+            },
             .exit => {
                 if (frame.body.len < 4) return error.Truncated;
                 return std.mem.readInt(i32, frame.body[0..4], .little);
@@ -55,8 +62,8 @@ pub fn run(
 
 /// Convenience wrapper that forwards to the host's own stdout (fd 1) and
 /// stderr (fd 2). This is what production callers want.
-pub fn runStdio(allocator: std.mem.Allocator, fd: proto.fd_t, spec: proto.ExecSpec) !i32 {
-    return run(allocator, fd, spec, 1, 2);
+pub fn runStdio(allocator: std.mem.Allocator, fd: proto.fd_t, spec: proto.ExecSpec, publish: []const portfwd.Forward) !i32 {
+    return run(allocator, fd, spec, 1, 2, publish);
 }
 
 fn writeAll(fd: proto.fd_t, bytes: []const u8) !void {
@@ -111,7 +118,7 @@ test "run sends exec, forwards stdout/stderr, returns exit code" {
     // stdout, stderr, and a final exit(7).
     const guest = try std.Thread.spawn(.{}, guestPeer, .{ a, guest_fd });
 
-    const code = try run(a, host_fd, spec, out_pipe[1], err_pipe[1]);
+    const code = try run(a, host_fd, spec, out_pipe[1], err_pipe[1], &.{});
     guest.join();
 
     try testing.expectEqual(@as(i32, 7), code);
