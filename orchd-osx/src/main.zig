@@ -57,7 +57,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "cleanup")) {
         try cmdCleanup(allocator, io, slot);
     } else if (std.mem.eql(u8, command, "pull")) {
-        notImplemented("pull", slot);
+        cmdPull(allocator, io, slot);
     } else if (std.mem.eql(u8, command, "run")) {
         const image = it.next() orelse {
             std.debug.print("error: run requires <name> <image>\n", .{});
@@ -82,15 +82,20 @@ pub fn main(init: std.process.Init) !void {
 
 fn cmdCheck() void {
     if (vz.available()) {
-        std.debug.print(
-            "orchd-osx ok: Virtualization.framework backend (scaffold)\n" ++
-                "  control plane wired; container exec pending (see ORCHD_OSX.md)\n",
-            .{},
-        );
+        std.debug.print("orchd-osx ok: Virtualization.framework backend ready\n", .{});
         return;
     }
     std.debug.print("error: Virtualization.framework backend unavailable on this host\n", .{});
     std.process.exit(1);
+}
+
+/// pull: pre-fetch + cache the image so a later run starts fast (pre_start).
+fn cmdPull(allocator: std.mem.Allocator, io: std.Io, image: []const u8) void {
+    vz.pullImage(allocator, io, image) catch |err| {
+        std.debug.print("orchd-osx pull {s}: {s}\n", .{ image, @errorName(err) });
+        std.process.exit(1);
+    };
+    std.debug.print("orchd-osx pull: {s} cached\n", .{image});
 }
 
 /// vz-selftest: boot our pinned kernel with NO rootfs and confirm VZ's start

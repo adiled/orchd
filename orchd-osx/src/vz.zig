@@ -86,6 +86,9 @@ pub const Overrides = struct {
 /// ~/.orch/osx/images/<ref>, so an image is pulled at most once. `ov` layers the
 /// Service config (env/cmd/entrypoint/workdir) on top of the image defaults.
 pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []const u8, ov: Overrides) Error!i64 {
+    // Ensure the image is pulled + cached (no-op if already cached).
+    try pullImage(allocator, io, image);
+
     const cache = try imageCacheDir(allocator, image);
     defer allocator.free(cache);
     const rootfs = try std.fmt.allocPrint(allocator, "{s}/rootfs", .{cache});
@@ -97,29 +100,35 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []co
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var base: CacheMeta = undefined;
-    if (fileExists(meta_path)) {
-        // Cache hit: reuse the unpacked rootfs and stored config (no pull).
-        const data = std.Io.Dir.cwd().readFileAlloc(io, meta_path, arena, .unlimited) catch
-            return Error.ImageFailed;
-        base = std.json.parseFromSliceLeaky(CacheMeta, arena, data, .{}) catch
-            return Error.ImageFailed;
-    } else {
-        makePath(io, cache);
-        const img = oci.resolve(allocator, io, cache, image) catch |e| {
-            std.debug.print("orchd-osx run: image resolve failed ({s})\n", .{@errorName(e)});
-            return Error.ImageFailed;
-        };
-        base = .{ .entrypoint = img.entrypoint, .cmd = img.cmd, .env = img.env, .cwd = img.cwd };
-        // Persist the config so the next run skips the pull.
-        if (std.json.Stringify.valueAlloc(allocator, base, .{})) |j| {
-            defer allocator.free(j);
-            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = meta_path, .data = j }) catch {};
-        } else |_| {}
-    }
+    const data = std.Io.Dir.cwd().readFileAlloc(io, meta_path, arena, .unlimited) catch
+        return Error.ImageFailed;
+    const base = std.json.parseFromSliceLeaky(CacheMeta, arena, data, .{}) catch
+        return Error.ImageFailed;
 
     const spec = applyOverrides(arena, base, ov) catch return Error.ImageFailed;
     return runRootfs(allocator, io, id, rootfs, spec);
+}
+
+/// Pull `image` into the cache if it is not already there. Idempotent: a no-op
+/// on a cache hit. This is what the `pull` / pre_start step runs.
+pub fn pullImage(allocator: std.mem.Allocator, io: std.Io, image: []const u8) Error!void {
+    const cache = try imageCacheDir(allocator, image);
+    defer allocator.free(cache);
+    const meta_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{cache});
+    defer allocator.free(meta_path);
+
+    if (fileExists(meta_path)) return; // already cached
+
+    makePath(io, cache);
+    const img = oci.resolve(allocator, io, cache, image) catch |e| {
+        std.debug.print("orchd-osx pull: image resolve failed ({s})\n", .{@errorName(e)});
+        return Error.ImageFailed;
+    };
+    const base = CacheMeta{ .entrypoint = img.entrypoint, .cmd = img.cmd, .env = img.env, .cwd = img.cwd };
+    if (std.json.Stringify.valueAlloc(allocator, base, .{})) |j| {
+        defer allocator.free(j);
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = meta_path, .data = j }) catch {};
+    } else |_| {}
 }
 
 /// Compose the final ExecSpec from the image defaults + Service overrides, with
