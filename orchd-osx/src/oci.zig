@@ -585,6 +585,14 @@ pub fn resolve(
     work_dir: []const u8,
     reference: []const u8,
 ) !Image {
+    // Offline path: a reference naming a local OCI image layout on disk (starts
+    // with '/' or '.', which no registry reference ever does) is unpacked
+    // directly, no network. This is how the dogfood harness boots a locally
+    // assembled image (containerd + runc + orchd) with no registry push.
+    if (reference.len > 0 and (reference[0] == '/' or reference[0] == '.')) {
+        return unpackLayout(allocator, io, reference, work_dir);
+    }
+
     const ref = try parseReference(allocator, reference);
     defer ref.deinit(allocator);
 
