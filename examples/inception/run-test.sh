@@ -5,8 +5,16 @@
 set -u
 log(){ echo "[inception] $*"; }
 export PATH=/opt/tools/bin:$PATH
+# debian-slim ships no CA bundle, so containerd's TLS can't verify the registry.
+# Point Go's TLS at the host CA bundle we mounted in.
+export SSL_CERT_FILE=/opt/tools/ca-bundle.crt
 
 log "STAGE 0: $(uname -m); cgroup=$(stat -fc %T /sys/fs/cgroup 2>/dev/null); ip=$(ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | grep -v 127 | head -1)"
+
+# Put the CA bundle where apt/openssl look too (not just Go's SSL_CERT_FILE),
+# so apt-get over https works to install iptables below.
+mkdir -p /etc/ssl/certs
+cp /opt/tools/ca-bundle.crt /etc/ssl/certs/ca-certificates.crt
 
 # nerdctl looks for CNI plugins at /opt/cni/bin by default; point it at the
 # mounted plugins so container networking works.

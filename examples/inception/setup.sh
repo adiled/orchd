@@ -28,6 +28,13 @@ echo "==> copying the in-VM driver + inner workload into tools/"
 cp "$here/run-test.sh" "$tools/run-test.sh"
 cp "$here/inner-Orchfile" "$tools/inner-Orchfile"
 
+echo "==> staging a CA bundle (debian-slim has none; containerd needs it for registry TLS)"
+if [ -f /etc/ssl/cert.pem ]; then
+  cp /etc/ssl/cert.pem "$tools/ca-bundle.crt"
+else
+  curl -fsSL https://curl.se/ca/cacert.pem -o "$tools/ca-bundle.crt"
+fi
+
 echo "==> writing runnable Orchfile.run (absolute volume path)"
 sed "s|__TOOLS__|$tools|" "$here/Orchfile" > "$here/Orchfile.run"
 
