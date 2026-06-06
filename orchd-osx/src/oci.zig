@@ -514,8 +514,32 @@ pub fn unpackLayout(
     const chosen_digest = pickLayoutManifest(index.value.manifests, "arm64", "linux") orelse
         return Error.NoMatchingPlatform;
 
-    // 2. image manifest -> config + layers.
-    const manifest_body = try readBlob(allocator, io, oci_layout_dir, chosen_digest);
+    // 2. Resolve to a concrete image manifest. The chosen descriptor may be an
+    // image manifest directly, or a nested image-index pointing at per-platform
+    // manifests (what `container image save` emits: index.json -> image-index ->
+    // arm64 manifest). Follow nested indexes until we reach a manifest with
+    // layers.
+    var manifest_body = try readBlob(allocator, io, oci_layout_dir, chosen_digest);
+    var nest_guard: u8 = 0;
+    while (looksLikeIndex(manifest_body)) {
+        nest_guard += 1;
+        if (nest_guard > 8) {
+            allocator.free(manifest_body);
+            return Error.ManifestError;
+        }
+        const nested = std.json.parseFromSlice(LayoutIndexDoc, allocator, manifest_body, .{ .ignore_unknown_fields = true }) catch {
+            allocator.free(manifest_body);
+            return Error.ManifestError;
+        };
+        defer nested.deinit();
+        const next_digest = pickLayoutManifest(nested.value.manifests, "arm64", "linux") orelse {
+            allocator.free(manifest_body);
+            return Error.NoMatchingPlatform;
+        };
+        const next_body = try readBlob(allocator, io, oci_layout_dir, next_digest);
+        allocator.free(manifest_body);
+        manifest_body = next_body;
+    }
     defer allocator.free(manifest_body);
     const manifest = try std.json.parseFromSlice(ManifestDoc, allocator, manifest_body, .{ .ignore_unknown_fields = true });
     defer manifest.deinit();
