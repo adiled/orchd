@@ -16,6 +16,10 @@ ln -sf target/release/orchd /usr/local/bin/orchd
 
 You also need [`orch`](https://github.com/adiled/orch) on your PATH (it reads the file).
 
+For containers on a Mac, `just install` builds everything (orchd, the runtime,
+and the guest pieces), fetches the kernel, and installs it in one step (needs
+Zig 0.16 and `brew install just`).
+
 ## Write an Orchfile
 
 Put a file named `Orchfile` next to your project. Each `SERVICE` is one thing to
