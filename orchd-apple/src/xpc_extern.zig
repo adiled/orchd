@@ -115,6 +115,28 @@ pub extern fn xpc_dictionary_get_data(
     length: *usize,
 ) ?[*]const u8;
 
+pub extern fn xpc_dictionary_set_bool(
+    xdict: xpc_object_t,
+    key: [*:0]const u8,
+    value: bool,
+) void;
+
+/// Wrap a file descriptor as an XPC object (dups the fd). Used to pass stdio
+/// over XPC in containerBootstrap.
+pub extern fn xpc_fd_create(fd: c_int) ?xpc_object_t;
+
+/// Set an arbitrary xpc_object_t value (e.g. an fd) into a dictionary.
+pub extern fn xpc_dictionary_set_value(
+    xdict: xpc_object_t,
+    key: [*:0]const u8,
+    value: xpc_object_t,
+) void;
+
+pub extern fn xpc_dictionary_get_int64(
+    xdict: xpc_object_t,
+    key: [*:0]const u8,
+) i64;
+
 // --- Object lifecycle ---
 
 pub extern fn xpc_get_type(object: xpc_object_t) xpc_type_t;

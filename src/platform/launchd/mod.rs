@@ -9,8 +9,8 @@ use crate::platform::{Platform, PlatformError};
 use crate::types::Service;
 
 use generate::{
-    build_dep_gates, build_supervise_spec, generate_service_plist,
-    generate_service_plist_with_deps, plist_filename, plist_label, supervise_spec_path,
+    build_dep_gates, build_supervise_spec, generate_service_plist_with_deps, plist_filename,
+    plist_label, supervise_spec_path,
 };
 
 pub struct LaunchdPlatform;
@@ -37,8 +37,6 @@ pub fn plist_dest_path(config: &Config, label: &str) -> PathBuf {
 }
 
 impl Platform for LaunchdPlatform {
-    fn name(&self) -> &str { "launchd" }
-
     fn check(&self) -> Result<(), PlatformError> {
         // launchctl must exist on PATH.
         let ok = std::process::Command::new("launchctl")
@@ -52,31 +50,6 @@ impl Platform for LaunchdPlatform {
             ));
         }
         Ok(())
-    }
-
-    fn generate(
-        &self,
-        service: &Service,
-        exec_set: &ExecSet,
-        config: &Config,
-    ) -> Result<Vec<String>, PlatformError> {
-        let content = generate_service_plist(service, exec_set, config);
-        let units_dir = config.units_dir();
-        std::fs::create_dir_all(&units_dir)?;
-
-        let path = units_dir.join(plist_filename(config, &service.name));
-        std::fs::write(&path, &content)?;
-        Ok(vec![path.display().to_string()])
-    }
-
-    fn generate_target(
-        &self,
-        _services: &[&Service],
-        _config: &Config,
-    ) -> Result<String, PlatformError> {
-        // launchd has no native "target" concept — services are managed
-        // individually. Return empty path to keep the trait happy.
-        Ok(String::new())
     }
 
     fn install(&self, config: &Config) -> Result<(), PlatformError> {
@@ -189,11 +162,6 @@ fn current_uid() -> String {
     }
 }
 
-#[allow(dead_code)]
-pub fn label_for(config: &Config, service_name: &str) -> String {
-    plist_label(config, service_name)
-}
-
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
@@ -211,7 +179,6 @@ mod tests {
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),
-            orch_bin: PathBuf::from("orch"),
             namespace: "orch".to_string(),
             args: Vec::new(),
             verbose: false,
@@ -238,17 +205,5 @@ mod tests {
         let cfg = test_config(Scope::User);
         let p = plist_dest_path(&cfg, "orch.web");
         assert_eq!(p, PathBuf::from("/Users/test/Library/LaunchAgents/orch.web.plist"));
-    }
-
-    #[test]
-    fn test_platform_name__is_launchd() {
-        let p = LaunchdPlatform::new();
-        assert_eq!(p.name(), "launchd");
-    }
-
-    #[test]
-    fn test_label_for__namespace_dot_name() {
-        let cfg = test_config(Scope::User);
-        assert_eq!(label_for(&cfg, "web"), "orch.web");
     }
 }

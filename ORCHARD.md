@@ -17,15 +17,15 @@ without forking orchd. If they can, orchd fits any orchard anyone designs.
 ## The pipeline
 
 ```
-Orchfiles --graft--> spec --sow--> sown --plant--> artifacts --tend--> running grove
-         (compose)        (runtime)       (platform)          (init system)
+Orchfiles --graft--> spec --sow--> cuttings --plant--> beds --tend--> trees (in a grove)
+         (compose)        (runtime)         (platform)         (init system)
 ```
 
 | Stage | Verb | Transform | Owner |
 |-------|------|-----------|-------|
 | compose overlays | **graft** | base + overlays + args into one merged spec | `orch` (the parser) |
-| runtime | **sow** | spec into each service annotated with its ExecSet | `orchd sow` |
-| platform | **plant** | sown into native artifacts (units / plists / specs) | `orchd plant` |
+| runtime | **sow** | spec into a cutting per service (service + its ExecSet) | `orchd sow` |
+| platform | **plant** | cuttings into beds (each service's native files) | `orchd plant` |
 | activate + supervise | **tend** | install + start; keep alive | `orchd tend` |
 
 Why the words earn their place:
@@ -46,35 +46,35 @@ flags, and is stateless. Only `tend` has side effects.
 
 ### `orchd sow --runtime <name>`
 
-Runtime transform. Annotates each service with the execution commands for the
-chosen runtime. Pure: no image pulls, no I/O. (Pulls become a `pre_start` command,
-run later at tend time.)
+Runtime transform. Takes a cutting of each service: the service plus the
+execution commands for the chosen runtime. Pure: no image pulls, no I/O. (Pulls
+become a `pre_start` command, run later at tend time.)
 
 ```
 stdin:   Spec        (the `orch parse` JSON)
-stdout:  Sown
+stdout:  Cuttings
 flags:   --runtime {bare|apple|containerd|podman}
 ```
 
 ### `orchd plant --platform <name> --namespace <ns>`
 
-Platform transform. Renders each sown tree into the native artifacts its init
-system plants and tends.
+Platform transform. Prepares a bed for each cutting: the native files its init
+system plants and tends, grouped per service.
 
 ```
-stdin:   Sown
-stdout:  Artifacts
+stdin:   Cuttings
+stdout:  Beds
 flags:   --platform {systemd|launchd}  --namespace <ns>  --scope {user|system}
 ```
 
 ### `orchd tend`
 
-Activation. Writes artifacts to the init system, installs, and starts. The only
-side-effecting row. `orchd tend <label>` (single service) is the supervising leaf
-the platform points launchd/systemd at.
+Activation. Writes every bed's files to the init system, installs, and starts.
+The only side-effecting row. `orchd tend <label>` (single service) is the
+supervising leaf the platform points launchd/systemd at.
 
 ```
-stdin:   Artifacts   (or reads a directory)
+stdin:   Beds   (or reads a directory)
 effects: install + start; or supervise one service for its lifetime
 flags:   --start/--no-start  --scope
 ```
@@ -108,16 +108,17 @@ The merged Orchfile, emitted by `orch parse`. Abbreviated:
 }
 ```
 
-### Sown (sow to plant)
+### Cuttings (sow to plant)
 
-The spec, with each service paired to its ExecSet. The runtime's knowledge is now
-fully captured in command strings; `plant` never needs to know which runtime ran.
+A cutting per service: the service paired to its ExecSet. The runtime's knowledge
+is now fully captured in command strings; `plant` never needs to know which
+runtime ran.
 
 ```json
 {
   "version": "0.2.1",
   "runtime": "apple",
-  "trees": [
+  "cuttings": [
     {
       "service": { "...": "the full Service object from the spec" },
       "exec": {
@@ -134,24 +135,31 @@ fully captured in command strings; `plant` never needs to know which runtime ran
 `exec` is the orthogonality contract: every runtime writes it, every platform reads
 it, neither knows the other. (This is why `ExecSet` is serde-serializable.)
 
-### Artifacts (plant to tend)
+### Beds (plant to tend)
 
-The native files plus where they go. `kind` lets `tend` install each correctly.
+One bed per service, grouping that service's native files (so a plist and its
+supervise-spec, or a unit and its ready-gate, stay together). The grove handle
+gets its own bed. `kind` lets `tend` install each file correctly.
 
 ```json
 {
   "platform": "launchd",
   "namespace": "orch",
   "scope": "user",
-  "artifacts": [
-    { "kind": "plist",         "label": "orch.nginx", "path": "~/Library/LaunchAgents/orch.nginx.plist", "content": "<?xml ..." },
-    { "kind": "supervise-spec","label": "orch.nginx", "path": "~/.orch/supervise/orch.nginx.json",       "content": "{ ... }" }
+  "beds": [
+    {
+      "label": "orch.nginx",
+      "artifacts": [
+        { "kind": "supervise-spec", "path": "~/.orch/supervise/orch.nginx.json",     "content": "{ ... }" },
+        { "kind": "plist",          "path": "~/Library/LaunchAgents/orch.nginx.plist","content": "<?xml ..." }
+      ]
+    }
   ]
 }
 ```
 
-On systemd the same shape carries `kind: "unit"`, `kind: "ready-gate"`, and a
-`kind: "target"` for the grove handle.
+On systemd a service bed carries `kind: "unit"` (plus `kind: "ready-gate"` when it
+is a healthchecked dependency), and the grove gets a bed of one `kind: "target"`.
 
 ## The walks (porcelain): sugar over rows
 
@@ -161,7 +169,7 @@ for the common path; they are never the only path.
 ```
 orchd grow    ==  orch parse $files | orchd sow | orchd plant | orchd tend
 orchd survey  ==  status of a grove (walk it, query the init system, report health)
-orchd fell    ==  tend --stop, then remove artifacts (down + clean)
+orchd fell    ==  stop the grove, then remove its beds
 ```
 
 A grower who wants control reaches past `grow` for the individual rows. orchd never
@@ -176,7 +184,7 @@ the `--namespace` carried through `plant`/`tend`; on systemd it is also a real
 
 Naming a grove, pinning which composition produced it, detecting drift: these are
 **policy**. A consuming project layers them by capturing the rows' JSON (the Spec it
-grafted, the Artifacts it planted) wherever and however it wants. orchd does not
+grafted, the Beds it planted) wherever and however it wants. orchd does not
 prescribe a manifest format; it emits the material a manifest would be made of.
 
 ## Splicing: the whole point
@@ -186,33 +194,49 @@ A consuming project inserts its own intelligence between any two rows:
 ```sh
 orch parse base.orch staging.orch --arg env=staging \
   | orchd sow --runtime apple \
-  | jq '.trees |= map(select(.service.disabled | not))' \   # their policy, not orchd's
-  | my-secret-injector \                                     # their step
+  | jq '.cuttings |= map(select(.service.disabled | not))' \   # their policy, not orchd's
+  | my-secret-injector \                                       # their step
   | orchd plant --platform launchd --namespace staging \
-  | tee staging.artifacts.json \                             # their manifest, their format
+  | tee staging.beds.json \                                    # their manifest, their format
   | orchd tend
 ```
 
-orchd sees none of this. It transformed Spec into Sown and Sown into Artifacts; the
-grower arranged the orchard.
+orchd sees none of this. It transformed Spec into Cuttings and Cuttings into Beds;
+the grower arranged the orchard.
 
-## Today to target
+## Status
 
-The mechanism already exists inside the monolithic `generate`/`up`; the work is to
-expose the seams, not to invent new logic.
+The rows ship as real subcommands. `sow` and `plant` are pure pipes; `tend` is
+the side-effecting activator. The porcelain (`generate`/`up`) still exists
+unchanged and remains the common path.
 
-| Concern | Today | Target |
-|---------|-------|--------|
-| runtime transform | `runtime::exec_set` inside `engine::generate` | `orchd sow` (pipe) |
-| platform transform | `platform::generate_all` inside `engine::generate` | `orchd plant` (pipe) |
-| activation | `platform::install` + `lifecycle::start` | `orchd tend` |
-| image pull | eager `runtime::prepare` at generate | a `pre_start` command run at tend |
-| common path | `generate` / `up` (monolith) | `grow` (walk over rows) |
-| composition / manifests | implicit (flags + prefix scan) | the grower's policy, over the rows' JSON |
+| Concern | Implementation | Row |
+|---------|----------------|-----|
+| runtime transform | `runtime::exec_set` | `orchd sow` (pure pipe, shipped) |
+| platform transform | `platform` generators | `orchd plant` (pure pipe, shipped) |
+| activation | write + `install` + `start` | `orchd tend` (shipped) |
+| image pull | `pre_start` command run at tend | (no eager prepare in the rows) |
+| common path | `generate` / `up` (monolith) | porcelain, unchanged |
+| composition / manifests | the grower's policy, over the rows' JSON | out of scope, by design |
 
-`ExecSet` is already serde-serializable, so the first seam is open. The rest is
-lifting the internal calls to `stdin/stdout` boundaries and letting the walks
-re-express as compositions of the rows.
+Worked end to end on a real Mac:
+
+```sh
+orch parse Orchfile \
+  | orchd --runtime bare  sow \
+  | jq '.cuttings |= map(select(.service.name != "worker"))' \   # a grower's own step
+  | orchd --platform launchd --namespace orch --user plant \
+  | orchd --platform launchd --namespace orch --user tend     # service running under launchd
+```
+
+Two contracts to remember when piping by hand:
+- `sow` is the only stage that takes `--runtime`; `plant`/`tend` take `--platform`.
+- `plant` bakes absolute paths into each artifact from its config, so `plant` and
+  `tend` must be given the same `--namespace` / `--scope` / `--state-dir`. The
+  porcelain and any single flag set do this for you.
+
+Still future work: re-expressing `generate`/`up` as a `grow` walk over the rows so
+there is one code path, not two.
 
 ## Litmus
 

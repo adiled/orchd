@@ -136,8 +136,8 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "orch"
-version = "0.2.1"
-source = "git+https://github.com/adiled/orch.git?branch=main#1ede6e64d8a0a62849c6b56386e5508a0449113d"
+version = "0.2.2"
+source = "git+https://github.com/adiled/orch.git?branch=main#c82793db52baaf4a2922efe0300e6ed7e90f5f92"
 dependencies = [
  "serde",
  "serde_json",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "orchd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "libc",

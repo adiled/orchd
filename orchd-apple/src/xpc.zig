@@ -16,6 +16,7 @@ const c = @import("xpc_extern.zig");
 pub const ROUTE_KEY = "com.apple.container.xpc.route";
 pub const ERROR_KEY = "com.apple.container.xpc.error";
 pub const SERVICE_NAME = "com.apple.container.apiserver";
+pub const IMAGES_SERVICE = "com.apple.container.core.container-core-images";
 
 // Routes (XPCRoute enum rawValues from apple/container).
 pub const Route = struct {
@@ -24,6 +25,13 @@ pub const Route = struct {
     pub const container_delete = "containerDelete";
     pub const container_list = "containerList";
     pub const container_state = "containerState";
+    pub const get_default_kernel = "getDefaultKernel";
+    pub const image_list = "imageList";
+    pub const content_get = "contentGet";
+    pub const container_create = "containerCreate";
+    pub const container_bootstrap = "containerBootstrap";
+    pub const container_start_process = "containerStartProcess";
+    pub const container_wait = "containerWait";
 };
 
 // Field keys (XPCKeys enum rawValues from apple/container).
@@ -32,7 +40,22 @@ pub const Key = struct {
     pub const stop_options = "stopOptions";
     pub const force_delete = "forceDelete";
     pub const containers = "containers";
+    pub const list_filters = "listFilters";
     pub const api_server_version = "apiServerVersion";
+    pub const system_platform = "systemPlatform";
+    pub const kernel = "kernel";
+    pub const image_descriptions = "imageDescriptions";
+    pub const digest = "digest";
+    pub const content_path = "contentPath";
+    pub const container_config = "containerConfig";
+    pub const container_options = "containerOptions";
+    pub const init_image = "initImage";
+    pub const dynamic_env = "dynamicEnv";
+    pub const process_identifier = "processIdentifier";
+    pub const stdin = "stdin";
+    pub const stdout = "stdout";
+    pub const stderr = "stderr";
+    pub const exit_code = "exitCode";
 };
 
 // ─── Connection ────────────────────────────────────────────────────────────
@@ -43,7 +66,12 @@ pub const Connection = struct {
     /// Open a connection to com.apple.container.apiserver.
     /// Does not block — activation is lazy; first send() establishes contact.
     pub fn initApiServer() Connection {
-        const conn = c.xpc_connection_create_mach_service(SERVICE_NAME, null, 0);
+        return initService(SERVICE_NAME);
+    }
+
+    /// Open a connection to a named mach service (e.g. the core-images service).
+    pub fn initService(name: [*:0]const u8) Connection {
+        const conn = c.xpc_connection_create_mach_service(name, null, 0);
         // libxpc requires a valid event-handler block before activate(); we pass
         // a statically-built no-op global block (see noop_block below).
         c.xpc_connection_set_event_handler(conn, @ptrCast(&noop_block));
@@ -106,6 +134,17 @@ pub const Message = struct {
         c.xpc_dictionary_set_string(self.handle, key.ptr, value.ptr);
     }
 
+    /// Wrap an fd as an XPC fd object and set it (for stdio over XPC).
+    pub fn setFd(self: Message, key: [:0]const u8, fd: c_int) void {
+        if (c.xpc_fd_create(fd)) |obj| {
+            c.xpc_dictionary_set_value(self.handle, key.ptr, obj);
+        }
+    }
+
+    pub fn getInt64(self: Message, key: [:0]const u8) i64 {
+        return c.xpc_dictionary_get_int64(self.handle, key.ptr);
+    }
+
     /// Returns a slice pointing into the XPC object — valid only while self is alive.
     pub fn getString(self: Message, key: [:0]const u8) ?[:0]const u8 {
         const ptr = c.xpc_dictionary_get_string(self.handle, key.ptr) orelse return null;
@@ -124,13 +163,15 @@ pub const Message = struct {
     }
 
     pub fn setBool(self: Message, key: [:0]const u8, value: bool) void {
-        // XPC dictionaries store bools as int64.
-        c.xpc_dictionary_set_string(self.handle, key.ptr, if (value) "true" else "false");
+        c.xpc_dictionary_set_bool(self.handle, key.ptr, value);
     }
 
     /// Check the error key. Returns XpcError.ApiError if the server sent an error payload.
     pub fn checkError(self: Message) XpcError!void {
-        if (self.getData(ERROR_KEY)) |_| return XpcError.ApiError;
+        if (self.getData(ERROR_KEY)) |err_data| {
+            std.debug.print("xpc apiserver error: {s}\n", .{err_data});
+            return XpcError.ApiError;
+        }
     }
 };
 

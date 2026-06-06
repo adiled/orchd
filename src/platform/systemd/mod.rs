@@ -35,10 +35,6 @@ impl SystemdPlatform {
 }
 
 impl Platform for SystemdPlatform {
-    fn name(&self) -> &str {
-        "systemd"
-    }
-
     fn check(&self) -> Result<(), PlatformError> {
         if !std::path::Path::new("/run/systemd/system").exists() {
             return Err(PlatformError::PrerequisiteMissing(
@@ -48,47 +44,6 @@ impl Platform for SystemdPlatform {
         Ok(())
     }
 
-
-    fn generate(
-        &self,
-        service: &Service,
-        exec_set: &ExecSet,
-        config: &Config,
-    ) -> Result<Vec<String>, PlatformError> {
-        // This method generates a single service's unit.
-        // The caller (engine) handles ready gates and target separately.
-        // We need all services' info for ready gates, which the engine provides
-        // via generate_all().
-        //
-        // For the Platform trait, we generate just this service's unit.
-        // The ready_gates set is empty here — the engine calls generate_all() instead.
-        let ready_gates = std::collections::HashSet::new();
-        let unit_content = generate_service_unit(service, exec_set, config, &ready_gates);
-        let unit_name = config.unit_name(&service.name);
-
-        let units_dir = config.units_dir();
-        std::fs::create_dir_all(&units_dir)?;
-
-        let unit_path = units_dir.join(&unit_name);
-        std::fs::write(&unit_path, &unit_content)?;
-
-        Ok(vec![unit_path.display().to_string()])
-    }
-
-    fn generate_target(
-        &self,
-        _services: &[&Service],
-        config: &Config,
-    ) -> Result<String, PlatformError> {
-        let content = generate_target(config);
-        let units_dir = config.units_dir();
-        std::fs::create_dir_all(&units_dir)?;
-
-        let target_path = units_dir.join(config.target_name());
-        std::fs::write(&target_path, &content)?;
-
-        Ok(target_path.display().to_string())
-    }
 
     fn install(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();

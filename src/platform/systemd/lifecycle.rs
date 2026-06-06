@@ -33,19 +33,6 @@ pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
     }
 }
 
-pub fn restart(services: &[String], config: &Config) -> Result<(), PlatformError> {
-    if services.is_empty() {
-        stop(services, config)?;
-        start(services, config)
-    } else {
-        let unit_names: Vec<String> = services.iter().map(|s| config.unit_name(s)).collect();
-        let args: Vec<&str> = std::iter::once("restart")
-            .chain(unit_names.iter().map(|s| s.as_str()))
-            .collect();
-        systemctl(&args, config)
-    }
-}
-
 /// Service status info parsed from systemctl show.
 #[derive(Debug)]
 pub struct ServiceStatus {

@@ -11,6 +11,7 @@ const clap = @import("clap");
 
 const client_mod = @import("client.zig");
 const exec_set_mod = @import("exec_set.zig");
+const oci_mod = @import("oci.zig");
 const prepare_mod = @import("prepare.zig");
 const types = @import("types.zig");
 
@@ -54,6 +55,26 @@ pub fn main(init: std.process.Init) !void {
         try cmdPrepare(allocator, io, namespace);
     } else if (std.mem.eql(u8, command, "cleanup")) {
         try cmdCleanup(allocator, io, namespace);
+    } else if (std.mem.eql(u8, command, "list")) {
+        try cmdList(allocator, io);
+    } else if (std.mem.eql(u8, command, "stop")) {
+        try cmdStop(allocator, namespace); // namespace slot carries the container id
+    } else if (std.mem.eql(u8, command, "delete")) {
+        try cmdDelete(allocator, namespace);
+    } else if (std.mem.eql(u8, command, "kernel")) {
+        try cmdKernel(allocator, io);
+    } else if (std.mem.eql(u8, command, "images")) {
+        try cmdImages(allocator, io);
+    } else if (std.mem.eql(u8, command, "content")) {
+        try cmdContent(allocator, io, namespace); // namespace slot carries the digest
+    } else if (std.mem.eql(u8, command, "resolve")) {
+        try cmdResolve(allocator, io, namespace); // namespace slot carries the image ref
+    } else if (std.mem.eql(u8, command, "run")) {
+        try cmdRun(allocator, io, positionals);
+    } else if (std.mem.eql(u8, command, "wait")) {
+        try cmdWait(allocator, namespace); // namespace slot carries the container id
+    } else if (std.mem.eql(u8, command, "pull")) {
+        try cmdPull(io, namespace); // namespace slot carries the image ref
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -75,6 +96,185 @@ fn cmdCheck(allocator: std.mem.Allocator) !void {
     std.debug.print("container-apiserver ok (version: {s})\n", .{version});
 }
 
+/// `list`: query container states via XPC and emit the daemon's structured JSON.
+fn cmdList(allocator: std.mem.Allocator, io: std.Io) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    const json = c.containerList(allocator) catch |err| {
+        std.debug.print("error: container list failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(json);
+
+    var buf: [4096]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(json);
+    try fw.interface.flush();
+}
+
+/// `stop <id>`: stop a container via XPC (SIGTERM, 5s grace).
+fn cmdStop(allocator: std.mem.Allocator, id: []const u8) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    c.containerStop(allocator, id, 5) catch |err| {
+        std.debug.print("error: stop {s} failed ({s})\n", .{ id, @errorName(err) });
+        std.process.exit(1);
+    };
+}
+
+/// `delete <id>`: force-delete a container via XPC.
+fn cmdDelete(allocator: std.mem.Allocator, id: []const u8) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    c.containerDelete(allocator, id, true) catch |err| {
+        std.debug.print("error: delete {s} failed ({s})\n", .{ id, @errorName(err) });
+        std.process.exit(1);
+    };
+}
+
+/// `kernel`: resolve the default kernel via XPC and emit its JSON.
+fn cmdKernel(allocator: std.mem.Allocator, io: std.Io) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    // SystemPlatform for the Linux guest on Apple Silicon.
+    const platform = "{\"os\":\"linux\",\"architecture\":\"arm64\"}";
+    const json = c.getDefaultKernel(allocator, platform) catch |err| {
+        std.debug.print("error: getDefaultKernel failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(json);
+    var buf: [4096]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(json);
+    try fw.interface.flush();
+}
+
+/// `images`: list images via the core-images XPC service.
+fn cmdImages(allocator: std.mem.Allocator, io: std.Io) !void {
+    const json = client_mod.imageList(allocator) catch |err| {
+        std.debug.print("error: imageList failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(json);
+    var buf: [8192]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(json);
+    try fw.interface.flush();
+}
+
+/// `content <digest>`: fetch a content-store blob via XPC and emit it.
+fn cmdContent(allocator: std.mem.Allocator, io: std.Io, digest: []const u8) !void {
+    const data = client_mod.contentGet(allocator, io, digest) catch |err| {
+        std.debug.print("error: contentGet failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(data);
+    var buf: [8192]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    try fw.interface.writeAll(data);
+    try fw.interface.flush();
+}
+
+/// `resolve <ref>`: walk the OCI config over XPC and print initProcess fields.
+fn cmdResolve(allocator: std.mem.Allocator, io: std.Io, reference: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const r = oci_mod.resolve(arena, io, reference) catch |err| {
+        std.debug.print("error: resolve failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    std.debug.print("image:       {s} ({s})\n", .{ r.image_digest, r.image_media_type });
+    std.debug.print("executable:  {s}\n", .{r.executable});
+    std.debug.print("arguments:   ", .{});
+    for (r.arguments) |a| std.debug.print("{s} ", .{a});
+    std.debug.print("\nworkingdir:  {s}\n", .{r.working_directory});
+    std.debug.print("environment: {d} vars\n", .{r.environment.len});
+}
+
+/// `run <id> <image> [--spec <base64>]`: create and start a container entirely
+/// over XPC. The optional `--spec` carries the full service config as a base64
+/// JSON blob (env, env_files, memory, cpus, workdir, entrypoint, cmd); when
+/// absent, behaviour matches the old hardcoded defaults so nothing regresses.
+fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const u8) !void {
+    if (positionals.len < 3) {
+        std.debug.print("usage: orchd-apple run <id> <image> [--spec <base64>]\n", .{});
+        std.process.exit(1);
+    }
+    const id = positionals[1];
+    const reference = positionals[2];
+
+    // Optional `--spec <base64>` anywhere after the image positional.
+    var spec_b64: ?[]const u8 = null;
+    var i: usize = 3;
+    while (i < positionals.len) : (i += 1) {
+        if (std.mem.eql(u8, positionals[i], "--spec")) {
+            if (i + 1 >= positionals.len) {
+                std.debug.print("usage: orchd-apple run <id> <image> [--spec <base64>]\n", .{});
+                std.process.exit(1);
+            }
+            spec_b64 = positionals[i + 1];
+            i += 1;
+        }
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Decode --spec (base64 -> JSON -> Service) into overrides, if present.
+    var overrides: ?types.Service = null;
+    var parsed: ?std.json.Parsed(types.Service) = null;
+    defer if (parsed) |p| p.deinit();
+    if (spec_b64) |b64| {
+        const dec = std.base64.standard.Decoder;
+        const json = arena.alloc(u8, dec.calcSizeForSlice(b64) catch {
+            std.debug.print("error: --spec is not valid base64\n", .{});
+            std.process.exit(1);
+        }) catch return error.OutOfMemory;
+        dec.decode(json, b64) catch {
+            std.debug.print("error: --spec is not valid base64\n", .{});
+            std.process.exit(1);
+        };
+        parsed = std.json.parseFromSlice(types.Service, allocator, json, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        }) catch |err| {
+            std.debug.print("error: --spec JSON parse failed ({s})\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        overrides = parsed.?.value;
+    }
+
+    oci_mod.run(arena, allocator, io, id, reference, overrides) catch |err| {
+        std.debug.print("error: run failed ({s})\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    std.debug.print("started {s} ({s}) via XPC\n", .{ id, reference });
+}
+
+/// `wait <id>`: block until the container exits, then exit with its code. This
+/// is the long-running foreground process the supervisor tracks.
+fn cmdWait(allocator: std.mem.Allocator, id: []const u8) !void {
+    const c = client_mod.Client.init();
+    defer c.deinit();
+    const code = c.containerWait(allocator, id) catch |err| {
+        std.debug.print("error: wait {s} failed ({s})\n", .{ id, @errorName(err) });
+        std.process.exit(1);
+    };
+    std.process.exit(@intCast(code & 0xff));
+}
+
+/// `pull <image>`: ensure the image is in the content store. (Image fetch over
+/// XPC is the one remaining CLI holdout; runs `container image pull`.)
+fn cmdPull(io: std.Io, image: []const u8) !void {
+    prepare_mod.pullImage(io, image) catch |err| {
+        std.debug.print("error: pull {s} failed ({s})\n", .{ image, @errorName(err) });
+        std.process.exit(1);
+    };
+}
+
 fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
     const svc = readService(allocator, io) catch std.process.exit(1);
     defer svc.deinit();
@@ -82,7 +282,7 @@ fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !
         std.debug.print("error: apple runtime only handles container-mode services\n", .{});
         std.process.exit(1);
     }
-    const es = exec_set_mod.build(allocator, svc.value, namespace) catch |err| {
+    const es = exec_set_mod.build(allocator, io, svc.value, namespace) catch |err| {
         std.debug.print("error: exec-set: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };

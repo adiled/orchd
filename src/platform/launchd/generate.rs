@@ -14,12 +14,9 @@ pub struct DepGate {
     pub required: bool,
 }
 
-/// Generate a launchd .plist (Property List XML) for a service.
-pub fn generate_service_plist(
-    service: &Service,
-    exec_set: &ExecSet,
-    config: &Config,
-) -> String {
+/// Generate a launchd .plist with no dependencies (test convenience).
+#[cfg(test)]
+pub fn generate_service_plist(service: &Service, exec_set: &ExecSet, config: &Config) -> String {
     generate_service_plist_with_deps(service, exec_set, config, &[])
 }
 
@@ -362,7 +359,6 @@ mod tests {
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),
-            orch_bin: PathBuf::from("orch"),
             namespace: "orch".to_string(),
             args: Vec::new(),
             verbose: false,
