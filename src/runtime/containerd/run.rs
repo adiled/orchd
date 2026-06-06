@@ -1,10 +1,10 @@
-//! containerd_run: orchd's in-process containerd client (mode-2).
+//! containerd_run: orchd's in-process containerd client.
 //!
 //! `orchd containerd-run --spec <base64>` is the foreground process the
 //! supervisor tracks for a containerd-backed service. It pulls the image (via
 //! containerd's Transfer service), prepares a writable snapshot, creates and
 //! starts the container task over containerd's gRPC socket, waits for it to
-//! exit, and on SIGTERM kills + deletes it. No nerdctl, no ctr, no Docker.
+//! exit, and on SIGTERM kills + deletes it.
 //!
 //! The container runs in the HOST network namespace (the OCI spec omits a new
 //! network namespace), so there is no CNI/iptables dependency.

@@ -27,14 +27,14 @@ service spec (memory / cpus / volumes).
 | `inner-Orchfile` | the **inner** workload the containerd runtime runs (an alpine container) |
 | `setup.sh` | stages `tools/` (builds the Linux orchd, fetches the containerd toolchain) and writes a runnable `Orchfile.run` |
 
-`tools/` (the ~600 MB containerd toolchain + the Linux orchd) is fetched by
+`tools/` (containerd + runc + the Linux orchd) is fetched/built by
 `setup.sh`, not committed.
 
 ## Run it
 
 ```sh
 cd examples/inception
-./setup.sh                 # builds the linux orchd, fetches nerdctl-full, stages tools/
+./setup.sh                 # builds the linux orchd, fetches containerd + runc, stages tools/
 ORCHD_APPLE_MODE=osx \
   orchd --orchfile Orchfile.run --runtime apple --platform orchdi \
         --state-dir ./state grow
@@ -43,8 +43,8 @@ tail -f ./state/logs/orch.ctd.log
 ```
 
 You should see, from inside the VM: containerd come up, then
-`orchd --runtime containerd grow` pull and run the inner alpine container,
-and `nerdctl ps` list it.
+`orchd --runtime containerd grow` pull and run the inner alpine container, and
+containerd's own `ctr tasks ls` report it RUNNING.
 
 ## Requirements
 

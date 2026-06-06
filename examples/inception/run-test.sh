@@ -1,8 +1,8 @@
 #!/bin/sh
 # Runs INSIDE the orchd-osx VM (Debian). Starts containerd from the mounted
 # toolchain, then has our Linux orchd drive it via the in-process containerd
-# backend (mode-2 gRPC) — no nerdctl, no CNI, no iptables. Verbose so the
-# detached supervisor's logfile tells the whole story.
+# backend (the container runs in the host netns, so no CNI/iptables). Verbose so
+# the detached supervisor's logfile tells the whole story.
 set -u
 log(){ echo "[inception] $*"; }
 export PATH=/opt/tools/bin:$PATH
@@ -24,7 +24,7 @@ if ! ctr version >/dev/null 2>&1; then
 fi
 log "containerd up: $(ctr --version 2>/dev/null)"
 
-log "STAGE 2: orchd drives containerd via its gRPC API (mode-2, no nerdctl)"
+log "STAGE 2: orchd drives containerd via its gRPC API"
 mkdir -p /run/orchd
 orchd --orchfile /opt/tools/inner-Orchfile --runtime containerd --platform orchdi --state-dir /run/orchd grow
 log "orchd grow rc=$?"

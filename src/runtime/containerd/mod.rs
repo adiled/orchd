@@ -1,5 +1,5 @@
-//! containerd runtime (mode-2): orchd drives containerd's gRPC API directly,
-//! in process. No nerdctl, no ctr, no Docker. Linux.
+//! containerd runtime: orchd drives containerd's gRPC API directly, in process.
+//! Linux.
 //!
 //! The exec_set for a container is a single stateless foreground command,
 //! `orchd containerd-run --spec <base64>` (see `run`), which the supervisor
@@ -142,8 +142,8 @@ impl Runtime for ContainerdRuntime {
         };
 
         // start is a single foreground process the supervisor tracks: it pulls
-        // (if needed), runs the container task over containerd's gRPC socket,
-        // and on SIGTERM kills + deletes it. No nerdctl, no CNI, no iptables.
+        // (if needed), runs the container task over containerd's gRPC socket in
+        // the host network namespace, and on SIGTERM kills + deletes it.
         let start = format!(
             "{} containerd-run --spec {}",
             Self::orchd_exe(),
@@ -190,7 +190,7 @@ mod tests {
         svc.cmd = Some("sleep 300".into());
 
         let exec = rt.exec_set(&svc).expect("exec_set");
-        // start is `<orchd> containerd-run --spec <b64>`; no nerdctl, no separate
+        // start is `<orchd> containerd-run --spec <b64>`; no separate
         // pull/stop/post_stop (containerd-run owns the whole lifecycle).
         assert!(exec.start.contains(" containerd-run --spec "));
         assert!(exec.pre_start.is_none());

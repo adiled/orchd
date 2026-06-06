@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Stage the inception example: build the static Linux orchd, fetch the
-# containerd toolchain (nerdctl-full: containerd + runc + cni + nerdctl), and
-# lay out tools/ exactly as the Orchfile mounts it. Idempotent.
+# Stage the inception example: build the static Linux orchd, fetch the container
+# runtime (containerd + runc), and lay out tools/ exactly as the Orchfile mounts
+# it. Idempotent.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -14,14 +14,19 @@ echo "==> building static aarch64-linux orchd"
 ( cd "$repo" && just build-linux >/dev/null )
 cp "$repo/target/aarch64-unknown-linux-musl/release/orchd" "$tools/bin/orchd"
 
-echo "==> fetching nerdctl-full (containerd + runc + cni + nerdctl)"
+echo "==> fetching containerd + runc (the runtime)"
 if [ ! -e "$tools/bin/containerd" ]; then
-  url="$(gh api repos/containerd/nerdctl/releases/latest \
-        --jq '.assets[] | select(.name | test("nerdctl-full-.*-linux-arm64.tar.gz$")) | .browser_download_url' 2>/dev/null \
-        || curl -fsSL https://api.github.com/repos/containerd/nerdctl/releases/latest \
-           | grep -o 'https://[^"]*nerdctl-full-[^"]*-linux-arm64.tar.gz' | head -1)"
-  echo "    $url"
-  curl -fsSL "$url" | tar -xz -C "$tools"
+  cver="$(gh api repos/containerd/containerd/releases/latest --jq '.tag_name' | sed 's/^v//')"
+  echo "    containerd ${cver}"
+  curl -fsSL "https://github.com/containerd/containerd/releases/download/v${cver}/containerd-${cver}-linux-arm64.tar.gz" \
+    | tar -xz -C "$tools"   # -> bin/containerd, bin/ctr, bin/containerd-shim-runc-v2
+fi
+if [ ! -e "$tools/bin/runc" ]; then
+  rurl="$(gh api repos/opencontainers/runc/releases/latest \
+        --jq '.assets[] | select(.name=="runc.arm64") | .browser_download_url')"
+  echo "    $rurl"
+  curl -fsSL "$rurl" -o "$tools/bin/runc"
+  chmod +x "$tools/bin/runc"
 fi
 
 echo "==> copying the in-VM driver + inner workload into tools/"
