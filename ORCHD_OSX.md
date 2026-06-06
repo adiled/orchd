@@ -104,3 +104,38 @@ while it lives), exactly like the XPC path.
 cd orchd-osx && zig build           # binary at zig-out/bin/orchd-osx
 zig build test                      # exec-set unit tests
 ```
+
+## Scouted: the boot contract (step 0)
+
+Building blocks come from ONE pre-installed source, Virtualization.framework
+(full ObjC API in the SDK headers). Everything inside the VM is ours. We reuse
+nothing from the container daemon.
+
+Minimal headless Linux boot, with the exact selectors `objc.zig` must call:
+
+- `VZLinuxBootLoader` — `initWithKernelURL:`, `.commandLine` (kernel cmdline),
+  `.initialRamdiskURL` is **nullable**, so an initramfs is optional. We boot
+  kernel + ext4 rootfs directly with `init=/orchd-init`.
+- Root disk — `VZDiskImageStorageDeviceAttachment initWithURL:readOnly:error:`
+  -> `VZVirtioBlockDeviceConfiguration initWithAttachment:`. Our ext4 file
+  appears as `/dev/vda` (cmdline `root=/dev/vda rw`).
+- vsock — `VZVirtioSocketDeviceConfiguration` (plain init) on the config; after
+  start, `vm.socketDevices[0]` is a `VZVirtioSocketDevice`.
+- **Host<->guest pipe** — `connectToPort:completionHandler:` returns a
+  `VZVirtioSocketConnection` exposing a raw `fileDescriptor` (int). We read/write
+  bytes on that fd directly. **No gRPC, no HTTP/2, no protobuf** — our own
+  length-prefixed protocol (our init listens on a vsock port; host connects).
+- VM config — `VZVirtualMachineConfiguration`: set `bootLoader`, `CPUCount`,
+  `memorySize`, `storageDevices`, `socketDevices`, `serialPorts` (console logs),
+  `entropyDevices` (virtio-rng for boot); then `validateWithError:`.
+- Run — `VZVirtualMachine initWithConfiguration:queue:` (a serial
+  `dispatch_queue`), then `startWithCompletionHandler:`.
+
+Async to sync: `startWithCompletionHandler:` and `connectToPort:` take ObjC
+completion blocks. We already build ObjC blocks from Zig (the XPC client), and we
+own this co-process, so we wrap each in a `dispatch_semaphore` and block until
+done. No event loop, no Swift concurrency.
+
+The one external artifact: a Linux kernel (raw arm64 `Image`). macOS ships none;
+orchd-osx supplies its own (task: provide our own kernel asset). Everything else
+(guest init, vsock protocol, ext4 rootfs) we build.
