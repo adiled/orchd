@@ -538,13 +538,16 @@ fn pickLayoutManifest(manifests: []const IndexManifestRef, arch: []const u8, os:
 /// process config for the lifetime of the run); a future cleanup pass can hand
 /// back an owned struct with a deinit.
 ///
-/// This is the LIVE network path. It shares rootfs assembly (openRootfs,
-/// extractLayerBlob, parseConfig) with the offline `unpackLayout`, so the two
-/// converge on the same unpack logic. There is intentionally no test here: the
-/// unit tests must run offline, and a blocked outbound connection would hang
-/// the suite. TODO: add a gated integration test (e.g. behind an env var like
-/// ORCHD_OCI_NET_TEST=1) that pulls a tiny public image and asserts the rootfs;
-/// keep it out of the default `zig test` run so CI stays hermetic.
+/// This is the LIVE network path. All registry HTTP(S) goes through `curl`
+/// (curlGet / curlGetToFile) so the request uses the OS TLS stack and the
+/// system CA bundle; Zig 0.16's std TLS does not load system CAs and fails
+/// (TlsInitializationFailed) against docker.io's CDN. The flow is the standard
+/// Docker Registry v2 bearer-token dance: GET a pull token from auth.docker.io,
+/// then GET the manifest with Authorization: Bearer; if that manifest is an
+/// index/manifest-list, pick linux/arm64 and re-GET; then GET the config blob
+/// and each layer blob. Layers stream to a temp file (curlGetToFile) so we do
+/// not hold a whole layer in memory before extraction. Shares rootfs assembly
+/// (openRootfs, extractLayerBlob, parseConfig) with the offline `unpackLayout`.
 pub fn resolve(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -554,11 +557,17 @@ pub fn resolve(
     const ref = try parseReference(allocator, reference);
     defer ref.deinit(allocator);
 
-    var client: std.http.Client = .{ .allocator = allocator, .io = io };
-    defer client.deinit();
+    // Bearer token for this repo (docker.io requires one even for public pulls).
+    const token = try fetchToken(allocator, io, ref.registry, ref.repo);
+    defer if (token) |t| allocator.free(t);
 
-    var auth: Auth = .{};
-    defer auth.deinit(allocator);
+    var auth_buf: [4096]u8 = undefined;
+    const auth_header: ?[]const u8 = if (token) |t|
+        std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{t}) catch return Error.AuthFailed
+    else
+        null;
+
+    const accept_header = "Accept: " ++ accept_manifests;
 
     // 1. Manifest (may be an index/list -> pick linux/arm64).
     const manifest_url = try std.fmt.allocPrint(allocator, "https://{s}/v2/{s}/manifests/{s}", .{
@@ -566,7 +575,7 @@ pub fn resolve(
     });
     defer allocator.free(manifest_url);
 
-    const manifest_body = try getWithAuth(allocator, &client, &auth, ref.repo, manifest_url, accept_manifests);
+    const manifest_body = try curlGet(allocator, io, manifest_url, headerSlice(&.{ accept_header, auth_header }));
     defer allocator.free(manifest_body);
 
     var image_manifest_body = manifest_body;
@@ -583,7 +592,7 @@ pub fn resolve(
             ref.registry, ref.repo, chosen.digest,
         });
         defer allocator.free(url);
-        image_manifest_body = try getWithAuth(allocator, &client, &auth, ref.repo, url, accept_manifests);
+        image_manifest_body = try curlGet(allocator, io, url, headerSlice(&.{ accept_header, auth_header }));
         image_manifest_owned = true;
     }
 
@@ -595,22 +604,29 @@ pub fn resolve(
         ref.registry, ref.repo, manifest.value.config.digest,
     });
     defer allocator.free(config_url);
-    const config_body = try getWithAuth(allocator, &client, &auth, ref.repo, config_url, "*/*");
+    const config_body = try curlGet(allocator, io, config_url, headerSlice(&.{ "Accept: */*", auth_header }));
     defer allocator.free(config_body);
 
     const pcfg = try parseConfig(allocator, config_body);
 
     // 3. Layers -> unpack into work_dir/rootfs in order. Same rootfs assembly
-    // as the offline layout path (openRootfs + extractLayerBlob).
+    // as the offline layout path (openRootfs + extractLayerBlob). Each blob is
+    // streamed to a temp file by curl, then read back and extracted (dispatch
+    // on gzip/zstd/plain tar by magic, covering tar+gzip and tar+zstd layers).
     var rf = try openRootfs(allocator, io, work_dir);
     defer rf.dir.close(io);
+
+    const blob_path = try std.fmt.allocPrint(allocator, "{s}/.layer.blob", .{work_dir});
+    defer allocator.free(blob_path);
+    defer std.Io.Dir.cwd().deleteFile(io, blob_path) catch {};
 
     for (manifest.value.layers) |layer| {
         const url = try std.fmt.allocPrint(allocator, "https://{s}/v2/{s}/blobs/{s}", .{
             ref.registry, ref.repo, layer.digest,
         });
         defer allocator.free(url);
-        const blob = try getWithAuth(allocator, &client, &auth, ref.repo, url, "*/*");
+        try curlGetToFile(allocator, io, url, headerSlice(&.{ "Accept: */*", auth_header }), blob_path);
+        const blob = try std.Io.Dir.cwd().readFileAlloc(io, blob_path, allocator, .unlimited);
         defer allocator.free(blob);
         try extractLayerBlob(allocator, io, rf.dir, blob);
     }
@@ -640,155 +656,119 @@ fn pickPlatform(manifests: []const Descriptor, arch: []const u8, os: []const u8)
     return null;
 }
 
-// --- bearer-token auth ---
+// --- curl transport ---
 
-const Auth = struct {
-    token: ?[]u8 = null,
+/// Collapse a small fixed array of optional headers into the non-null ones.
+/// Lets call sites write `headerSlice(&.{ accept, maybe_auth })` where the auth
+/// header is `null` when there is no token.
+fn headerSlice(headers: []const ?[]const u8) []const ?[]const u8 {
+    return headers;
+}
 
-    fn deinit(self: *Auth, allocator: std.mem.Allocator) void {
-        if (self.token) |t| allocator.free(t);
-    }
-};
-
-/// GET `url`, transparently handling a 401 + WWW-Authenticate bearer challenge
-/// (docker.io flow): fetch a token from the realm, cache it, and retry once.
-fn getWithAuth(
+/// GET `url` via `curl -sSL --fail-with-body`, adding one `-H` per non-null
+/// header. Returns the response body (caller frees). On a non-zero curl exit
+/// (network error or HTTP >= 400), returns Error.CurlFailed.
+///
+/// `curl` uses the OS TLS stack and the system trust store, sidestepping Zig
+/// 0.16's std TLS (which never loads system CAs and fails against docker.io).
+fn curlGet(
     allocator: std.mem.Allocator,
-    client: *std.http.Client,
-    auth: *Auth,
-    repo: []const u8,
+    io: std.Io,
     url: []const u8,
-    accept: []const u8,
+    headers: []const ?[]const u8,
 ) ![]u8 {
-    if (try getOnce(allocator, client, auth.*, url, accept)) |body| return body;
-
-    // 401: parse the challenge from a fresh request's headers and get a token.
-    const challenge = try fetchChallenge(allocator, client, url, accept);
-    defer challenge.deinit(allocator);
-
-    const token = try fetchToken(allocator, client, challenge, repo);
-    if (auth.token) |t| allocator.free(t);
-    auth.token = token;
-
-    return (try getOnce(allocator, client, auth.*, url, accept)) orelse Error.AuthFailed;
-}
-
-/// Perform one GET. Returns the body on 2xx, null on 401 (so the caller can do
-/// the token dance), and errors on any other status.
-fn getOnce(
-    allocator: std.mem.Allocator,
-    client: *std.http.Client,
-    auth: Auth,
-    url: []const u8,
-    accept: []const u8,
-) !?[]u8 {
-    const uri = try std.Uri.parse(url);
-
-    var auth_buf: [4096]u8 = undefined;
-    var extra: [2]std.http.Header = undefined;
-    var n: usize = 0;
-    extra[n] = .{ .name = "accept", .value = accept };
-    n += 1;
-    if (auth.token) |t| {
-        const v = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{t}) catch return error.TokenTooLong;
-        extra[n] = .{ .name = "authorization", .value = v };
-        n += 1;
-    }
-
-    var req = try client.request(.GET, uri, .{ .extra_headers = extra[0..n] });
-    defer req.deinit();
-    try req.sendBodiless();
-
-    var redirect_buf: [8192]u8 = undefined;
-    var response = try req.receiveHead(&redirect_buf);
-
-    const status = response.head.status;
-    if (status == .unauthorized) return null;
-    if (@intFromEnum(status) < 200 or @intFromEnum(status) >= 300) return Error.HttpStatus;
-
-    var transfer_buf: [64 * 1024]u8 = undefined;
-    const reader = response.reader(&transfer_buf);
-    return try reader.allocRemaining(allocator, .unlimited);
-}
-
-const Challenge = struct {
-    realm: []u8,
-    service: ?[]u8,
-
-    fn deinit(self: Challenge, allocator: std.mem.Allocator) void {
-        allocator.free(self.realm);
-        if (self.service) |s| allocator.free(s);
-    }
-};
-
-/// Re-issue the GET, read the WWW-Authenticate header on the 401, and parse the
-/// bearer realm + service out of it.
-fn fetchChallenge(
-    allocator: std.mem.Allocator,
-    client: *std.http.Client,
-    url: []const u8,
-    accept: []const u8,
-) !Challenge {
-    const uri = try std.Uri.parse(url);
-    const extra = [_]std.http.Header{.{ .name = "accept", .value = accept }};
-    var req = try client.request(.GET, uri, .{ .extra_headers = &extra });
-    defer req.deinit();
-    try req.sendBodiless();
-
-    var redirect_buf: [8192]u8 = undefined;
-    var response = try req.receiveHead(&redirect_buf);
-
-    var it = response.head.iterateHeaders();
-    while (it.next()) |h| {
-        if (std.ascii.eqlIgnoreCase(h.name, "www-authenticate")) {
-            return parseBearerChallenge(allocator, h.value);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, "curl");
+    try argv.append(allocator, "-sSL");
+    try argv.append(allocator, "--fail-with-body");
+    for (headers) |h| {
+        if (h) |hv| {
+            try argv.append(allocator, "-H");
+            try argv.append(allocator, hv);
         }
     }
-    return Error.AuthFailed;
+    try argv.append(allocator, url);
+
+    const result = try std.process.run(allocator, io, .{ .argv = argv.items });
+    defer allocator.free(result.stderr);
+    errdefer allocator.free(result.stdout);
+
+    switch (result.term) {
+        .exited => |code| if (code != 0) {
+            std.log.err("curl GET {s} failed (exit {d}): {s}", .{ url, code, result.stderr });
+            return Error.CurlFailed;
+        },
+        else => {
+            std.log.err("curl GET {s} terminated abnormally", .{url});
+            return Error.CurlFailed;
+        },
+    }
+    return result.stdout;
 }
 
-/// Parse: Bearer realm="https://auth...",service="registry...",scope="..."
-fn parseBearerChallenge(allocator: std.mem.Allocator, value: []const u8) !Challenge {
-    const realm = (try kvFromChallenge(allocator, value, "realm")) orelse return Error.AuthFailed;
-    errdefer allocator.free(realm);
-    const service = try kvFromChallenge(allocator, value, "service");
-    return .{ .realm = realm, .service = service };
-}
-
-fn kvFromChallenge(allocator: std.mem.Allocator, value: []const u8, key: []const u8) !?[]u8 {
-    var needle_buf: [32]u8 = undefined;
-    const needle = std.fmt.bufPrint(&needle_buf, "{s}=\"", .{key}) catch return null;
-    const start = std.mem.indexOf(u8, value, needle) orelse return null;
-    const vstart = start + needle.len;
-    const vend = std.mem.indexOfScalarPos(u8, value, vstart, '"') orelse return null;
-    return try allocator.dupe(u8, value[vstart..vend]);
-}
-
-/// GET realm?service=...&scope=repository:<repo>:pull and pull the "token".
-fn fetchToken(
+/// GET `url` via `curl -sSL --fail -o <out_path>`, streaming the body straight
+/// to disk so large layer blobs never sit in memory. Adds one `-H` per non-null
+/// header. On a non-zero curl exit, returns Error.CurlFailed.
+fn curlGetToFile(
     allocator: std.mem.Allocator,
-    client: *std.http.Client,
-    challenge: Challenge,
-    repo: []const u8,
-) ![]u8 {
-    const token_url = if (challenge.service) |svc|
-        try std.fmt.allocPrint(allocator, "{s}?service={s}&scope=repository:{s}:pull", .{ challenge.realm, svc, repo })
-    else
-        try std.fmt.allocPrint(allocator, "{s}?scope=repository:{s}:pull", .{ challenge.realm, repo });
+    io: std.Io,
+    url: []const u8,
+    headers: []const ?[]const u8,
+    out_path: []const u8,
+) !void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, "curl");
+    try argv.append(allocator, "-sSL");
+    try argv.append(allocator, "--fail");
+    try argv.append(allocator, "-o");
+    try argv.append(allocator, out_path);
+    for (headers) |h| {
+        if (h) |hv| {
+            try argv.append(allocator, "-H");
+            try argv.append(allocator, hv);
+        }
+    }
+    try argv.append(allocator, url);
+
+    const result = try std.process.run(allocator, io, .{ .argv = argv.items });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| if (code != 0) {
+            std.log.err("curl GET {s} -> {s} failed (exit {d}): {s}", .{ url, out_path, code, result.stderr });
+            return Error.CurlFailed;
+        },
+        else => {
+            std.log.err("curl GET {s} terminated abnormally", .{url});
+            return Error.CurlFailed;
+        },
+    }
+}
+
+// --- bearer-token auth ---
+
+/// Fetch a pull token for `repo` from the registry's auth service.
+///
+/// docker.io advertises its realm/service via a 401 WWW-Authenticate challenge,
+/// but in practice the realm and service are fixed (auth.docker.io /
+/// registry.docker.io), so we hit the token endpoint directly via curl. For a
+/// non-docker.io registry that needs no token we return null and the caller
+/// makes anonymous requests. Returns an owned token string (or null).
+fn fetchToken(allocator: std.mem.Allocator, io: std.Io, registry: []const u8, repo: []const u8) !?[]u8 {
+    // Only the docker.io flow is wired here; other registries pull anonymously.
+    if (!std.mem.eql(u8, registry, "registry-1.docker.io")) return null;
+
+    const token_url = try std.fmt.allocPrint(
+        allocator,
+        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{s}:pull",
+        .{repo},
+    );
     defer allocator.free(token_url);
 
-    const uri = try std.Uri.parse(token_url);
-    var req = try client.request(.GET, uri, .{});
-    defer req.deinit();
-    try req.sendBodiless();
-
-    var redirect_buf: [8192]u8 = undefined;
-    var response = try req.receiveHead(&redirect_buf);
-    if (@intFromEnum(response.head.status) != 200) return Error.AuthFailed;
-
-    var transfer_buf: [64 * 1024]u8 = undefined;
-    const reader = response.reader(&transfer_buf);
-    const body = try reader.allocRemaining(allocator, .unlimited);
+    const body = try curlGet(allocator, io, token_url, &.{});
     defer allocator.free(body);
 
     const TokenDoc = struct {
@@ -1182,4 +1162,54 @@ test "unpackLayout: single manifest without platform falls back to first" {
     const only = try rootfs.readFileAlloc(io, "only.txt", a, .unlimited);
     defer a.free(only);
     try std.testing.expectEqualStrings("lonely\n", only);
+}
+
+// --- network integration test (live pull) ---
+//
+// Pulls docker.io/library/alpine:latest over the network and asserts the
+// unpacked rootfs. Network is available in this environment and curl uses the
+// OS TLS stack, so this runs by default. If you need to skip it on an offline
+// box, set ORCHD_OCI_SKIP_NET=1.
+
+test "resolve: pulls alpine:latest and unpacks a real rootfs" {
+    const a = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(a, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    if (std.process.hasEnvVar(a, "ORCHD_OCI_SKIP_NET") catch false) return error.SkipZigTest;
+
+    const work_dir = "oci_test_net_work";
+    std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, work_dir);
+    defer std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
+
+    const img = try resolve(a, io, work_dir, "docker.io/library/alpine:latest");
+    defer freeImage(a, img);
+
+    // Process defaults parsed from the OCI config. alpine's entrypoint is unset
+    // and its Cmd is ["/bin/sh"], env carries PATH, cwd defaults to "/".
+    try std.testing.expect(img.argv.len >= 1);
+    try std.testing.expectEqualStrings("/bin/sh", img.argv[img.argv.len - 1]);
+    try std.testing.expect(img.env.len >= 1);
+    var saw_path = false;
+    for (img.env) |e| {
+        if (std.mem.startsWith(u8, e, "PATH=")) saw_path = true;
+    }
+    try std.testing.expect(saw_path);
+    try std.testing.expect(img.cwd.len >= 1);
+
+    // Rootfs landed on disk. busybox is a real file; /bin/sh is a symlink to it.
+    var rootfs = try std.Io.Dir.cwd().openDir(io, img.rootfs_dir, .{ .iterate = true });
+    defer rootfs.close(io);
+
+    _ = rootfs.statFile(io, "bin/busybox", .{}) catch |e| {
+        std.log.err("expected bin/busybox in unpacked alpine rootfs: {}", .{e});
+        return e;
+    };
+    // /bin/sh exists (as a symlink to busybox); stat without following the link.
+    _ = rootfs.statFile(io, "bin/sh", .{ .follow_symlinks = false }) catch |e| {
+        std.log.err("expected bin/sh in unpacked alpine rootfs: {}", .{e});
+        return e;
+    };
 }

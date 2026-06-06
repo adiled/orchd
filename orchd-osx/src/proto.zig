@@ -28,6 +28,7 @@ pub const MsgType = enum(u8) {
     stdout = 2, // guest -> host: raw bytes
     stderr = 3, // guest -> host: raw bytes
     exit = 4, // guest -> host: i32 exit code (LE)
+    ipinfo = 5, // guest -> host: the container's IPv4 string (e.g. "192.168.64.2")
     _,
 };
 

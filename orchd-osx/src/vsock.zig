@@ -42,6 +42,7 @@ pub fn run(
         switch (frame.type) {
             .stdout => try writeAll(out_fd, frame.body),
             .stderr => try writeAll(err_fd, frame.body),
+            .ipinfo => std.debug.print("orchd-osx: container ip {s}\n", .{frame.body}),
             .exit => {
                 if (frame.body.len < 4) return error.Truncated;
                 return std.mem.readInt(i32, frame.body[0..4], .little);

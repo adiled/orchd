@@ -58,6 +58,10 @@ fn run() !void {
 
     const a = std.heap.page_allocator;
 
+    // Report our eth0 IPv4 to the host (best-effort) so it knows where the
+    // container is reachable. The kernel configured eth0 via ip=dhcp pre-init.
+    reportIp(conn);
+
     // Expect exactly one Exec frame to kick things off.
     const frame = (try readFrame(a, conn)) orelse return error.NoExecFrame;
     defer a.free(frame.body);
@@ -79,6 +83,29 @@ fn mountEssentials() void {
     _ = linux.mount("proc", "/proc", "proc", 0, 0);
     _ = linux.mount("sysfs", "/sys", "sysfs", 0, 0);
     _ = linux.mount("devtmpfs", "/dev", "devtmpfs", 0, 0);
+}
+
+/// Read eth0's IPv4 (set by the kernel's ip=dhcp) and send it to the host as an
+/// ipinfo frame. Best-effort: any failure is silently skipped.
+fn reportIp(conn: fd_t) void {
+    const s = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+    if (@as(isize, @bitCast(s)) < 0) return;
+    const sock: fd_t = @intCast(s);
+    defer _ = linux.close(sock);
+
+    // struct ifreq: char ifr_name[16]; union { sockaddr ifr_addr; ... } (16 B).
+    var req: [40]u8 = [_]u8{0} ** 40;
+    const name = "eth0";
+    @memcpy(req[0..name.len], name);
+
+    const r = linux.ioctl(sock, linux.SIOCGIFADDR, @intFromPtr(&req));
+    if (@as(isize, @bitCast(r)) < 0) return;
+
+    // ifr_addr is a sockaddr at offset 16; sockaddr_in.sin_addr is at +4 -> 20.
+    const ip = req[20..24];
+    var buf: [16]u8 = undefined;
+    const s_ip = std.fmt.bufPrint(&buf, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch return;
+    writeFrame(conn, .ipinfo, s_ip) catch {};
 }
 
 // ── step 2: vsock listener ──────────────────────────────────────────────────
