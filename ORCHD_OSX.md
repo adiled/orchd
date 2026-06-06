@@ -71,6 +71,43 @@ honestly (`vz.zig` returns `NotImplemented`); fill them in order.
 5. **Lifecycle** — wire create / wait / stop / delete in `vz.zig` and remove the
    stubs in `main.zig`.
 
+## Module boundaries
+
+One job per module. Boundaries are contracts: a module knows only the layer
+directly below it, never reaches past it. The unsafe and the OS-specific are
+contained, so the rest is plain testable Zig.
+
+Host side (orchd-osx binary, macOS):
+
+| Module | Single responsibility | Knows about | Never touches |
+|--------|-----------------------|-------------|---------------|
+| `main.zig` | CLI dispatch + the JSON-over-stdio protocol with orchd | types, exec_set, vz facade | objc, VZ, sockets |
+| `types.zig` | Data shapes mirroring orch (Service, ExecSet). Pure data | nothing | everything |
+| `exec_set.zig` | Pure transform Service -> ExecSet. No side effects | types | everything else |
+| `vz.zig` | Backend facade: the lifecycle verbs (prepare/run/wait/stop/delete). Composes the layers below | oci, ext4, vm, vsock | objc directly |
+| `objc.zig` | THE ONLY place that calls the Objective-C runtime: class lookup, msgSend shims, blocks, autorelease | C ABI / libobjc | VZ semantics |
+| `vm.zig` | Build VZVirtualMachineConfiguration, boot/stop a VM, hand back the vsock connection fd. async->sync via dispatch_semaphore | objc, kernel | containers, OCI, protocol |
+| `vsock.zig` | Host end of our wire protocol over the connection fd | proto, an fd | VZ, objc |
+| `proto.zig` | The host<->guest wire format (message types, framing). Single source of truth, shared with the guest | nothing | everything |
+| `oci.zig` | Image ref -> local rootfs + config (entrypoint/env/cwd) | registry/content | VMs, ext4 layout |
+| `ext4.zig` | rootfs dir -> ext4 image file | filesystem | VMs, OCI |
+| `kernel.zig` | Provide the path to our kernel asset | our asset store | everything |
+
+Guest side (separate static aarch64-linux binary):
+
+| Module | Single responsibility |
+|--------|-----------------------|
+| `guest/init.zig` | PID 1: mount rootfs, listen on vsock, exec the container process per the host's spec, stream stdio, reap, report exit |
+| `proto.zig` (shared) | Same wire contract as the host imports |
+
+The key containment boundaries:
+- **`objc.zig`** is the FFI airlock: unsafe `objc_msgSend` in, typed Zig out.
+  Nobody else calls the runtime.
+- **`proto.zig`** is the host<->guest contract: both ends compile the same file,
+  so the wire can never drift.
+- **`vz.zig`** is the facade orchd-osx presents upward; `main.zig` is the
+  contract with orchd. Neither leaks the layers beneath.
+
 ## Protocol (the contract with the Rust envelope)
 
 ```
