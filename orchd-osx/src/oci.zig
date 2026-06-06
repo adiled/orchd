@@ -239,9 +239,16 @@ pub fn extractLayerTar(
 ) !void {
     var name_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    // Diagnostics make the iterator SKIP entry types it does not model (device
+    // nodes, fifos, hardlinks) instead of erroring with TarUnsupportedHeader.
+    // Real images (nginx etc.) carry such entries; skipping them is fine for a
+    // container rootfs.
+    var diag: std.tar.Diagnostics = .{ .allocator = allocator };
+    defer diag.deinit();
     var it: std.tar.Iterator = .init(tar_reader, .{
         .file_name_buffer = &name_buf,
         .link_name_buffer = &link_buf,
+        .diagnostics = &diag,
     });
 
     while (try it.next()) |entry| {
@@ -306,7 +313,6 @@ pub fn extractLayerTar(
                 var fw = f.writerStreaming(io, &wbuf);
                 try it.streamRemaining(entry, &fw.interface);
                 try fw.interface.flush();
-                _ = allocator;
             },
         }
     }
