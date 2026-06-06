@@ -122,4 +122,12 @@ pub enum Commands {
         #[arg(long)]
         spec: PathBuf,
     },
+
+    /// Run one container over containerd's gRPC API (invoked by the supervisor; internal).
+    #[command(hide = true)]
+    ContainerdRun {
+        /// Base64-encoded ContainerdRunSpec JSON.
+        #[arg(long)]
+        spec: String,
+    },
 }

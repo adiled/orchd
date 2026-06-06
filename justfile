@@ -27,17 +27,19 @@ build:
 build-orchd:
     cargo build --release
 
-# Cross-compile a static aarch64-linux orchd: drops into any Linux VM with no
-# runtime deps. Feeds the dogfood harness (orchd-osx boots a Linux guest that
-# runs this orchd against containerd). On a Linux host, `just build-orchd` is
-# already a Linux build; this recipe cross-builds from macOS. Needs rustup
-# (`brew install rustup`) and cargo-zigbuild (`cargo install cargo-zigbuild`).
+# Cross-compile a static aarch64-linux orchd with the containerd backend: drops
+# into a Linux VM and drives containerd in process. Feeds examples/inception
+# (orchd-osx boots a Linux guest that runs this orchd against containerd). On a
+# Linux host, build natively with `--features containerd`; this recipe
+# cross-builds from macOS. Needs rustup (`brew install rustup`), cargo-zigbuild
+# (`cargo install cargo-zigbuild`), and protoc (`brew install protobuf`).
 build-linux:
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+    export PROTOC="$(command -v protoc)"
     rustup target add {{linux_tgt}} >/dev/null 2>&1 || true
-    cargo zigbuild --target {{linux_tgt}} --release
+    cargo zigbuild --target {{linux_tgt}} --release --features containerd
     echo "linux orchd -> target/{{linux_tgt}}/release/orchd ($(file -b target/{{linux_tgt}}/release/orchd | cut -d, -f1-2))"
 
 [macos]

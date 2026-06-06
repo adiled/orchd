@@ -20,6 +20,11 @@ fn main() {
     if let Commands::Supervise { spec } = &cli.command {
         std::process::exit(orchdi::run(spec));
     }
+    // `containerd-run` is likewise a leaf the supervisor execs: it talks to
+    // containerd directly and runs the container in the foreground.
+    if let Commands::ContainerdRun { spec } = &cli.command {
+        std::process::exit(runtime::containerd::run::run(spec));
+    }
 
     let config = Config::load(&cli);
 
@@ -38,6 +43,7 @@ fn main() {
         Commands::Plant {} => orchard::plant(&config).map_err(boxed_orchard),
         Commands::Tend { no_start } => orchard::tend(&config, !*no_start).map_err(boxed_orchard),
         Commands::Supervise { .. } => unreachable!("handled above"),
+        Commands::ContainerdRun { .. } => unreachable!("handled above"),
     };
 
     if let Err(e) = result {
