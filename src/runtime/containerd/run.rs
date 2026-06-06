@@ -112,6 +112,7 @@ mod backend {
     use tonic::Request;
 
     const SIGTERM: u32 = 15;
+    const SIGKILL: u32 = 9;
     const SNAPSHOTTER: &str = "overlayfs";
 
     /// containerd's GOARCH string for this host.
@@ -509,11 +510,15 @@ mod backend {
         .to_string()
     }
 
-    /// Best-effort: SIGTERM + delete task, delete container, remove snapshot.
-    /// Every step tolerates "not found" so it is safe to call before and after.
+    /// Best-effort, idempotent cleanup, safe to call before and after a run.
+    /// The container task runs under containerd's shim (not our process group),
+    /// so we must stop it via the API AND wait for it to actually exit before
+    /// deleting the task/container/snapshot — otherwise the live task leaks.
     async fn teardown(client: &Client, ns: &str, id: &str) {
         let mut tasks = client.tasks();
-        let _ = tasks
+
+        // Ask the task to stop. kill succeeds only if a running task exists.
+        let had_task = tasks
             .kill(with_namespace!(
                 KillRequest {
                     container_id: id.to_string(),
@@ -523,7 +528,43 @@ mod backend {
                 },
                 ns
             ))
+            .await
+            .is_ok();
+
+        if had_task {
+            // Wait for it to actually exit; SIGKILL if it overruns the grace.
+            let graceful = tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                tasks.wait(with_namespace!(
+                    WaitRequest { container_id: id.to_string(), ..Default::default() },
+                    ns
+                )),
+            )
             .await;
+            if graceful.is_err() {
+                let _ = tasks
+                    .kill(with_namespace!(
+                        KillRequest {
+                            container_id: id.to_string(),
+                            exec_id: String::new(),
+                            signal: SIGKILL,
+                            all: true,
+                        },
+                        ns
+                    ))
+                    .await;
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    tasks.wait(with_namespace!(
+                        WaitRequest { container_id: id.to_string(), ..Default::default() },
+                        ns
+                    )),
+                )
+                .await;
+            }
+        }
+
+        // Task is dead (or never existed): now safe to delete records.
         let _ = tasks
             .delete(with_namespace!(
                 DeleteTaskRequest { container_id: id.to_string() },
