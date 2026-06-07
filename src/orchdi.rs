@@ -41,7 +41,7 @@ pub struct DepSpec {
 
 /// Everything the supervisor needs, built from a `Service` + its `ExecSet`.
 /// Runtime-agnostic: only command strings, never runtime identity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SuperviseSpec {
     pub label: String,
     pub pre_start: Option<String>,
@@ -52,6 +52,27 @@ pub struct SuperviseSpec {
     pub deps: Vec<DepSpec>,
     /// Seconds to wait for graceful stop before SIGKILLing the process group.
     pub stop_timeout_secs: u32,
+    /// Restart policy honored by the orchdi supervisor: "no" | "on-failure" |
+    /// "always". (launchd/systemd honor their own native equivalents instead.)
+    #[serde(default)]
+    pub restart_policy: String,
+    /// Delay before a restart (clamped to >= 1s to avoid tight crash loops).
+    #[serde(default)]
+    pub restart_delay_secs: u32,
+    /// Oneshot services run once and are never restarted.
+    #[serde(default)]
+    pub oneshot: bool,
+    /// Restart rate limit: give up after this many restarts within
+    /// restart_interval_secs (0 = no limit). Mirrors systemd StartLimitBurst.
+    #[serde(default)]
+    pub restart_burst: u32,
+    #[serde(default)]
+    pub restart_interval_secs: u32,
+    /// Where the service's stdout/stderr go (None -> the supervisor's logfile).
+    #[serde(default)]
+    pub stdout: Option<String>,
+    #[serde(default)]
+    pub stderr: Option<String>,
 }
 
 static TERM: AtomicBool = AtomicBool::new(false);
@@ -105,16 +126,18 @@ pub fn run(spec_path: &Path) -> i32 {
 
     // 3. Signal handler + spawn start in its own process group.
     install_signal_handlers();
-    let mut child = match spawn_in_group(&spec.start) {
+    let mut child = match spawn_in_group(&spec.start, spec.stdout.as_deref(), spec.stderr.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("supervise[{}]: failed to start: {e}", spec.label);
             return 1;
         }
     };
-    let pgid = child.id() as i32; // == pid, since the child is its own group leader
+    let mut pgid = child.id() as i32; // == pid, since the child is its own group leader
 
-    // 4. Supervise loop.
+    // 4. Supervise loop (honors the restart policy + rate limit).
+    let mut restarts: u32 = 0;
+    let mut restart_times: Vec<Instant> = Vec::new();
     loop {
         if TERM.load(Ordering::SeqCst) {
             teardown(&spec, &mut child, pgid);
@@ -123,7 +146,51 @@ pub fn run(spec_path: &Path) -> i32 {
         match child.try_wait() {
             Ok(Some(status)) => {
                 run_optional(&spec.post_stop);
-                return status.code().unwrap_or(0);
+                let code = status.code().unwrap_or(0);
+                if !TERM.load(Ordering::SeqCst) && should_restart(&spec, code) {
+                    // Rate limit: give up if we're restarting too fast.
+                    let now = Instant::now();
+                    restart_times.push(now);
+                    if spec.restart_burst > 0 {
+                        let window = Duration::from_secs(spec.restart_interval_secs.max(1) as u64);
+                        restart_times.retain(|t| now.duration_since(*t) <= window);
+                        if restart_times.len() as u32 > spec.restart_burst {
+                            eprintln!(
+                                "supervise[{}]: restart rate exceeded ({} within {}s); giving up",
+                                spec.label,
+                                spec.restart_burst,
+                                spec.restart_interval_secs.max(1)
+                            );
+                            return code;
+                        }
+                    }
+                    restarts += 1;
+                    let delay = spec.restart_delay_secs.max(1);
+                    eprintln!(
+                        "supervise[{}]: exited {code}; restart #{restarts} (policy={}) in {delay}s",
+                        spec.label, spec.restart_policy
+                    );
+                    // Wait out the delay, but wake promptly if asked to stop.
+                    let until = Instant::now() + Duration::from_secs(delay as u64);
+                    while Instant::now() < until {
+                        if TERM.load(Ordering::SeqCst) {
+                            return 0;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    match spawn_in_group(&spec.start, spec.stdout.as_deref(), spec.stderr.as_deref()) {
+                        Ok(c) => {
+                            child = c;
+                            pgid = child.id() as i32;
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("supervise[{}]: restart spawn failed: {e}", spec.label);
+                            return 1;
+                        }
+                    }
+                }
+                return code;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(e) => {
@@ -131,6 +198,19 @@ pub fn run(spec_path: &Path) -> i32 {
                 return 1;
             }
         }
+    }
+}
+
+/// Whether to restart after the start process exited with `exit_code`.
+/// Oneshot services never restart; otherwise the policy decides.
+fn should_restart(spec: &SuperviseSpec, exit_code: i32) -> bool {
+    if spec.oneshot {
+        return false;
+    }
+    match spec.restart_policy.as_str() {
+        "always" => true,
+        "on-failure" => exit_code != 0,
+        _ => false,
     }
 }
 
@@ -178,10 +258,17 @@ fn run_optional(cmd: &Option<String>) {
 /// Spawn `cmd` via `/bin/sh -c` in a fresh process group so the whole tree can
 /// be signalled together. macOS has no PR_SET_PDEATHSIG, so the group is how we
 /// guarantee no orphans on teardown.
-fn spawn_in_group(cmd: &str) -> std::io::Result<Child> {
+fn spawn_in_group(cmd: &str, stdout: Option<&str>, stderr: Option<&str>) -> std::io::Result<Child> {
     use std::os::unix::process::CommandExt;
     let mut c = Command::new("/bin/sh");
     c.arg("-c").arg(cmd);
+    // Honor logging.stdout/stderr; otherwise inherit the supervisor's logfile.
+    if let Some(p) = stdout {
+        c.stdout(std::process::Stdio::from(open_append(p)?));
+    }
+    if let Some(p) = stderr {
+        c.stderr(std::process::Stdio::from(open_append(p)?));
+    }
     unsafe {
         c.pre_exec(|| {
             // Become group leader: new pgid == pid.
@@ -192,6 +279,14 @@ fn spawn_in_group(cmd: &str) -> std::io::Result<Child> {
         });
     }
     c.spawn()
+}
+
+/// Open a log path for appending, creating it (and parents) if needed.
+fn open_append(path: &str) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::OpenOptions::new().create(true).append(true).open(path)
 }
 
 fn install_signal_handlers() {
@@ -304,6 +399,28 @@ pub fn build_supervise_spec(
             })
             .collect(),
         stop_timeout_secs: stop_timeout,
+        restart_policy: match service.restart.policy {
+            crate::types::RestartPolicy::Always => "always",
+            crate::types::RestartPolicy::OnFailure => "on-failure",
+            crate::types::RestartPolicy::No => "no",
+        }
+        .to_string(),
+        restart_delay_secs: service
+            .restart
+            .delay
+            .as_deref()
+            .and_then(parse_duration_secs)
+            .unwrap_or(1),
+        oneshot: service.oneshot,
+        restart_burst: service.restart.start_limit_burst.unwrap_or(0),
+        restart_interval_secs: service
+            .restart
+            .start_limit_interval
+            .as_deref()
+            .and_then(parse_duration_secs)
+            .unwrap_or(10),
+        stdout: service.logging.stdout.clone(),
+        stderr: service.logging.stderr.clone(),
     }
 }
 
@@ -348,6 +465,7 @@ mod tests {
             post_stop: Some("echo delete".into()),
             deps: vec![DepSpec { poll_cmd: "true".into(), timeout_secs: 5, required: true }],
             stop_timeout_secs: 30,
+            ..Default::default()
         };
         let json = serde_json::to_string(&spec).unwrap();
         let back: SuperviseSpec = serde_json::from_str(&json).unwrap();

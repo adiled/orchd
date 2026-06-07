@@ -1,0 +1,13 @@
+# Inception: orchd boots a Linux VM with its own apple runtime (osx mode), sizes
+# it from this spec, mounts the containerd toolchain in, and runs the nested
+# containerd test inside it. See README.md.
+#
+# setup.sh rewrites __TOOLS__ to the absolute path of ./tools and writes the
+# runnable copy as Orchfile.run.
+
+SERVICE ctd
+FROM docker.io/library/debian:bookworm-slim
+MEMORY 3G
+CPUS 3
+VOLUME __TOOLS__:/opt/tools
+CMD /bin/sh /opt/tools/run-test.sh

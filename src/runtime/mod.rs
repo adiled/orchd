@@ -1,5 +1,6 @@
 pub mod apple;
 pub mod bare;
+pub mod containerd;
 
 use crate::config::Config;
 use crate::exec::ExecSet;
@@ -45,8 +46,9 @@ pub fn create_runtime(name: &str, config: &Config) -> Result<Box<dyn Runtime>, R
     match name {
         "bare" => Ok(Box::new(bare::BareRuntime::new(config.data_dir.clone()))),
         "apple" => Ok(Box::new(apple::AppleRuntime::new(config))),
+        "containerd" => Ok(Box::new(containerd::ContainerdRuntime::new(config))),
         _ => Err(RuntimeError::Other(format!(
-            "unknown runtime '{}'. Available: bare, apple",
+            "unknown runtime '{}'. Available: bare, apple, containerd",
             name
         ))),
     }

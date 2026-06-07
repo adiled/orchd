@@ -1,0 +1,5 @@
+# Inner workload: what orchd-inside-the-VM drives through containerd.
+# orchd's containerd runtime pulls and runs it over containerd's gRPC API.
+SERVICE web
+FROM docker.io/library/alpine:latest
+CMD sleep 300
