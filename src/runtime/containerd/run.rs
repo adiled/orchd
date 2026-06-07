@@ -39,6 +39,35 @@ pub struct ContainerdRunSpec {
     /// uid[:gid] (numeric). None -> the image config's User (or root).
     #[serde(default)]
     pub user: Option<String>,
+    /// Env files (paths) read and merged after the image env, before `env`.
+    #[serde(default)]
+    pub env_files: Vec<String>,
+    /// Host directories bind-mounted into the container.
+    #[serde(default)]
+    pub volumes: Vec<VolumeMount>,
+    /// cgroup / rlimit caps applied to the container (from resources.*).
+    #[serde(default)]
+    pub resources: Resources,
+}
+
+/// A host path bind-mounted into the container.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct VolumeMount {
+    pub source: String,
+    pub destination: String,
+}
+
+/// Resolved resource caps. 0/None means "unset". Memory in bytes, cpu as a
+/// cgroup v2 cpu.max (quota,period) in microseconds.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct Resources {
+    pub memory_bytes: Option<u64>,
+    pub cpu_quota_us: Option<u64>,
+    pub cpu_period_us: Option<u64>,
+    pub pids_max: Option<u64>,
+    pub nofile: Option<u64>,
+    pub nproc: Option<u64>,
+    pub io_weight: Option<u32>,
 }
 
 /// Encode a spec as a shell-safe base64 arg for the ExecSet start command.
@@ -87,7 +116,7 @@ pub fn run(spec_b64: &str) -> i32 {
 
 #[cfg(feature = "containerd")]
 mod backend {
-    use super::ContainerdRunSpec;
+    use super::{ContainerdRunSpec, Resources, VolumeMount};
     use std::collections::HashMap;
     use std::env::consts;
 
@@ -188,6 +217,17 @@ mod backend {
             ));
         }
         let mut env = cfg.env.clone();
+        for f in &spec.env_files {
+            if let Ok(data) = std::fs::read_to_string(f) {
+                for line in data.lines() {
+                    let t = line.trim();
+                    if t.is_empty() || t.starts_with('#') || !t.contains('=') {
+                        continue;
+                    }
+                    env.push(t.to_string());
+                }
+            }
+        }
         env.extend(spec.env.clone());
         let cwd = if !spec.cwd.is_empty() {
             spec.cwd.clone()
@@ -201,9 +241,19 @@ mod backend {
         } else {
             Some(cfg.user.as_str())
         });
+        // Only numeric uid[:gid] is resolved here; a username would need the
+        // image's /etc/passwd. Surface that rather than silently running as root.
+        if let Some(u) = user {
+            let uid_part = u.split(':').next().unwrap_or(u);
+            if !uid_part.is_empty() && uid_part.parse::<u32>().is_err() {
+                eprintln!(
+                    "containerd-run: USER '{u}' is a name; running as root (numeric uid[:gid] only)"
+                );
+            }
+        }
         let (uid, gid) = parse_user(user);
 
-        let spec_json = oci_spec_json(id, &argv, &env, &cwd, uid, gid);
+        let spec_json = oci_spec_json(id, &argv, &env, &cwd, uid, gid, &spec.resources, &spec.volumes);
 
         // Create the container record, referencing the snapshot.
         client
@@ -452,6 +502,7 @@ mod backend {
     }
 
     /// OCI runtime spec JSON. Namespaces omit "network" => host netns, no CNI.
+    /// rlimits, cgroup resources, and bind mounts come from the spec.
     fn oci_spec_json(
         id: &str,
         argv: &[String],
@@ -459,7 +510,74 @@ mod backend {
         cwd: &str,
         uid: u32,
         gid: u32,
+        res: &Resources,
+        vols: &[VolumeMount],
     ) -> String {
+        // rlimits: nofile (from spec or default 1024) + optional nproc.
+        let nofile = res.nofile.unwrap_or(1024);
+        let mut rlimits = vec![serde_json::json!(
+            { "type": "RLIMIT_NOFILE", "hard": nofile, "soft": nofile }
+        )];
+        if let Some(n) = res.nproc {
+            rlimits.push(serde_json::json!({ "type": "RLIMIT_NPROC", "hard": n, "soft": n }));
+        }
+
+        // mounts: the standard set, plus a rw bind mount per volume.
+        let mut mounts = vec![
+            serde_json::json!({ "destination": "/proc", "type": "proc", "source": "proc" }),
+            serde_json::json!({ "destination": "/dev", "type": "tmpfs", "source": "tmpfs",
+                "options": ["nosuid","strictatime","mode=755","size=65536k"] }),
+            serde_json::json!({ "destination": "/dev/pts", "type": "devpts", "source": "devpts",
+                "options": ["nosuid","noexec","newinstance","ptmxmode=0666","mode=0620","gid=5"] }),
+            serde_json::json!({ "destination": "/dev/shm", "type": "tmpfs", "source": "shm",
+                "options": ["nosuid","noexec","nodev","mode=1777","size=65536k"] }),
+            serde_json::json!({ "destination": "/dev/mqueue", "type": "mqueue", "source": "mqueue",
+                "options": ["nosuid","noexec","nodev"] }),
+            serde_json::json!({ "destination": "/sys", "type": "sysfs", "source": "sysfs",
+                "options": ["nosuid","noexec","nodev","ro"] }),
+            serde_json::json!({ "destination": "/etc/resolv.conf", "type": "bind", "source": "/etc/resolv.conf",
+                "options": ["rbind","ro"] }),
+        ];
+        for v in vols {
+            mounts.push(serde_json::json!({
+                "destination": v.destination, "type": "bind", "source": v.source,
+                "options": ["rbind","rw"]
+            }));
+        }
+
+        // cgroup v2 resource caps.
+        let mut resources = serde_json::Map::new();
+        if let Some(m) = res.memory_bytes {
+            resources.insert("memory".into(), serde_json::json!({ "limit": m }));
+        }
+        if let Some(q) = res.cpu_quota_us {
+            let period = res.cpu_period_us.unwrap_or(100000);
+            resources.insert("cpu".into(), serde_json::json!({ "quota": q, "period": period }));
+        }
+        if let Some(p) = res.pids_max {
+            resources.insert("pids".into(), serde_json::json!({ "limit": p }));
+        }
+        if let Some(w) = res.io_weight {
+            resources.insert("blockIO".into(), serde_json::json!({ "weight": w }));
+        }
+
+        let mut linux = serde_json::json!({
+            "namespaces": [
+                { "type": "pid" }, { "type": "ipc" }, { "type": "uts" }, { "type": "mount" }
+            ],
+            "maskedPaths": [
+                "/proc/kcore","/proc/latency_stats","/proc/timer_list",
+                "/proc/timer_stats","/proc/sched_debug","/sys/firmware"
+            ],
+            "readonlyPaths": [
+                "/proc/asound","/proc/bus","/proc/fs","/proc/irq",
+                "/proc/sys","/proc/sysrq-trigger"
+            ]
+        });
+        if !resources.is_empty() {
+            linux["resources"] = serde_json::Value::Object(resources);
+        }
+
         serde_json::json!({
             "ociVersion": "1.1.0",
             "process": {
@@ -473,39 +591,13 @@ mod backend {
                     "effective": ["CAP_NET_RAW","CAP_CHOWN","CAP_DAC_OVERRIDE","CAP_SETUID","CAP_SETGID","CAP_NET_BIND_SERVICE"],
                     "permitted": ["CAP_NET_RAW","CAP_CHOWN","CAP_DAC_OVERRIDE","CAP_SETUID","CAP_SETGID","CAP_NET_BIND_SERVICE"]
                 },
-                "rlimits": [{ "type": "RLIMIT_NOFILE", "hard": 1024, "soft": 1024 }],
+                "rlimits": rlimits,
                 "noNewPrivileges": true
             },
             "root": { "path": "rootfs", "readonly": false },
             "hostname": id,
-            "mounts": [
-                { "destination": "/proc", "type": "proc", "source": "proc" },
-                { "destination": "/dev", "type": "tmpfs", "source": "tmpfs",
-                  "options": ["nosuid","strictatime","mode=755","size=65536k"] },
-                { "destination": "/dev/pts", "type": "devpts", "source": "devpts",
-                  "options": ["nosuid","noexec","newinstance","ptmxmode=0666","mode=0620","gid=5"] },
-                { "destination": "/dev/shm", "type": "tmpfs", "source": "shm",
-                  "options": ["nosuid","noexec","nodev","mode=1777","size=65536k"] },
-                { "destination": "/dev/mqueue", "type": "mqueue", "source": "mqueue",
-                  "options": ["nosuid","noexec","nodev"] },
-                { "destination": "/sys", "type": "sysfs", "source": "sysfs",
-                  "options": ["nosuid","noexec","nodev","ro"] },
-                { "destination": "/etc/resolv.conf", "type": "bind", "source": "/etc/resolv.conf",
-                  "options": ["rbind","ro"] }
-            ],
-            "linux": {
-                "namespaces": [
-                    { "type": "pid" }, { "type": "ipc" }, { "type": "uts" }, { "type": "mount" }
-                ],
-                "maskedPaths": [
-                    "/proc/kcore","/proc/latency_stats","/proc/timer_list",
-                    "/proc/timer_stats","/proc/sched_debug","/sys/firmware"
-                ],
-                "readonlyPaths": [
-                    "/proc/asound","/proc/bus","/proc/fs","/proc/irq",
-                    "/proc/sys","/proc/sysrq-trigger"
-                ]
-            }
+            "mounts": mounts,
+            "linux": linux
         })
         .to_string()
     }

@@ -17,7 +17,7 @@ use crate::runtime::{Runtime, RuntimeError};
 use crate::types::Service;
 
 pub mod run;
-use run::{encode_spec, ContainerdRunSpec};
+use run::{encode_spec, ContainerdRunSpec, Resources, VolumeMount};
 
 const DEFAULT_SOCKET: &str = "/run/containerd/containerd.sock";
 
@@ -130,6 +130,26 @@ impl Runtime for ContainerdRuntime {
             .collect();
         env.sort();
 
+        // Resource caps: cpus -> cgroup cpu.max (quota = cpus * period); else a
+        // CPU_QUOTA percentage. memory/pids/io/rlimits map straight through.
+        let r = &service.resources;
+        let (cpu_quota_us, cpu_period_us) = if let Some(c) = r.cpus.filter(|c| *c > 0.0) {
+            (Some((c * 100_000.0) as u64), Some(100_000u64))
+        } else if let Some(q) = r.cpu_quota.as_deref().and_then(parse_cpu_quota_pct) {
+            (Some(q), Some(100_000u64))
+        } else {
+            (None, None)
+        };
+        let resources = Resources {
+            memory_bytes: r.memory.as_deref().and_then(parse_memory_bytes),
+            cpu_quota_us,
+            cpu_period_us,
+            pids_max: r.tasks_max.or(r.limit_nproc),
+            nofile: r.limit_nofile,
+            nproc: r.limit_nproc,
+            io_weight: r.io_weight,
+        };
+
         let spec = ContainerdRunSpec {
             socket: self.socket.clone(),
             namespace: self.namespace.clone(),
@@ -139,6 +159,16 @@ impl Runtime for ContainerdRuntime {
             env,
             cwd: service.workdir.clone().unwrap_or_default(),
             user: service.user.clone(),
+            env_files: service.env_files.clone(),
+            volumes: service
+                .volumes
+                .iter()
+                .map(|v| VolumeMount {
+                    source: v.source.clone(),
+                    destination: v.destination.clone(),
+                })
+                .collect(),
+            resources,
         };
 
         // start is a single foreground process the supervisor tracks: it pulls
@@ -157,6 +187,34 @@ impl Runtime for ContainerdRuntime {
             post_stop: None,
         })
     }
+}
+
+/// Parse a memory size ("512M", "2G", "1Gi", "1073741824") into bytes. k/m/g
+/// (case-insensitive) are 1024-based; a bare number is bytes. None if invalid.
+fn parse_memory_bytes(s: &str) -> Option<u64> {
+    let t = s.trim();
+    let end = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+    if end == 0 {
+        return None;
+    }
+    let num: u64 = t[..end].parse().ok()?;
+    let mult = match t[end..].trim().chars().next().map(|c| c.to_ascii_lowercase()) {
+        Some('k') => 1024,
+        Some('m') => 1024 * 1024,
+        Some('g') => 1024 * 1024 * 1024,
+        _ => 1,
+    };
+    Some(num.saturating_mul(mult))
+}
+
+/// Parse a CPU quota percentage ("50%" or "50") into a cgroup cpu.max quota in
+/// microseconds (period 100000). None if invalid/zero.
+fn parse_cpu_quota_pct(s: &str) -> Option<u64> {
+    let pct: u64 = s.trim().trim_end_matches('%').trim().parse().ok()?;
+    if pct == 0 {
+        return None;
+    }
+    Some(pct * 100_000 / 100)
 }
 
 #[cfg(test)]
