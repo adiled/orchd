@@ -3,12 +3,9 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::exec::ExecSet;
+use crate::orchdi::healthcheck_to_cmd;
 use crate::types::{RestartPolicy, Service};
 
-/// Generate a systemd .service unit file for a service.
-///
-/// `ready_gates` is the set of service names that have ready gate units generated.
-/// Dependencies that have ready gates use After=orch-<dep>-ready.service for ordering.
 pub fn generate_service_unit(
     service: &Service,
     exec_set: &ExecSet,
@@ -17,12 +14,10 @@ pub fn generate_service_unit(
 ) -> String {
     let mut unit = String::with_capacity(1024);
 
-    // [Unit] section
     writeln!(unit, "[Unit]").unwrap();
     writeln!(unit, "Description=orch: {}", service.name).unwrap();
     writeln!(unit, "PartOf={}", config.target_name()).unwrap();
 
-    // Dependencies
     let (after_deps, binds_to_deps) = build_dependencies(service, config, ready_gates);
 
     if !after_deps.is_empty() {
@@ -32,7 +27,6 @@ pub fn generate_service_unit(
         writeln!(unit, "BindsTo={}", binds_to_deps.join(" ")).unwrap();
     }
 
-    // [Service] section
     writeln!(unit).unwrap();
     writeln!(unit, "[Service]").unwrap();
 
@@ -43,32 +37,25 @@ pub fn generate_service_unit(
         writeln!(unit, "Type=simple").unwrap();
     }
 
-    // ExecStartPre
     if let Some(ref pre_start) = exec_set.pre_start {
         writeln!(unit, "ExecStartPre=/bin/bash -c '{}'", escape_bash(pre_start)).unwrap();
     }
 
-    // ExecStart
     writeln!(unit, "ExecStart=/bin/bash -c '{}'", escape_bash(&exec_set.start)).unwrap();
 
-    // ExecStop
     if let Some(ref stop) = exec_set.stop {
         writeln!(unit, "ExecStop=/bin/bash -c '{}'", escape_bash(stop)).unwrap();
     }
 
-    // ExecStopPost
     if let Some(ref post_stop) = exec_set.post_stop {
         writeln!(unit, "ExecStopPost=/bin/bash -c '{}'", escape_bash(post_stop)).unwrap();
     }
 
-    // WorkingDirectory
     if let Some(ref workdir) = service.workdir {
         let resolved = resolve_workdir(workdir, &config.project_dir);
         writeln!(unit, "WorkingDirectory={}", resolved).unwrap();
     }
 
-    // Environment
-    // Sort keys for deterministic output
     let mut env_keys: Vec<&String> = service.env.keys().collect();
     env_keys.sort();
     for key in env_keys {
@@ -76,18 +63,15 @@ pub fn generate_service_unit(
         writeln!(unit, "Environment=\"{}={}\"", key, value).unwrap();
     }
 
-    // EnvironmentFile
     for env_file in &service.env_files {
         let resolved = resolve_path(env_file, &config.project_dir);
         writeln!(unit, "EnvironmentFile={}", resolved).unwrap();
     }
 
-    // User
     if let Some(ref user) = service.user {
         writeln!(unit, "User={}", user).unwrap();
     }
 
-    // Restart (only for non-oneshot)
     if !service.oneshot {
         let restart_str = match service.restart.policy {
             RestartPolicy::No => "no",
@@ -101,7 +85,6 @@ pub fn generate_service_unit(
         }
     }
 
-    // Start limits
     if let Some(burst) = service.restart.start_limit_burst {
         writeln!(unit, "StartLimitBurst={}", burst).unwrap();
     }
@@ -109,7 +92,6 @@ pub fn generate_service_unit(
         writeln!(unit, "StartLimitIntervalSec={}", interval).unwrap();
     }
 
-    // Timeouts
     if let Some(ref start) = service.timeouts.start {
         writeln!(unit, "TimeoutStartSec={}", start).unwrap();
     }
@@ -117,12 +99,10 @@ pub fn generate_service_unit(
         writeln!(unit, "TimeoutStopSec={}", stop).unwrap();
     }
 
-    // Resource limits
     if let Some(ref memory) = service.resources.memory {
         writeln!(unit, "MemoryMax={}", memory).unwrap();
     }
 
-    // CPUS → CPUQuota: cpu_quota takes precedence over cpus
     if let Some(ref cpu_quota) = service.resources.cpu_quota {
         writeln!(unit, "CPUQuota={}", cpu_quota).unwrap();
     } else if let Some(cpus) = service.resources.cpus {
@@ -143,7 +123,6 @@ pub fn generate_service_unit(
         writeln!(unit, "IOWeight={}", io_weight).unwrap();
     }
 
-    // Logging
     if let Some(ref stdout) = service.logging.stdout {
         writeln!(unit, "StandardOutput=file:{}", resolve_path(stdout, &config.project_dir)).unwrap();
     }
@@ -151,7 +130,6 @@ pub fn generate_service_unit(
         writeln!(unit, "StandardError=file:{}", resolve_path(stderr, &config.project_dir)).unwrap();
     }
 
-    // [Install] section
     writeln!(unit).unwrap();
     writeln!(unit, "[Install]").unwrap();
     writeln!(unit, "WantedBy={}", config.target_name()).unwrap();
@@ -159,13 +137,9 @@ pub fn generate_service_unit(
     unit
 }
 
-/// Generate a ready gate unit for a service that has a healthcheck.
-///
-/// The ready gate is a oneshot that polls the healthcheck until it passes.
-/// Dependent services After= this unit instead of the main service unit.
 pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
-    let healthcheck = service.healthcheck.as_deref().unwrap_or("true");
-    let timeout = service.readiness_timeout.as_deref().unwrap_or("120s");
+    let healthcheck = service.healthcheck.as_deref().expect("ready gate requires a healthcheck");
+    let timeout = service.readiness_timeout.as_deref().unwrap_or("90s");
 
     let mut unit = String::with_capacity(512);
 
@@ -180,8 +154,8 @@ pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
     writeln!(unit, "RemainAfterExit=yes").unwrap();
     writeln!(
         unit,
-        "ExecStart=/bin/bash -c 'until {} >/dev/null 2>&1; do sleep 2; done'",
-        escape_bash(healthcheck)
+        "ExecStart=/bin/bash -c 'until {} >/dev/null 2>&1; do sleep 2; done; exit 0'",
+        escape_bash(&healthcheck_to_cmd(healthcheck))
     )
     .unwrap();
     writeln!(unit, "TimeoutStartSec={}", timeout).unwrap();
@@ -189,7 +163,6 @@ pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
     unit
 }
 
-/// Generate the orch.target that groups all managed services.
 pub fn generate_target(_config: &Config) -> String {
     let mut unit = String::with_capacity(128);
 
@@ -203,12 +176,7 @@ pub fn generate_target(_config: &Config) -> String {
     unit
 }
 
-/// Determine which services need ready gates.
-///
-/// A service needs a ready gate when it has a healthcheck AND at least one
-/// other enabled service lists it in `requires` or `after`.
 pub fn services_needing_ready_gates(services: &[Service]) -> HashSet<String> {
-    // Collect all dependency references
     let mut depended_upon: HashSet<String> = HashSet::new();
     for svc in services {
         if svc.disabled {
@@ -222,13 +190,23 @@ pub fn services_needing_ready_gates(services: &[Service]) -> HashSet<String> {
         }
     }
 
-    // A service needs a ready gate if it has a healthcheck and is depended upon
     let mut gates = HashSet::new();
+    let mut required_refs: HashSet<String> = HashSet::new();
     for svc in services {
         if svc.disabled {
             continue;
         }
-        if svc.healthcheck.is_some() && depended_upon.contains(&svc.name) {
+        for dep in &svc.requires {
+            required_refs.insert(dep.clone());
+        }
+    }
+    for svc in services {
+        if svc.disabled {
+            continue;
+        }
+        if depended_upon.contains(&svc.name)
+            && (svc.healthcheck.is_some() || required_refs.contains(&svc.name))
+        {
             gates.insert(svc.name.clone());
         }
     }
@@ -236,7 +214,6 @@ pub fn services_needing_ready_gates(services: &[Service]) -> HashSet<String> {
     gates
 }
 
-/// Build After= and BindsTo= dependency lists for a service.
 fn build_dependencies(
     service: &Service,
     config: &Config,
@@ -245,11 +222,9 @@ fn build_dependencies(
     let mut after = Vec::new();
     let mut binds_to = Vec::new();
 
-    // REQUIRES: hard dependency — BindsTo + After
     for dep in &service.requires {
         binds_to.push(config.unit_name(dep));
 
-        // If the dep has a ready gate, After= the ready gate for ordering
         if ready_gates.contains(dep) {
             after.push(format!("{}-{}-ready.service", config.namespace, dep));
         } else {
@@ -257,7 +232,6 @@ fn build_dependencies(
         }
     }
 
-    // AFTER: soft dependency — After only
     for dep in &service.after {
         if ready_gates.contains(dep) {
             after.push(format!("{}-{}-ready.service", config.namespace, dep));
@@ -269,13 +243,10 @@ fn build_dependencies(
     (after, binds_to)
 }
 
-/// Escape single quotes in a bash command for use in: /bin/bash -c '...'
 fn escape_bash(cmd: &str) -> String {
-    // Replace ' with '\'' (end quote, escaped quote, start quote)
     cmd.replace('\'', "'\\''")
 }
 
-/// Resolve a path: if relative, join with project_dir.
 fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
     if std::path::Path::new(path).is_absolute() {
         path.to_string()
@@ -284,7 +255,6 @@ fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
     }
 }
 
-/// Resolve workdir: if relative, join with project_dir.
 fn resolve_workdir(workdir: &str, project_dir: &std::path::Path) -> String {
     resolve_path(workdir, project_dir)
 }
@@ -473,18 +443,14 @@ mod tests {
         svc.after = vec!["localstack".to_string()];
         let exec = simple_exec_set("python manage.py runserver");
 
-        // postgres has a ready gate, redis and localstack do not
         let mut gates = HashSet::new();
         gates.insert("postgres".to_string());
 
         let unit = generate_service_unit(&svc, &exec, &config, &gates);
 
-        // BindsTo for requires
         assert!(unit.contains("BindsTo=orch-postgres.service orch-redis.service"));
-        // After: postgres uses ready gate, redis uses main unit
         assert!(unit.contains("orch-postgres-ready.service"));
         assert!(unit.contains("orch-redis.service"));
-        // After: localstack (soft dep, no ready gate)
         assert!(unit.contains("orch-localstack.service"));
     }
 
@@ -548,8 +514,21 @@ mod tests {
         assert!(unit.contains("BindsTo=orch-postgres.service"));
         assert!(unit.contains("Type=oneshot"));
         assert!(unit.contains("RemainAfterExit=yes"));
-        assert!(unit.contains("until pg_isready -h localhost -p 5433 >/dev/null 2>&1; do sleep 2; done"));
+        assert!(unit.contains("until pg_isready -h localhost -p 5433 >/dev/null 2>&1; do sleep 2; done; exit 0"));
         assert!(unit.contains("TimeoutStartSec=60s"));
+    }
+
+    #[test]
+    fn test_generate_ready_gate__http_converted_to_curl() {
+        let config = test_config();
+        let mut svc = simple_host_service("web", "web");
+        svc.healthcheck = Some("http://localhost:8000/health".to_string());
+
+        let unit = generate_ready_gate(&svc, &config);
+
+        assert!(unit.contains("curl -sf"));
+        assert!(unit.contains("http://localhost:8000/health"));
+        assert!(!unit.contains("http://localhost:8000/health; do"));
     }
 
     #[test]
@@ -560,7 +539,18 @@ mod tests {
 
         let unit = generate_ready_gate(&svc, &config);
 
-        assert!(unit.contains("TimeoutStartSec=120s"));
+        assert!(unit.contains("TimeoutStartSec=90s"));
+    }
+
+    #[test]
+    fn test_generate_ready_gate__proceeds_on_timeout() {
+        let config = test_config();
+        let mut svc = simple_host_service("db", "db");
+        svc.healthcheck = Some("pg_isready".to_string());
+
+        let unit = generate_ready_gate(&svc, &config);
+
+        assert!(unit.contains("done; exit 0"));
     }
 
     #[test]
@@ -583,8 +573,6 @@ mod tests {
         let mut django = simple_host_service("django", "python manage.py runserver");
         django.requires = vec!["postgres".to_string()];
 
-        // redis has healthcheck but nobody depends on it → no gate
-        // postgres has healthcheck and django depends on it → gate
         let services = vec![postgres, redis, django];
         let gates = services_needing_ready_gates(&services);
 
@@ -608,9 +596,8 @@ mod tests {
     }
 
     #[test]
-    fn test_services_needing_ready_gates__no_healthcheck_no_gate() {
+    fn test_services_needing_ready_gates__requires_no_healthcheck_gets_gate() {
         let postgres = simple_host_service("postgres", "postgres -p 5433");
-        // no healthcheck
 
         let mut django = simple_host_service("django", "python manage.py runserver");
         django.requires = vec!["postgres".to_string()];
@@ -618,7 +605,7 @@ mod tests {
         let services = vec![postgres, django];
         let gates = services_needing_ready_gates(&services);
 
-        assert!(gates.is_empty());
+        assert!(gates.contains("postgres"));
     }
 
     #[test]
@@ -633,7 +620,6 @@ mod tests {
         let services = vec![postgres, django];
         let gates = services_needing_ready_gates(&services);
 
-        // django is disabled, so nobody effectively depends on postgres
         assert!(gates.is_empty());
     }
 

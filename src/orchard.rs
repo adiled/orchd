@@ -154,7 +154,7 @@ fn beds_launchd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
     for (idx, exec) in exec_sets {
         let svc = &services[*idx];
         let label = service_label(config, &svc.name);
-        let deps = build_dep_gates(svc, services);
+        let deps = build_dep_gates(config, svc, services);
         let mut arts = Vec::new();
 
         if !deps.is_empty() || exec.stop.is_some() || exec.post_stop.is_some() {

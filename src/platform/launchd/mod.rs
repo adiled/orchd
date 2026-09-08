@@ -127,7 +127,7 @@ impl LaunchdPlatform {
         let spec_dir = config.state_dir.join("supervise");
         for (idx, exec_set) in exec_sets {
             let service = &services[*idx];
-            let deps = build_dep_gates(service, services);
+            let deps = build_dep_gates(config, service, services);
 
             // Orchestrated services (deps or teardown) need a supervisor spec.
             let needs_supervisor =

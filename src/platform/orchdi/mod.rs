@@ -39,7 +39,7 @@ impl OrchdiPlatform {
         let mut generated = Vec::new();
         for (idx, exec_set) in exec_sets {
             let service = &services[*idx];
-            let deps = build_dep_gates(service, services);
+            let deps = build_dep_gates(config, service, services);
             let label = service_label(config, &service.name);
             let spec = build_supervise_spec(service, exec_set, config, &deps);
             let json = serde_json::to_string_pretty(&spec)

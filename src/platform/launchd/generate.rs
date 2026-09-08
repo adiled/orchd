@@ -5,20 +5,12 @@ use crate::exec::ExecSet;
 use crate::orchdi::{parse_duration_secs, service_label, supervise_spec_path, DepGate};
 use crate::types::{RestartPolicy, Service};
 
-/// A dependency readiness gate: poll `poll_cmd` until it succeeds (or times out)
-/// before starting the service. `required` distinguishes REQUIRES (must pass —
-/// abort start on timeout) from AFTER (ordering only — proceed on timeout).
-// `DepGate`, the spec builders, and `service_label` now live in `orchdi`.
 
-/// Generate a launchd .plist with no dependencies (test convenience).
 #[cfg(test)]
 pub fn generate_service_plist(service: &Service, exec_set: &ExecSet, config: &Config) -> String {
     generate_service_plist_with_deps(service, exec_set, config, &[])
 }
 
-/// Generate a launchd .plist, prepending readiness polls for `deps`.
-/// launchd has no dependency model, so ordering is realized as a poll prologue
-/// inside the service's own program (see `program_command`).
 pub fn generate_service_plist_with_deps(
     service: &Service,
     exec_set: &ExecSet,
@@ -37,16 +29,9 @@ pub fn generate_service_plist_with_deps(
     writeln!(p, "<plist version=\"1.0\">").unwrap();
     writeln!(p, "<dict>").unwrap();
 
-    // Label
     writeln!(p, "  <key>Label</key>").unwrap();
     writeln!(p, "  <string>{}</string>", xml_escape(&label)).unwrap();
 
-    // ProgramArguments. Two strategies:
-    //   - Orchestrated services (have dependencies and/or teardown) delegate to
-    //     `orchd supervise --spec <path>`: launchd has no dependency model and no
-    //     ExecStop, so a real supervisor process renders those for it.
-    //   - Trivial services (no deps, no teardown) keep the lightweight `exec`
-    //     path so launchd tracks the real PID directly.
     let needs_supervisor =
         !deps.is_empty() || exec_set.stop.is_some() || exec_set.post_stop.is_some();
     writeln!(p, "  <key>ProgramArguments</key>").unwrap();
@@ -65,15 +50,9 @@ pub fn generate_service_plist_with_deps(
     }
     writeln!(p, "  </array>").unwrap();
 
-    // RunAtLoad
     writeln!(p, "  <key>RunAtLoad</key>").unwrap();
     writeln!(p, "  <true/>").unwrap();
 
-    // KeepAlive — translate from RestartPolicy
-    // oneshot: omit KeepAlive (one-time run)
-    // Always: KeepAlive=true
-    // OnFailure: KeepAlive=<dict SuccessfulExit=false>
-    // No: omit KeepAlive
     if !service.oneshot {
         match service.restart.policy {
             RestartPolicy::Always => {
@@ -91,7 +70,6 @@ pub fn generate_service_plist_with_deps(
         }
     }
 
-    // ThrottleInterval (RestartSec equivalent)
     if let Some(ref delay) = service.restart.delay {
         if let Some(secs) = parse_duration_secs(delay) {
             writeln!(p, "  <key>ThrottleInterval</key>").unwrap();
@@ -99,17 +77,12 @@ pub fn generate_service_plist_with_deps(
         }
     }
 
-    // WorkingDirectory
     if let Some(ref wd) = service.workdir {
         let resolved = resolve_path(wd, &config.project_dir);
         writeln!(p, "  <key>WorkingDirectory</key>").unwrap();
         writeln!(p, "  <string>{}</string>", xml_escape(&resolved)).unwrap();
     }
 
-    // EnvironmentVariables. launchd spawns agents with a minimal PATH
-    // (/usr/bin:/bin:/usr/sbin:/sbin) that omits /usr/local/bin and homebrew,
-    // so `container`, `curl`, etc. aren't found. Inject a sane PATH unless the
-    // service overrides it.
     let has_path = service.env.keys().any(|k| k == "PATH");
     if !service.env.is_empty() || !has_path {
         writeln!(p, "  <key>EnvironmentVariables</key>").unwrap();
@@ -131,13 +104,11 @@ pub fn generate_service_plist_with_deps(
         writeln!(p, "  </dict>").unwrap();
     }
 
-    // UserName
     if let Some(ref user) = service.user {
         writeln!(p, "  <key>UserName</key>").unwrap();
         writeln!(p, "  <string>{}</string>", xml_escape(user)).unwrap();
     }
 
-    // StandardOutPath / StandardErrorPath: prefer service.logging overrides
     let out = service.logging.stdout.as_ref()
         .map(|s| resolve_path(s, &config.project_dir))
         .unwrap_or(stdout_path);
@@ -149,8 +120,6 @@ pub fn generate_service_plist_with_deps(
     writeln!(p, "  <key>StandardErrorPath</key>").unwrap();
     writeln!(p, "  <string>{}</string>", xml_escape(&err)).unwrap();
 
-    // Resource limits — only file/process counts have launchd equivalents.
-    // MEMORY/CPUS/CPU_QUOTA/TASKS_MAX/IO_WEIGHT are not enforced (spec: advisory).
     if service.resources.limit_nofile.is_some() || service.resources.limit_nproc.is_some() {
         writeln!(p, "  <key>SoftResourceLimits</key>").unwrap();
         writeln!(p, "  <dict>").unwrap();
@@ -165,14 +134,9 @@ pub fn generate_service_plist_with_deps(
         writeln!(p, "  </dict>").unwrap();
     }
 
-    // ProcessType: without this, launchd applies "light resource limits",
-    // throttling CPU and I/O. Dev services should run unthrottled.
     writeln!(p, "  <key>ProcessType</key>").unwrap();
     writeln!(p, "  <string>Interactive</string>").unwrap();
 
-    // ExitTimeOut (SIGTERM→SIGKILL window). Explicit TIMEOUT_STOP wins; otherwise
-    // services with teardown (container stop+delete) get a generous default so
-    // cleanup completes before launchd escalates to SIGKILL.
     let exit_timeout = service
         .timeouts
         .stop
@@ -194,8 +158,6 @@ pub fn generate_service_plist_with_deps(
     p
 }
 
-/// Build the lightweight `bash -c` command for trivial services (no deps, no
-/// teardown). Orchestrated services go through `orchd supervise` instead.
 fn fast_path_command(exec_set: &ExecSet) -> String {
     match exec_set.pre_start.as_deref() {
         Some(p) => format!("{p} && exec {}", exec_set.start),
@@ -203,7 +165,6 @@ fn fast_path_command(exec_set: &ExecSet) -> String {
     }
 }
 
-/// Absolute path to the running orchd executable (for plist ProgramArguments).
 fn orchd_exe() -> String {
     std::env::current_exe()
         .ok()
@@ -211,12 +172,10 @@ fn orchd_exe() -> String {
         .unwrap_or_else(|| "orchd".to_string())
 }
 
-/// Plist filename: `{label}.plist`.
 pub fn plist_filename(config: &Config, service_name: &str) -> String {
     format!("{}.plist", service_label(config, service_name))
 }
 
-/// Log directory: `$HOME/Library/Logs` for user, `/Library/Logs` for system.
 fn log_dir(config: &Config) -> String {
     if config.scope.is_user() {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -234,7 +193,6 @@ fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
     }
 }
 
-/// Minimal XML entity escaping for plist string values.
 fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -353,8 +311,6 @@ mod tests {
         let exec = simple_exec_set("loop.sh");
         let p = generate_service_plist(&svc, &exec, &cfg);
 
-        // KeepAlive=Always is `<true/>`, not the `<dict>` OnFailure form. Scope to
-        // the KeepAlive value (up to the next key) rather than a fixed window.
         let pos = p.find("<key>KeepAlive</key>").unwrap();
         let after = &p[pos + "<key>KeepAlive</key>".len()..];
         let value = &after[..after.find("<key>").unwrap_or(after.len())];
@@ -435,7 +391,6 @@ mod tests {
         assert!(p.contains("<key>StandardOutPath</key>"));
         assert!(p.contains("orch.web.out.log"));
         assert!(p.contains("orch.web.err.log"));
-        // Should use $HOME/Library/Logs (whatever HOME is in test env)
         assert!(p.contains("/Library/Logs/"));
     }
 
@@ -506,7 +461,6 @@ mod tests {
 
     #[test]
     fn test_generate_service_plist__no_teardown_uses_exec() {
-        // Host/bare services (no stop/post_stop) keep the fast exec path.
         let cfg = test_config();
         let svc = simple_host_service("web", "python server.py");
         let exec = simple_exec_set("python server.py");
@@ -518,8 +472,6 @@ mod tests {
 
     #[test]
     fn test_generate_service_plist__teardown_delegates_to_supervisor() {
-        // Container services carry stop+post_stop; launchd has no ExecStop, so the
-        // plist delegates to `orchd supervise` (teardown handled in the supervisor).
         let cfg = test_config();
         let svc = simple_host_service("postgres", "container run --name orch-postgres pg:15");
         let exec = ExecSet {
@@ -530,18 +482,15 @@ mod tests {
         };
         let p = generate_service_plist(&svc, &exec, &cfg);
 
-        // ProgramArguments delegates to the supervisor with this service's spec.
         assert!(p.contains("<string>supervise</string>"));
         assert!(p.contains("<string>--spec</string>"));
         assert!(p.contains("orch.postgres.json"));
-        // The bash trap wrapper is retired — supervision is a real process now.
         assert!(!p.contains("__orch_down"));
         assert!(!p.contains("trap "));
     }
 
     #[test]
     fn test_generate_service_plist__process_type_interactive() {
-        // Without ProcessType, launchd throttles CPU/IO. We always set Interactive.
         let cfg = test_config();
         let svc = simple_host_service("web", "server");
         let exec = simple_exec_set("server");
@@ -553,8 +502,6 @@ mod tests {
 
     #[test]
     fn test_generate_service_plist__container_default_exit_timeout() {
-        // Teardown present, no explicit TIMEOUT_STOP → generous default (30s)
-        // so container stop+delete finishes before launchd SIGKILLs the wrapper.
         let cfg = test_config();
         let svc = simple_host_service("pg", "container run --name orch-pg pg:15");
         let exec = ExecSet {
@@ -588,7 +535,6 @@ mod tests {
 
     #[test]
     fn test_generate_service_plist__no_exit_timeout_for_plain_host() {
-        // Host service, no teardown, no TIMEOUT_STOP → no ExitTimeOut emitted.
         let cfg = test_config();
         let svc = simple_host_service("web", "server");
         let exec = simple_exec_set("server");
@@ -599,6 +545,7 @@ mod tests {
 
     #[test]
     fn test_build_dep_gates__requires_and_after() {
+        let cfg = test_config();
         let mut pg = simple_host_service("postgres", "postgres");
         pg.healthcheck = Some("pg_isready -h localhost".to_string());
         pg.readiness_timeout = Some("60s".to_string());
@@ -606,22 +553,25 @@ mod tests {
         let mut ls = simple_host_service("localstack", "localstack");
         ls.healthcheck = Some("http://localhost:4566/health".to_string());
 
-        let nohc = simple_host_service("redis", "redis-server"); // no healthcheck → no gate
+        let nohc = simple_host_service("redis", "redis-server"); // no healthcheck
 
         let mut app = simple_host_service("app", "app");
         app.requires = vec!["postgres".to_string(), "redis".to_string()];
         app.after = vec!["localstack".to_string()];
 
         let all = vec![pg, ls, nohc, app.clone()];
-        let gates = build_dep_gates(&app, &all);
+        let gates = build_dep_gates(&cfg, &app, &all);
 
-        // postgres (required, command HC, 60s) + localstack (after, http→curl) ; redis skipped
-        assert_eq!(gates.len(), 2);
+        assert_eq!(gates.len(), 3);
         let pg_gate = &gates[0];
         assert!(pg_gate.required);
-        assert_eq!(pg_gate.poll_cmd, "pg_isready -h localhost");
+        assert_eq!(pg_gate.poll_cmd, "true && pg_isready -h localhost");
         assert_eq!(pg_gate.timeout_secs, 60);
-        let ls_gate = &gates[1];
+        let redis_gate = &gates[1];
+        assert!(redis_gate.required);
+        assert_eq!(redis_gate.poll_cmd, "true"); // non-oneshot: process up, no HC
+        assert_eq!(redis_gate.timeout_secs, 90); // default
+        let ls_gate = &gates[2];
         assert!(!ls_gate.required);
         assert_eq!(ls_gate.poll_cmd, "curl -sf 'http://localhost:4566/health'");
         assert_eq!(ls_gate.timeout_secs, 90); // default
@@ -629,8 +579,6 @@ mod tests {
 
     #[test]
     fn test_generate_service_plist_with_deps__delegates_to_supervisor() {
-        // A service with dependencies delegates to the supervisor (which runs the
-        // readiness polls), not an inline bash prologue.
         let cfg = test_config();
         let svc = simple_host_service("app", "app run");
         let exec = simple_exec_set("app run");
@@ -699,7 +647,7 @@ mod tests {
     fn test_parse_duration_secs__variants() {
         assert_eq!(parse_duration_secs("5s"), Some(5));
         assert_eq!(parse_duration_secs("2m"), Some(120));
-        assert_eq!(parse_duration_secs("45"), Some(45));
+        assert_eq!(parse_duration_secs("45"), None); // unitless is not grammar duration (#50)
         assert_eq!(parse_duration_secs("bad"), None);
     }
 
