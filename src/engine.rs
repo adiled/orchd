@@ -1,4 +1,3 @@
-
 use crate::config::Config;
 use crate::exec::ExecSet;
 use crate::platform::Platform;
@@ -111,7 +110,9 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
             platform.check()?;
             let g = platform.generate_all(&orchfile.services, &exec_sets, config)?;
             if !config.quiet {
-                for path in &g { eprintln!("  wrote: {}", path); }
+                for path in &g {
+                    eprintln!("  wrote: {}", path);
+                }
             }
             platform.install(config)?;
             g
@@ -121,7 +122,9 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
             platform.check()?;
             let g = platform.generate_all(&orchfile.services, &exec_sets, config)?;
             if !config.quiet {
-                for path in &g { eprintln!("  wrote: {}", path); }
+                for path in &g {
+                    eprintln!("  wrote: {}", path);
+                }
             }
             platform.install(config)?;
             g
@@ -131,7 +134,9 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
             platform.check()?;
             let g = platform.generate_all(&orchfile.services, &exec_sets, config)?;
             if !config.quiet {
-                for path in &g { eprintln!("  wrote: {}", path); }
+                for path in &g {
+                    eprintln!("  wrote: {}", path);
+                }
             }
             platform.install(config)?;
             g
@@ -147,11 +152,7 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
 
 /// Generate and start services.
 /// If `no_generate` is false, runs generate first.
-pub fn up(
-    config: &Config,
-    services: &[String],
-    no_generate: bool,
-) -> Result<(), EngineError> {
+pub fn up(config: &Config, services: &[String], no_generate: bool) -> Result<(), EngineError> {
     if !no_generate {
         generate(config, false)?;
     }
@@ -215,9 +216,15 @@ pub fn logs(config: &Config, service: &str, follow: bool, lines: u32) -> Result<
 pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     // Stop all services first (ignore errors — they might not be running)
     match config.platform.as_str() {
-        "launchd" => { let _ = crate::platform::launchd::lifecycle::stop(&[], config); }
-        "orchdi" => { let _ = crate::platform::orchdi::lifecycle::stop(&[], config); }
-        _ => { let _ = crate::platform::systemd::lifecycle::stop(&[], config); }
+        "launchd" => {
+            let _ = crate::platform::launchd::lifecycle::stop(&[], config);
+        }
+        "orchdi" => {
+            let _ = crate::platform::orchdi::lifecycle::stop(&[], config);
+        }
+        _ => {
+            let _ = crate::platform::systemd::lifecycle::stop(&[], config);
+        }
     }
 
     // Platform clean (remove units, unlink, daemon-reload)
@@ -354,10 +361,10 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
     }
 
     if config.verbose {
-        eprintln!("parsing {} file(s) in-process via orch", files.len());
+        eprintln!("parsing {} file(s) in-process via the-orch", files.len());
     }
 
-    orch::parse_files(&files, &overrides).map_err(|errs| {
+    the_orch::parse_files(&files, &overrides).map_err(|errs| {
         let msg = errs
             .iter()
             .map(|e| e.to_string())
@@ -472,9 +479,12 @@ mod tests {
     fn test_integration__full_generate_pipeline() {
         use std::path::PathBuf;
 
-        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/Orchfile");
-        assert!(fixture.exists(), "fixture Orchfile not found at {:?}", fixture);
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Orchfile");
+        assert!(
+            fixture.exists(),
+            "fixture Orchfile not found at {:?}",
+            fixture
+        );
 
         let tmp = std::env::temp_dir().join("orchd-integ-test");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -502,8 +512,8 @@ mod tests {
         let config = Config::load(&cli);
 
         // Step 1: in-process parse should succeed and return the OrchFile
-        let orchfile: crate::types::OrchFile = parse_orchfile(&config)
-            .expect("orch parse should succeed on fixture Orchfile");
+        let orchfile: crate::types::OrchFile =
+            parse_orchfile(&config).expect("orch parse should succeed on fixture Orchfile");
 
         assert_eq!(orchfile.services.len(), 3);
 
@@ -512,7 +522,13 @@ mod tests {
         assert_eq!(postgres.name, "postgres");
         assert!(postgres.is_host());
         assert!(!postgres.disabled);
-        assert!(postgres.run_command.as_deref().unwrap().contains("pg_ctlcluster"));
+        assert!(
+            postgres
+                .run_command
+                .as_deref()
+                .unwrap()
+                .contains("pg_ctlcluster")
+        );
         assert!(postgres.stop_command.is_some());
         assert_eq!(postgres.user.as_deref(), Some("postgres"));
 
@@ -525,8 +541,8 @@ mod tests {
         assert!(disabled.disabled);
 
         // Step 2: bare runtime should produce ExecSets for enabled services
-        let rt = crate::runtime::create_runtime("bare", &config)
-            .expect("bare runtime should create");
+        let rt =
+            crate::runtime::create_runtime("bare", &config).expect("bare runtime should create");
         rt.check().expect("bare runtime check should pass");
 
         let mut exec_sets = Vec::new();
@@ -534,22 +550,36 @@ mod tests {
             if svc.disabled {
                 continue;
             }
-            rt.prepare(svc).expect(&format!("prepare {} should succeed", svc.name));
-            let es = rt.exec_set(svc).expect(&format!("exec_set {} should succeed", svc.name));
-            assert!(!es.start.is_empty(), "{} start command should not be empty", svc.name);
+            rt.prepare(svc)
+                .expect(&format!("prepare {} should succeed", svc.name));
+            let es = rt
+                .exec_set(svc)
+                .expect(&format!("exec_set {} should succeed", svc.name));
+            assert!(
+                !es.start.is_empty(),
+                "{} start command should not be empty",
+                svc.name
+            );
             exec_sets.push((idx, es));
         }
         assert_eq!(exec_sets.len(), 2, "should have 2 enabled services");
 
         // Step 3: systemd generator should produce unit files
         let platform = crate::platform::systemd::SystemdPlatform::new();
-        platform.check().expect("systemd platform check should pass");
+        platform
+            .check()
+            .expect("systemd platform check should pass");
 
-        let generated = platform.generate_all(&orchfile.services, &exec_sets, &config)
+        let generated = platform
+            .generate_all(&orchfile.services, &exec_sets, &config)
             .expect("generate_all should succeed");
 
         // Should generate: 2 service units + ready gates + target
-        assert!(generated.len() >= 3, "should generate at least 3 files, got {}", generated.len());
+        assert!(
+            generated.len() >= 3,
+            "should generate at least 3 files, got {}",
+            generated.len()
+        );
 
         // Verify postgres unit file content
         let pg_unit_path = config.units_dir().join("integ-postgres.service");
@@ -566,21 +596,31 @@ mod tests {
         let redis_unit_path = config.units_dir().join("integ-redis.service");
         assert!(redis_unit_path.exists(), "redis unit file should exist");
         let redis_content = std::fs::read_to_string(&redis_unit_path).unwrap();
-        assert!(redis_content.contains("After="), "redis should have After= dependency");
+        assert!(
+            redis_content.contains("After="),
+            "redis should have After= dependency"
+        );
 
         // Verify target file exists
         let target_path = config.units_dir().join("integ.target");
         assert!(target_path.exists(), "target file should exist");
 
         // Services reference the target via WantedBy (reverse dependency)
-        assert!(pg_content.contains("WantedBy=integ.target"),
-            "postgres unit should reference integ.target via WantedBy");
-        assert!(redis_content.contains("WantedBy=integ.target"),
-            "redis unit should reference integ.target via WantedBy");
+        assert!(
+            pg_content.contains("WantedBy=integ.target"),
+            "postgres unit should reference integ.target via WantedBy"
+        );
+        assert!(
+            redis_content.contains("WantedBy=integ.target"),
+            "redis unit should reference integ.target via WantedBy"
+        );
 
         // disabled-svc should NOT have a unit file generated
         let disabled_unit_path = config.units_dir().join("integ-disabled-svc.service");
-        assert!(!disabled_unit_path.exists(), "disabled service should not have a unit file");
+        assert!(
+            !disabled_unit_path.exists(),
+            "disabled service should not have a unit file"
+        );
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&tmp);

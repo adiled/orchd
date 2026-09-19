@@ -14,7 +14,9 @@ use generate::{generate_service_plist_with_deps, plist_filename};
 pub struct LaunchdPlatform;
 
 impl LaunchdPlatform {
-    pub fn new() -> Self { LaunchdPlatform }
+    pub fn new() -> Self {
+        LaunchdPlatform
+    }
 }
 
 /// Install directory for plists, by scope.
@@ -70,7 +72,10 @@ impl Platform for LaunchdPlatform {
                     let _ = std::fs::remove_file(&dest);
                     std::fs::copy(&path, &dest).map_err(|e| {
                         PlatformError::InstallFailed(format!(
-                            "copy {} -> {}: {}", path.display(), dest.display(), e
+                            "copy {} -> {}: {}",
+                            path.display(),
+                            dest.display(),
+                            e
                         ))
                     })?;
                 }
@@ -192,16 +197,26 @@ mod tests {
 
     #[test]
     fn test_install_dir__user_uses_home() {
-        unsafe { std::env::set_var("HOME", "/Users/test"); }
+        unsafe {
+            std::env::set_var("HOME", "/Users/test");
+        }
         let cfg = test_config(Scope::User);
-        assert_eq!(install_dir(&cfg), PathBuf::from("/Users/test/Library/LaunchAgents"));
+        assert_eq!(
+            install_dir(&cfg),
+            PathBuf::from("/Users/test/Library/LaunchAgents")
+        );
     }
 
     #[test]
     fn test_plist_dest_path__joins_install_dir() {
-        unsafe { std::env::set_var("HOME", "/Users/test"); }
+        unsafe {
+            std::env::set_var("HOME", "/Users/test");
+        }
         let cfg = test_config(Scope::User);
         let p = plist_dest_path(&cfg, "orch.web");
-        assert_eq!(p, PathBuf::from("/Users/test/Library/LaunchAgents/orch.web.plist"));
+        assert_eq!(
+            p,
+            PathBuf::from("/Users/test/Library/LaunchAgents/orch.web.plist")
+        );
     }
 }

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: keep the tree rustfmt-clean.
+# Installed via: git config core.hooksPath .githooks
+if [[ -f Cargo.toml ]]; then
+  if ! cargo fmt --check >/dev/null 2>&1; then
+    echo "error: formatting is not clean — run 'cargo fmt', stage the changes, and retry." >&2
+    exit 1
+  fi
+fi

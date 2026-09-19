@@ -59,9 +59,7 @@ impl AppleMode {
             "osx" | "vz" | "orchd-osx" => AppleMode::OrchdOsx,
             "xpc" | "daemon" | "apple" | "orchd-apple" | "" => AppleMode::OrchdApple,
             other => {
-                eprintln!(
-                    "warning: unknown ORCHD_APPLE_MODE '{other}', using 'xpc' (orchd-apple)"
-                );
+                eprintln!("warning: unknown ORCHD_APPLE_MODE '{other}', using 'xpc' (orchd-apple)");
                 AppleMode::OrchdApple
             }
         }
@@ -130,9 +128,9 @@ impl AppleRuntime {
 
         if let Some(bytes) = input {
             let stdin = child.stdin.as_mut().expect("stdin piped");
-            stdin
-                .write_all(bytes)
-                .map_err(|e| RuntimeError::Other(format!("failed to write to co-process stdin: {e}")))?;
+            stdin.write_all(bytes).map_err(|e| {
+                RuntimeError::Other(format!("failed to write to co-process stdin: {e}"))
+            })?;
         }
 
         let output = child
@@ -368,8 +366,8 @@ mod tests {
 
     /// Locate the built orchd-apple Zig binary, or skip the test if it's absent.
     fn zig_bin() -> Option<PathBuf> {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("orchd-apple/zig-out/bin/orchd-apple");
+        let p =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("orchd-apple/zig-out/bin/orchd-apple");
         if p.exists() { Some(p) } else { None }
     }
 
@@ -421,7 +419,10 @@ mod tests {
             exec.pre_start.as_deref(),
             Some("container image pull postgres:15")
         );
-        assert!(exec.start.starts_with("container run --name orch-postgres --init"));
+        assert!(
+            exec.start
+                .starts_with("container run --name orch-postgres --init")
+        );
         assert!(exec.start.contains(" --env FOO=bar"));
         assert!(exec.start.contains(" --publish 8080:80"));
         assert!(exec.start.contains(" --memory 512M"));
@@ -452,9 +453,24 @@ mod tests {
         assert!(exec.start.contains(" run orch-postgres postgres:15"));
         assert!(exec.start.contains(" wait orch-postgres"));
         assert!(!exec.start.contains("container "));
-        assert!(exec.pre_start.as_deref().unwrap().ends_with(" pull postgres:15"));
-        assert!(exec.stop.as_deref().unwrap().ends_with(" stop orch-postgres"));
-        assert!(exec.post_stop.as_deref().unwrap().ends_with(" delete orch-postgres"));
+        assert!(
+            exec.pre_start
+                .as_deref()
+                .unwrap()
+                .ends_with(" pull postgres:15")
+        );
+        assert!(
+            exec.stop
+                .as_deref()
+                .unwrap()
+                .ends_with(" stop orch-postgres")
+        );
+        assert!(
+            exec.post_stop
+                .as_deref()
+                .unwrap()
+                .ends_with(" delete orch-postgres")
+        );
     }
 
     /// Host-mode services pass through unchanged in every mode.

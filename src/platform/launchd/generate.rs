@@ -2,9 +2,8 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::exec::ExecSet;
-use crate::orchdi::{parse_duration_secs, service_label, supervise_spec_path, DepGate};
+use crate::orchdi::{DepGate, parse_duration_secs, service_label, supervise_spec_path};
 use crate::types::{RestartPolicy, Service};
-
 
 #[cfg(test)]
 pub fn generate_service_plist(service: &Service, exec_set: &ExecSet, config: &Config) -> String {
@@ -109,10 +108,16 @@ pub fn generate_service_plist_with_deps(
         writeln!(p, "  <string>{}</string>", xml_escape(user)).unwrap();
     }
 
-    let out = service.logging.stdout.as_ref()
+    let out = service
+        .logging
+        .stdout
+        .as_ref()
         .map(|s| resolve_path(s, &config.project_dir))
         .unwrap_or(stdout_path);
-    let err = service.logging.stderr.as_ref()
+    let err = service
+        .logging
+        .stderr
+        .as_ref()
         .map(|s| resolve_path(s, &config.project_dir))
         .unwrap_or(stderr_path);
     writeln!(p, "  <key>StandardOutPath</key>").unwrap();
@@ -212,8 +217,8 @@ fn xml_escape(s: &str) -> String {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
-    use crate::orchdi::{build_dep_gates, build_supervise_spec};
     use crate::config::Scope;
+    use crate::orchdi::{build_dep_gates, build_supervise_spec};
     use crate::types::*;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -266,7 +271,12 @@ mod tests {
     }
 
     fn simple_exec_set(start: &str) -> ExecSet {
-        ExecSet { start: start.to_string(), pre_start: None, stop: None, post_stop: None }
+        ExecSet {
+            start: start.to_string(),
+            pre_start: None,
+            stop: None,
+            post_stop: None,
+        }
     }
 
     #[test]
@@ -583,8 +593,16 @@ mod tests {
         let svc = simple_host_service("app", "app run");
         let exec = simple_exec_set("app run");
         let deps = vec![
-            DepGate { poll_cmd: "pg_isready".to_string(), timeout_secs: 60, required: true },
-            DepGate { poll_cmd: "curl -sf 'http://x/health'".to_string(), timeout_secs: 90, required: false },
+            DepGate {
+                poll_cmd: "pg_isready".to_string(),
+                timeout_secs: 60,
+                required: true,
+            },
+            DepGate {
+                poll_cmd: "curl -sf 'http://x/health'".to_string(),
+                timeout_secs: 90,
+                required: false,
+            },
         ];
         let p = generate_service_plist_with_deps(&svc, &exec, &cfg, &deps);
 
@@ -611,9 +629,15 @@ mod tests {
         let spec = build_supervise_spec(&svc, &exec, &cfg, &deps);
 
         assert_eq!(spec.label, "orch.pg");
-        assert_eq!(spec.pre_start.as_deref(), Some("container image pull pg:15"));
+        assert_eq!(
+            spec.pre_start.as_deref(),
+            Some("container image pull pg:15")
+        );
         assert_eq!(spec.stop.as_deref(), Some("container stop orch-pg"));
-        assert_eq!(spec.post_stop.as_deref(), Some("container delete --force orch-pg"));
+        assert_eq!(
+            spec.post_stop.as_deref(),
+            Some("container delete --force orch-pg")
+        );
         assert_eq!(spec.deps.len(), 1);
         assert!(spec.deps[0].required);
         assert_eq!(spec.stop_timeout_secs, 30); // container default

@@ -38,17 +38,32 @@ pub fn generate_service_unit(
     }
 
     if let Some(ref pre_start) = exec_set.pre_start {
-        writeln!(unit, "ExecStartPre=/bin/bash -c '{}'", escape_bash(pre_start)).unwrap();
+        writeln!(
+            unit,
+            "ExecStartPre=/bin/bash -c '{}'",
+            escape_bash(pre_start)
+        )
+        .unwrap();
     }
 
-    writeln!(unit, "ExecStart=/bin/bash -c '{}'", escape_bash(&exec_set.start)).unwrap();
+    writeln!(
+        unit,
+        "ExecStart=/bin/bash -c '{}'",
+        escape_bash(&exec_set.start)
+    )
+    .unwrap();
 
     if let Some(ref stop) = exec_set.stop {
         writeln!(unit, "ExecStop=/bin/bash -c '{}'", escape_bash(stop)).unwrap();
     }
 
     if let Some(ref post_stop) = exec_set.post_stop {
-        writeln!(unit, "ExecStopPost=/bin/bash -c '{}'", escape_bash(post_stop)).unwrap();
+        writeln!(
+            unit,
+            "ExecStopPost=/bin/bash -c '{}'",
+            escape_bash(post_stop)
+        )
+        .unwrap();
     }
 
     if let Some(ref workdir) = service.workdir {
@@ -124,10 +139,20 @@ pub fn generate_service_unit(
     }
 
     if let Some(ref stdout) = service.logging.stdout {
-        writeln!(unit, "StandardOutput=file:{}", resolve_path(stdout, &config.project_dir)).unwrap();
+        writeln!(
+            unit,
+            "StandardOutput=file:{}",
+            resolve_path(stdout, &config.project_dir)
+        )
+        .unwrap();
     }
     if let Some(ref stderr) = service.logging.stderr {
-        writeln!(unit, "StandardError=file:{}", resolve_path(stderr, &config.project_dir)).unwrap();
+        writeln!(
+            unit,
+            "StandardError=file:{}",
+            resolve_path(stderr, &config.project_dir)
+        )
+        .unwrap();
     }
 
     writeln!(unit).unwrap();
@@ -138,7 +163,10 @@ pub fn generate_service_unit(
 }
 
 pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
-    let healthcheck = service.healthcheck.as_deref().expect("ready gate requires a healthcheck");
+    let healthcheck = service
+        .healthcheck
+        .as_deref()
+        .expect("ready gate requires a healthcheck");
     let timeout = service.readiness_timeout.as_deref().unwrap_or("90s");
 
     let mut unit = String::with_capacity(512);
@@ -362,7 +390,10 @@ mod tests {
     fn test_generate_service_unit__with_environment() {
         let config = test_config();
         let mut svc = simple_host_service("webapp", "python manage.py runserver");
-        svc.env.insert("DJANGO_SETTINGS_MODULE".to_string(), "myapp.settings.dev".to_string());
+        svc.env.insert(
+            "DJANGO_SETTINGS_MODULE".to_string(),
+            "myapp.settings.dev".to_string(),
+        );
         svc.env.insert("DEBUG".to_string(), "true".to_string());
         let exec = simple_exec_set("python manage.py runserver");
         let gates = HashSet::new();
@@ -514,7 +545,9 @@ mod tests {
         assert!(unit.contains("BindsTo=orch-postgres.service"));
         assert!(unit.contains("Type=oneshot"));
         assert!(unit.contains("RemainAfterExit=yes"));
-        assert!(unit.contains("until pg_isready -h localhost -p 5433 >/dev/null 2>&1; do sleep 2; done; exit 0"));
+        assert!(unit.contains(
+            "until pg_isready -h localhost -p 5433 >/dev/null 2>&1; do sleep 2; done; exit 0"
+        ));
         assert!(unit.contains("TimeoutStartSec=60s"));
     }
 

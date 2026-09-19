@@ -15,7 +15,9 @@ use generate::{
 pub struct SystemdPlatform;
 
 impl SystemdPlatform {
-    pub fn new() -> Self { SystemdPlatform }
+    pub fn new() -> Self {
+        SystemdPlatform
+    }
 
     /// Directory where units are symlinked, by scope.
     fn systemd_dir(&self, config: &Config) -> PathBuf {
@@ -24,7 +26,8 @@ impl SystemdPlatform {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
                     let home = std::env::var_os("HOME")
-                        .map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("."));
                     home.join(".config")
                 });
             xdg.join("systemd").join("user")
@@ -43,7 +46,6 @@ impl Platform for SystemdPlatform {
         }
         Ok(())
     }
-
 
     fn install(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
@@ -73,11 +75,17 @@ impl Platform for SystemdPlatform {
         }
 
         let mut cmd = std::process::Command::new("systemctl");
-        if config.scope.is_user() { cmd.arg("--user"); }
-        let status = cmd.arg("daemon-reload").status()
+        if config.scope.is_user() {
+            cmd.arg("--user");
+        }
+        let status = cmd
+            .arg("daemon-reload")
+            .status()
             .map_err(|e| PlatformError::InstallFailed(format!("systemctl daemon-reload: {}", e)))?;
         if !status.success() {
-            return Err(PlatformError::InstallFailed("systemctl daemon-reload failed".into()));
+            return Err(PlatformError::InstallFailed(
+                "systemctl daemon-reload failed".into(),
+            ));
         }
         Ok(())
     }
@@ -100,7 +108,9 @@ impl Platform for SystemdPlatform {
         let _ = std::fs::remove_dir_all(&units_dir);
 
         let mut cmd = std::process::Command::new("systemctl");
-        if config.scope.is_user() { cmd.arg("--user"); }
+        if config.scope.is_user() {
+            cmd.arg("--user");
+        }
         let _ = cmd.arg("daemon-reload").status();
         Ok(())
     }
@@ -124,8 +134,7 @@ impl SystemdPlatform {
         // Generate service units
         for (idx, exec_set) in exec_sets {
             let service = &services[*idx];
-            let unit_content =
-                generate_service_unit(service, exec_set, config, &ready_gates);
+            let unit_content = generate_service_unit(service, exec_set, config, &ready_gates);
             let unit_name = config.unit_name(&service.name);
             let unit_path = units_dir.join(&unit_name);
             std::fs::write(&unit_path, &unit_content)?;

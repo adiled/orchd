@@ -3,9 +3,9 @@ mod config;
 mod engine;
 mod exec;
 mod orchard;
+mod orchdi;
 mod platform;
 mod runtime;
-mod orchdi;
 mod types;
 
 use clap::Parser;

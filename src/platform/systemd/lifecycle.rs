@@ -4,7 +4,11 @@ use crate::config::Config;
 use crate::platform::PlatformError;
 
 fn scope_flag(config: &Config) -> Option<&'static str> {
-    if config.scope.is_user() { Some("--user") } else { None }
+    if config.scope.is_user() {
+        Some("--user")
+    } else {
+        None
+    }
 }
 
 /// Start services via systemctl.
@@ -101,9 +105,14 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
     Ok(())
 }
 
-fn query_unit_status(unit_name: &str, config: &Config) -> Result<(String, String, Option<u32>), PlatformError> {
+fn query_unit_status(
+    unit_name: &str,
+    config: &Config,
+) -> Result<(String, String, Option<u32>), PlatformError> {
     let mut cmd = Command::new("systemctl");
-    if let Some(f) = scope_flag(config) { cmd.arg(f); }
+    if let Some(f) = scope_flag(config) {
+        cmd.arg(f);
+    }
     let output = cmd
         .args(["show", unit_name, "--property=ActiveState,SubState,MainPID"])
         .output()
@@ -134,10 +143,7 @@ fn query_unit_status(unit_name: &str, config: &Config) -> Result<(String, String
 
 fn print_status_table(statuses: &[ServiceStatus]) {
     // Header
-    println!(
-        "{:<24} {:<12} {:<12} {}",
-        "SERVICE", "STATE", "SUB", "PID"
-    );
+    println!("{:<24} {:<12} {:<12} {}", "SERVICE", "STATE", "SUB", "PID");
     println!("{}", "-".repeat(60));
 
     for s in statuses {
@@ -168,19 +174,20 @@ fn print_status_json(statuses: &[ServiceStatus]) {
 
 /// Tail logs for a service via journalctl.
 /// This replaces the current process (exec) so the user gets live output.
-pub fn logs(
-    service: &str,
-    follow: bool,
-    lines: u32,
-    config: &Config,
-) -> Result<(), PlatformError> {
+pub fn logs(service: &str, follow: bool, lines: u32, config: &Config) -> Result<(), PlatformError> {
     let unit_name = config.unit_name(service);
     let mut args: Vec<String> = Vec::new();
-    if config.scope.is_user() { args.push("--user".to_string()); }
-    args.push("-u".to_string()); args.push(unit_name.clone());
+    if config.scope.is_user() {
+        args.push("--user".to_string());
+    }
+    args.push("-u".to_string());
+    args.push(unit_name.clone());
     args.push("--no-pager".to_string());
-    args.push("-n".to_string()); args.push(lines.to_string());
-    if follow { args.push("-f".to_string()); }
+    args.push("-n".to_string());
+    args.push(lines.to_string());
+    if follow {
+        args.push("-f".to_string());
+    }
 
     let status = Command::new("journalctl")
         .args(&args)
@@ -199,13 +206,12 @@ pub fn logs(
 
 fn systemctl(args: &[&str], config: &Config) -> Result<(), PlatformError> {
     let mut cmd = Command::new("systemctl");
-    if let Some(f) = scope_flag(config) { cmd.arg(f); }
-    let output = cmd
-        .args(args)
-        .output()
-        .map_err(|e| {
-            PlatformError::LifecycleFailed(format!("systemctl {}: {}", args.join(" "), e))
-        })?;
+    if let Some(f) = scope_flag(config) {
+        cmd.arg(f);
+    }
+    let output = cmd.args(args).output().map_err(|e| {
+        PlatformError::LifecycleFailed(format!("systemctl {}: {}", args.join(" "), e))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

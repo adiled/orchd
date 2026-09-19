@@ -23,9 +23,7 @@ fn service_target(config: &Config, label: &str) -> String {
 fn current_uid() -> String {
     let out = Command::new("id").arg("-u").output();
     match out {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).trim().to_string()
-        }
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => "0".to_string(),
     }
 }
@@ -49,10 +47,13 @@ pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> 
             let st = Command::new("launchctl")
                 .args(["kickstart", "-k", &tgt])
                 .status()
-                .map_err(|e| PlatformError::LifecycleFailed(format!("launchctl kickstart: {}", e)))?;
+                .map_err(|e| {
+                    PlatformError::LifecycleFailed(format!("launchctl kickstart: {}", e))
+                })?;
             if !st.success() {
                 return Err(PlatformError::LifecycleFailed(format!(
-                    "launchctl kickstart {} failed", tgt
+                    "launchctl kickstart {} failed",
+                    tgt
                 )));
             }
         }
@@ -87,7 +88,8 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
     let entries = std::fs::read_dir(&units_dir).map_err(|e| {
         PlatformError::LifecycleFailed(format!(
             "cannot read units directory '{}': {}. Run 'orchd generate' first.",
-            units_dir.display(), e
+            units_dir.display(),
+            e
         ))
     })?;
 
@@ -96,21 +98,35 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
 
     for entry in entries.flatten() {
         let filename = entry.file_name().to_string_lossy().to_string();
-        if !filename.ends_with(".plist") { continue; }
-        if !filename.starts_with(&ns_prefix) { continue; }
+        if !filename.ends_with(".plist") {
+            continue;
+        }
+        if !filename.starts_with(&ns_prefix) {
+            continue;
+        }
 
-        let label = filename.strip_suffix(".plist").unwrap_or(&filename).to_string();
+        let label = filename
+            .strip_suffix(".plist")
+            .unwrap_or(&filename)
+            .to_string();
         let svc_name = label.strip_prefix(&ns_prefix).unwrap_or(&label).to_string();
 
         let (state, sub, pid) = query_status(&label, config);
         statuses.push(ServiceStatus {
-            name: svc_name, active_state: state, sub_state: sub, pid,
+            name: svc_name,
+            active_state: state,
+            sub_state: sub,
+            pid,
         });
     }
 
     statuses.sort_by(|a, b| a.name.cmp(&b.name));
 
-    if as_json { print_status_json(&statuses); } else { print_status_table(&statuses); }
+    if as_json {
+        print_status_json(&statuses);
+    } else {
+        print_status_table(&statuses);
+    }
     Ok(())
 }
 
@@ -131,11 +147,17 @@ fn query_status(label: &str, config: &Config) -> (String, String, Option<u32>) {
         let t = line.trim();
         if let Some(v) = t.strip_prefix("pid =") {
             if let Ok(p) = v.trim().trim_end_matches(',').parse::<u32>() {
-                if p > 0 { pid = Some(p); }
+                if p > 0 {
+                    pid = Some(p);
+                }
             }
         } else if let Some(v) = t.strip_prefix("state =") {
             sub = v.trim().trim_end_matches(',').to_string();
-            state = if sub == "running" { "active".to_string() } else { "inactive".to_string() };
+            state = if sub == "running" {
+                "active".to_string()
+            } else {
+                "inactive".to_string()
+            };
         }
     }
     (state, sub, pid)
@@ -146,17 +168,24 @@ fn print_status_table(statuses: &[ServiceStatus]) {
     println!("{}", "-".repeat(60));
     for s in statuses {
         let pid_str = s.pid.map_or("-".to_string(), |p| p.to_string());
-        println!("{:<24} {:<12} {:<12} {}", s.name, s.active_state, s.sub_state, pid_str);
+        println!(
+            "{:<24} {:<12} {:<12} {}",
+            s.name, s.active_state, s.sub_state, pid_str
+        );
     }
 }
 
 fn print_status_json(statuses: &[ServiceStatus]) {
     print!("[");
     for (i, s) in statuses.iter().enumerate() {
-        if i > 0 { print!(","); }
+        if i > 0 {
+            print!(",");
+        }
         print!(
             "\n  {{\"name\":\"{}\",\"state\":\"{}\",\"sub\":\"{}\",\"pid\":{}}}",
-            s.name, s.active_state, s.sub_state,
+            s.name,
+            s.active_state,
+            s.sub_state,
             s.pid.map_or("null".to_string(), |p| p.to_string())
         );
     }
@@ -165,19 +194,16 @@ fn print_status_json(statuses: &[ServiceStatus]) {
 
 /// Tail StandardOutPath + StandardErrorPath for a service. launchd has no
 /// journald, so we shell out to `tail`.
-pub fn logs(
-    service: &str,
-    follow: bool,
-    lines: u32,
-    config: &Config,
-) -> Result<(), PlatformError> {
+pub fn logs(service: &str, follow: bool, lines: u32, config: &Config) -> Result<(), PlatformError> {
     let label = service_label(config, service);
     let log_base = log_base(config);
     let out_path = format!("{}/{}.out.log", log_base, label);
     let err_path = format!("{}/{}.err.log", log_base, label);
 
     let mut args: Vec<String> = vec!["-n".to_string(), lines.to_string()];
-    if follow { args.push("-f".to_string()); }
+    if follow {
+        args.push("-f".to_string());
+    }
     args.push(out_path);
     args.push(err_path);
 
@@ -188,7 +214,8 @@ pub fn logs(
 
     if !status.success() {
         return Err(PlatformError::LifecycleFailed(format!(
-            "tail exited with code {}", status.code().unwrap_or(-1)
+            "tail exited with code {}",
+            status.code().unwrap_or(-1)
         )));
     }
     Ok(())

@@ -147,7 +147,8 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
             println!(
                 "{:<28} {:<8} {}",
                 label,
-                pid.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string()),
+                pid.map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
                 if running { "running" } else { "stopped" }
             );
         }

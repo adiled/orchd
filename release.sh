@@ -2,13 +2,12 @@
 set -euo pipefail
 
 # release.sh - bump version, sync lockfile, tag, and push.
-# Usage: ./release.sh [major|minor|patch|exact] [version]
+# Usage: ./release.sh [patch|minor|major]
 #
 # Examples:
-#      ./release.sh patch             # bumps 0.3.2 -> 0.3.3
-#      ./release.sh minor             # bumps 0.3.2 -> 0.4.0
-#      ./release.sh major             # bumps 0.3.2 -> 1.0.0
-#      ./release.sh exact 1.2.3       # sets version to 1.2.3
+#     ./release.sh patch            # bumps 0.3.2 -> 0.3.3
+#     ./release.sh minor            # bumps 0.3.2 -> 0.4.0
+#     ./release.sh major            # bumps 0.3.2 -> 1.0.0
 #
 # Files kept in version lockstep:
 #   Cargo.toml, Cargo.lock, orchd-osx/build.zig.zon, orchd-apple/build.zig.zon
@@ -30,30 +29,24 @@ case "${1:-patch}" in
     OLD_VER="$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VER"
     NEW_VER="$MAJOR.$MINOR.$((PATCH + 1))"
-      ;;
+     ;;
   minor)
     OLD_VER="$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VER"
     NEW_VER="$MAJOR.$((MINOR + 1)).0"
-      ;;
+     ;;
   major)
     OLD_VER="$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VER"
     NEW_VER="$((MAJOR + 1)).0.0"
-      ;;
-  exact)
-    if [[ -z "${2:-}" ]]; then
-      echo "error: 'exact' requires a version argument (e.g., './release.sh exact 1.2.0')" >&2
-      exit 1
-    fi
-    NEW_VER="$2"
-      ;;
-   *)
-    echo "error: unknown bump type '${1}' (use patch|minor|major|exact)" >&2
+     ;;
+  *)
+    echo "error: unknown bump type '${1}' (use patch|minor|major)" >&2
     exit 1
-      ;;
+     ;;
 esac
 
+# Files whose version must stay in lockstep with Cargo.toml
 VERSIONED_FILES=(Cargo.toml orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
 
 # Every versioned file must already carry OLD_VER, or versions have drifted.
@@ -64,7 +57,7 @@ for f in "${VERSIONED_FILES[@]}"; do
   fi
 done
 
-# Bump versions in all files:
+# Bump versions in all lockstep files:
 #   Cargo.toml      -> `version = "x.y.z"`
 #   build.zig.zon   -> `.version = "x.y.z"`   (fingerprint is name-bound, unchanged)
 for f in "${VERSIONED_FILES[@]}"; do

@@ -1,4 +1,3 @@
-
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -200,7 +199,6 @@ pub fn healthcheck_to_cmd(hc: &str) -> String {
     }
 }
 
-
 pub struct DepGate {
     pub poll_cmd: String,
     pub timeout_secs: u32,
@@ -333,6 +331,57 @@ pub fn ready_marker_path(config: &Config, service_name: &str) -> String {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+    use crate::config::Scope;
+    use crate::types::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn test_config() -> Config {
+        Config {
+            orchfile: PathBuf::from("/test/Orchfile"),
+            overlays: Vec::new(),
+            runtime: "bare".to_string(),
+            platform: "launchd".to_string(),
+            scope: Scope::User,
+            state_dir: PathBuf::from("/test/.orch"),
+            project_dir: PathBuf::from("/test/project"),
+            data_dir: PathBuf::from("/test/.orch/data"),
+            namespace: "orch".to_string(),
+            args: Vec::new(),
+            verbose: false,
+            quiet: false,
+        }
+    }
+
+    fn simple_host_service(name: &str, run_cmd: &str) -> Service {
+        Service {
+            name: name.to_string(),
+            mode: ServiceMode::Host,
+            image: None,
+            run_command: Some(run_cmd.to_string()),
+            entrypoint: None,
+            cmd: None,
+            publish: Vec::new(),
+            volumes: Vec::new(),
+            user: None,
+            stop_command: None,
+            reload_command: None,
+            workdir: None,
+            env: HashMap::new(),
+            env_files: Vec::new(),
+            requires: Vec::new(),
+            after: Vec::new(),
+            healthcheck: None,
+            readiness_timeout: None,
+            oneshot: false,
+            disabled: false,
+            recreate: RecreatePolicy::default(),
+            restart: RestartConfig::default(),
+            timeouts: TimeoutConfig::default(),
+            resources: ResourceLimits::default(),
+            logging: LogConfig::default(),
+        }
+    }
 
     #[test]
     fn test_spec_roundtrip() {
@@ -342,7 +391,11 @@ mod tests {
             start: "sleep 1".into(),
             stop: Some("echo stop".into()),
             post_stop: Some("echo delete".into()),
-            deps: vec![DepSpec { poll_cmd: "true".into(), timeout_secs: 5, required: true }],
+            deps: vec![DepSpec {
+                poll_cmd: "true".into(),
+                timeout_secs: 5,
+                required: true,
+            }],
             ready_marker: None,
             stop_timeout_secs: 30,
         };
@@ -355,7 +408,10 @@ mod tests {
 
     #[test]
     fn test_healthcheck_to_cmd__http_becomes_curl() {
-        assert_eq!(healthcheck_to_cmd("http://localhost/h"), "curl -sf 'http://localhost/h'");
+        assert_eq!(
+            healthcheck_to_cmd("http://localhost/h"),
+            "curl -sf 'http://localhost/h'"
+        );
         assert_eq!(healthcheck_to_cmd("pg_isready"), "pg_isready");
     }
 

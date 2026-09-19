@@ -145,7 +145,10 @@ mod tests {
         let svc = host_service("django", "/usr/bin/python manage.py runserver 0.0.0.0:9090");
 
         let exec = rt.exec_set(&svc).unwrap();
-        assert_eq!(exec.start, "/usr/bin/python manage.py runserver 0.0.0.0:9090");
+        assert_eq!(
+            exec.start,
+            "/usr/bin/python manage.py runserver 0.0.0.0:9090"
+        );
         assert!(exec.pre_start.is_none());
         assert!(exec.stop.is_none());
         assert!(exec.post_stop.is_none());

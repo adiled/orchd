@@ -1,17 +1,22 @@
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope { System, User }
+pub enum Scope {
+    System,
+    User,
+}
 
 impl Scope {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "system" => Some(Scope::System),
-            "user"   => Some(Scope::User),
+            "user" => Some(Scope::User),
             _ => None,
         }
     }
-    pub fn is_user(self) -> bool { matches!(self, Scope::User) }
+    pub fn is_user(self) -> bool {
+        matches!(self, Scope::User)
+    }
 }
 
 /// orchd configuration, merged from CLI > env > .orchrc > defaults.
@@ -62,30 +67,48 @@ impl Config {
         let rc = load_orchrc(&project_dir);
 
         // Every other setting resolves CLI > env > .orchrc > default, uniformly.
-        let orchfile = path_setting(cli.orchfile.as_ref(), "ORCH_ORCHFILE", &rc, "orchfile", || {
-            project_dir.join("Orchfile")
-        });
-        let state_dir = path_setting(cli.state_dir.as_ref(), "ORCH_STATE_DIR", &rc, "state_dir", || {
-            dirs_or_home().join(".orch")
-        });
+        let orchfile = path_setting(
+            cli.orchfile.as_ref(),
+            "ORCH_ORCHFILE",
+            &rc,
+            "orchfile",
+            || project_dir.join("Orchfile"),
+        );
+        let state_dir = path_setting(
+            cli.state_dir.as_ref(),
+            "ORCH_STATE_DIR",
+            &rc,
+            "state_dir",
+            || dirs_or_home().join(".orch"),
+        );
         let data_dir = path_setting(cli.data_dir.as_ref(), "ORCH_DATA", &rc, "data_dir", || {
             state_dir.join("data")
         });
         let runtime = str_setting(cli.runtime.as_ref(), "ORCH_RUNTIME", &rc, "runtime", || {
             "bare".to_string()
         });
-        let platform =
-            str_setting(cli.platform.as_ref(), "ORCH_PLATFORM", &rc, "platform", detect_platform);
-        let namespace = str_setting(cli.namespace.as_ref(), "ORCH_NAMESPACE", &rc, "namespace", || {
-            "orch".to_string()
-        });
+        let platform = str_setting(
+            cli.platform.as_ref(),
+            "ORCH_PLATFORM",
+            &rc,
+            "platform",
+            detect_platform,
+        );
+        let namespace = str_setting(
+            cli.namespace.as_ref(),
+            "ORCH_NAMESPACE",
+            &rc,
+            "namespace",
+            || "orch".to_string(),
+        );
 
         let scope = if cli.user {
             Scope::User
         } else if cli.system {
             Scope::System
         } else {
-            std::env::var("ORCH_SCOPE").ok()
+            std::env::var("ORCH_SCOPE")
+                .ok()
                 .or_else(|| rc.get("scope").cloned())
                 .and_then(|s| Scope::from_str(&s))
                 .unwrap_or(Scope::System)
@@ -169,10 +192,7 @@ fn str_setting(
 /// First file found wins (no merging between files).
 /// Format: `KEY=VALUE` per line, `#` comments, blank lines ignored.
 fn load_orchrc(project_dir: &std::path::Path) -> std::collections::HashMap<String, String> {
-    let candidates = [
-        project_dir.join(".orchrc"),
-        dirs_or_home().join(".orchrc"),
-    ];
+    let candidates = [project_dir.join(".orchrc"), dirs_or_home().join(".orchrc")];
 
     for path in &candidates {
         if let Ok(content) = std::fs::read_to_string(path) {

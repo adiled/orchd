@@ -1,9 +1,9 @@
-//! Re-export canonical types from the orch crate.
+//! Re-export canonical types from the `the-orch` crate.
 //!
-//! orchd depends on orch as a library to get compile-time alignment
+//! orchd depends on `the-orch` as a library to get compile-time alignment
 //! between the parser's JSON output and the engine's deserialization.
 
-pub use orch::types::*;
+pub use the_orch::types::*;
 
 #[cfg(test)]
 #[allow(non_snake_case)]

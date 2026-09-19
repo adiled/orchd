@@ -123,7 +123,11 @@ pub fn plant(config: &Config) -> Result<(), OrchardError> {
     let input = read_stdin()?;
     let cuttings: Cuttings = serde_json::from_str(&input)?;
 
-    let services: Vec<Service> = cuttings.cuttings.iter().map(|c| c.service.clone()).collect();
+    let services: Vec<Service> = cuttings
+        .cuttings
+        .iter()
+        .map(|c| c.service.clone())
+        .collect();
     let exec_sets: Vec<(usize, ExecSet)> = cuttings
         .cuttings
         .iter()
@@ -139,7 +143,12 @@ pub fn plant(config: &Config) -> Result<(), OrchardError> {
     let out = Beds {
         platform: config.platform.clone(),
         namespace: config.namespace.clone(),
-        scope: if config.scope.is_user() { "user" } else { "system" }.to_string(),
+        scope: if config.scope.is_user() {
+            "user"
+        } else {
+            "system"
+        }
+        .to_string(),
         beds,
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
@@ -147,7 +156,9 @@ pub fn plant(config: &Config) -> Result<(), OrchardError> {
 }
 
 fn beds_launchd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &Config) -> Vec<Bed> {
-    use crate::orchdi::{build_dep_gates, build_supervise_spec, service_label, supervise_spec_path};
+    use crate::orchdi::{
+        build_dep_gates, build_supervise_spec, service_label, supervise_spec_path,
+    };
     use crate::platform::launchd::generate::{generate_service_plist_with_deps, plist_filename};
     let units_dir = config.units_dir();
     let mut beds = Vec::new();
@@ -167,10 +178,16 @@ fn beds_launchd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
         }
         arts.push(Artifact {
             kind: "plist".into(),
-            path: units_dir.join(plist_filename(config, &svc.name)).display().to_string(),
+            path: units_dir
+                .join(plist_filename(config, &svc.name))
+                .display()
+                .to_string(),
             content: generate_service_plist_with_deps(svc, exec, config, &deps),
         });
-        beds.push(Bed { label, artifacts: arts });
+        beds.push(Bed {
+            label,
+            artifacts: arts,
+        });
     }
     beds
 }
@@ -187,7 +204,10 @@ fn beds_systemd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
         let svc = &services[*idx];
         let mut arts = vec![Artifact {
             kind: "unit".into(),
-            path: units_dir.join(config.unit_name(&svc.name)).display().to_string(),
+            path: units_dir
+                .join(config.unit_name(&svc.name))
+                .display()
+                .to_string(),
             content: generate_service_unit(svc, exec, config, &gates),
         }];
         if gates.contains(&svc.name) {
@@ -198,7 +218,10 @@ fn beds_systemd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
                 content: generate_ready_gate(svc, config),
             });
         }
-        beds.push(Bed { label: config.unit_name(&svc.name), artifacts: arts });
+        beds.push(Bed {
+            label: config.unit_name(&svc.name),
+            artifacts: arts,
+        });
     }
 
     // The grove handle: its own bed (one target for the whole namespace).
@@ -292,7 +315,12 @@ mod tests {
     }
 
     fn exec(start: &str) -> ExecSet {
-        ExecSet { start: start.into(), pre_start: None, stop: None, post_stop: None }
+        ExecSet {
+            start: start.into(),
+            pre_start: None,
+            stop: None,
+            post_stop: None,
+        }
     }
 
     #[test]
@@ -309,13 +337,20 @@ mod tests {
         let web = beds.iter().find(|b| b.label == "orch-web.service").unwrap();
         assert_eq!(web.artifacts.len(), 1);
         assert_eq!(web.artifacts[0].kind, "unit");
-        assert!(web.artifacts[0].content.contains("ExecStart=/bin/bash -c '/usr/bin/web'"));
+        assert!(
+            web.artifacts[0]
+                .content
+                .contains("ExecStart=/bin/bash -c '/usr/bin/web'")
+        );
     }
 
     #[test]
     fn test_beds_launchd__container_bed_groups_plist_and_spec() {
         let cfg = test_config("launchd");
-        let svcs = vec![host_service("cache", "container run --name orch-cache redis")];
+        let svcs = vec![host_service(
+            "cache",
+            "container run --name orch-cache redis",
+        )];
         let es = vec![(
             0usize,
             ExecSet {
@@ -343,7 +378,10 @@ mod tests {
         let cut = Cuttings {
             version: "0.2.1".into(),
             runtime: "apple".into(),
-            cuttings: vec![Cutting { service: host_service("a", "x"), exec: exec("x") }],
+            cuttings: vec![Cutting {
+                service: host_service("a", "x"),
+                exec: exec("x"),
+            }],
         };
         let back: Cuttings = serde_json::from_str(&serde_json::to_string(&cut).unwrap()).unwrap();
         assert_eq!(back.cuttings.len(), 1);
@@ -354,7 +392,11 @@ mod tests {
             scope: "user".into(),
             beds: vec![Bed {
                 label: "orch.a".into(),
-                artifacts: vec![Artifact { kind: "plist".into(), path: "/x".into(), content: "y".into() }],
+                artifacts: vec![Artifact {
+                    kind: "plist".into(),
+                    path: "/x".into(),
+                    content: "y".into(),
+                }],
             }],
         };
         let back: Beds = serde_json::from_str(&serde_json::to_string(&beds).unwrap()).unwrap();
