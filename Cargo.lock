@@ -136,7 +136,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "orchd"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "clap",
  "libc",
@@ -226,9 +226,9 @@ dependencies = [
 
 [[package]]
 name = "the-orch"
-version = "0.2.8"
+version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06f155d611d2f7fdd9646f2fa72260e6ece9a23c05067adf5d93fa0fd9485521"
+checksum = "6def679e429ef0478234e4aecdc471e7f9a21d9ab8efd977d36ad4d42cd14282"
 dependencies = [
  "serde",
  "serde_json",
