@@ -10,9 +10,10 @@ uses systemd. You do not need to know how either works.
 ## Install
 
 ```sh
-cargo build --release
-ln -sf target/release/orchd /usr/local/bin/orchd
+cargo install orchd
 ```
+
+Installs the `orchd` binary from crates.io.
 
 For containers on a Mac (requires [`just`](https://github.com/casey/just) and Zig):
 
