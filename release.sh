@@ -9,8 +9,13 @@ set -euo pipefail
 #     ./release.sh minor            # bumps 0.3.2 -> 0.4.0
 #     ./release.sh major            # bumps 0.3.2 -> 1.0.0
 #
-# Files kept in version lockstep:
-#   Cargo.toml, Cargo.lock, orchd-osx/build.zig.zon, orchd-apple/build.zig.zon
+# Core (always): Cargo.toml + Cargo.lock.
+
+# --- Project add-ons (optional) ----------------------------------------------
+# Extra files kept in version lockstep with Cargo.toml. Leave empty for plain
+# Rust projects. Example: (orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
+EXTRA_VERSIONED_FILES=(orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
+# -----------------------------------------------------------------------------
 
 BRANCH="$(git branch --show-current)"
 if [[ "$BRANCH" != "main" ]]; then
@@ -46,8 +51,8 @@ case "${1:-patch}" in
      ;;
 esac
 
-# Files whose version must stay in lockstep with Cargo.toml
-VERSIONED_FILES=(Cargo.toml orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
+# Files kept in version lockstep with Cargo.toml
+VERSIONED_FILES=(Cargo.toml "${EXTRA_VERSIONED_FILES[@]}")
 
 # Every versioned file must already carry OLD_VER, or versions have drifted.
 for f in "${VERSIONED_FILES[@]}"; do
