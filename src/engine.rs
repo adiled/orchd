@@ -534,6 +534,13 @@ fn is_up_to_date(config: &Config) -> bool {
 fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
     let mut files: Vec<(String, String)> = Vec::new();
 
+    // Built-in variable declarations (in-memory; was a temp overlay file).
+    // Declared *before* the user's files so an Orchfile (or overlay) can
+    // override a built-in: ARG merges last-wins, so injecting these last meant
+    // a hand-written `ARG ORCH_DATA=...` in the Orchfile was silently discarded
+    // and only an --overlay could win.
+    files.push(("orchd-vars.orch".to_string(), vars_overlay_content(config)));
+
     // Main Orchfile.
     let content = std::fs::read_to_string(&config.orchfile).map_err(|e| {
         EngineError::OrchParse(format!(
@@ -543,9 +550,6 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         ))
     })?;
     files.push((config.orchfile.display().to_string(), content));
-
-    // Built-in variable declarations (in-memory; was a temp overlay file).
-    files.push(("orchd-vars.orch".to_string(), vars_overlay_content(config)));
 
     // User overlays (merged left-to-right, so these override).
     for overlay in &config.overlays {
@@ -1019,6 +1023,50 @@ mod tests {
             Some(h) => unsafe { std::env::set_var("XDG_CONFIG_HOME", h) },
             None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A built-in ARG must be a default the user can override. They were
+    /// injected after the Orchfile, and ARG merges last-wins, so a
+    /// hand-written `ARG ORCH_DATA=...` was silently replaced.
+    #[test]
+    fn test_parse_orchfile__orchfile_can_override_builtin_args() {
+        let root = std::env::temp_dir().join("orchd-builtin-args");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Orchfile"),
+            "ARG ORCH_DATA=/my/data\nSERVICE web\nRUN ./s ${ORCH_DATA}\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "systemd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(
+            parsed.args.get("ORCH_DATA").map(String::as_str),
+            Some("/my/data"),
+            "Orchfile ARG must win over the built-in default"
+        );
+        // Untouched built-ins keep orchd's values.
+        assert_eq!(
+            parsed.args.get("ORCH_PROJECT").map(String::as_str),
+            Some(root.to_str().unwrap())
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
