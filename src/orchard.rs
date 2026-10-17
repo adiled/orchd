@@ -51,6 +51,7 @@ pub struct Artifact {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bed {
     pub label: String,
+    pub name: Option<String>,
     pub artifacts: Vec<Artifact>,
 }
 
@@ -186,6 +187,7 @@ fn beds_launchd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
         });
         beds.push(Bed {
             label,
+            name: Some(svc.name.clone()),
             artifacts: arts,
         });
     }
@@ -220,6 +222,7 @@ fn beds_systemd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
         }
         beds.push(Bed {
             label: config.unit_name(&svc.name),
+            name: Some(svc.name.clone()),
             artifacts: arts,
         });
     }
@@ -227,6 +230,7 @@ fn beds_systemd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
     // The grove handle: its own bed (one target for the whole namespace).
     beds.push(Bed {
         label: config.target_name(),
+        name: None,
         artifacts: vec![Artifact {
             kind: "target".into(),
             path: units_dir.join(config.target_name()).display().to_string(),
@@ -370,7 +374,44 @@ mod tests {
         assert!(kinds.contains(&"plist"));
         assert!(kinds.contains(&"supervise-spec"));
         let plist = bed.artifacts.iter().find(|a| a.kind == "plist").unwrap();
-        assert!(plist.content.contains("<string>supervise</string>"));
+        assert!(plist.content.contains("<string>tend</string>"));
+    }
+
+    #[test]
+    fn test_beds__service_beds_carry_the_name() {
+        let cfg = test_config("systemd");
+        let svcs = vec![host_service("web", "/usr/bin/web")];
+        let es = vec![(0usize, exec("/usr/bin/web"))];
+        let beds = beds_systemd(&svcs, &es, &cfg);
+
+        let web = beds.iter().find(|b| b.name.is_some()).unwrap();
+        assert_eq!(web.name.as_deref(), Some("web"));
+        assert_eq!(web.label, "orch-web.service");
+    }
+
+    #[test]
+    fn test_beds__grove_bed_has_no_service_name() {
+        let cfg = test_config("systemd");
+        let svcs = vec![host_service("web", "/usr/bin/web")];
+        let es = vec![(0usize, exec("/usr/bin/web"))];
+        let beds = beds_systemd(&svcs, &es, &cfg);
+
+        let grove = beds.iter().find(|b| b.label == "orch.target").unwrap();
+        assert_eq!(
+            grove.name, None,
+            "the grove handle is not a service and must not be tendable"
+        );
+    }
+
+    #[test]
+    fn test_beds__name_survives_the_wire() {
+        let cfg = test_config("launchd");
+        let svcs = vec![host_service("web", "/usr/bin/web")];
+        let es = vec![(0usize, exec("/usr/bin/web"))];
+        let beds = beds_launchd(&svcs, &es, &cfg);
+        let json = serde_json::to_string(&beds).unwrap();
+        let back: Vec<Bed> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back[0].name.as_deref(), Some("web"));
     }
 
     #[test]
@@ -392,6 +433,7 @@ mod tests {
             scope: "user".into(),
             beds: vec![Bed {
                 label: "orch.a".into(),
+                name: Some("a".into()),
                 artifacts: vec![Artifact {
                     kind: "plist".into(),
                     path: "/x".into(),

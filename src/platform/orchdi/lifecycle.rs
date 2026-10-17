@@ -91,7 +91,7 @@ pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> 
         let out = fs::File::create(logfile(config, &label))?;
         let err = out.try_clone()?;
         let child = Command::new(orchd_exe())
-            .arg("supervise")
+            .arg("tend")
             .arg("--spec")
             .arg(&spec)
             .stdin(Stdio::null())
