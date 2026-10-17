@@ -90,9 +90,6 @@ pub fn run(spec_path: &Path) -> i32 {
             return if teardown(&spec, &mut child, pgid) {
                 0
             } else {
-                // The service ignored the stop command and the grace period, so
-                // teardown had to SIGKILL it. Reporting 0 here would tell
-                // launchd/systemd this was a clean stop.
                 eprintln!(
                     "supervise[{}]: did not exit within {}s; killed",
                     spec.label, spec.stop_timeout_secs
@@ -122,8 +119,6 @@ pub fn run(spec_path: &Path) -> i32 {
     }
 }
 
-/// Run the stop path. Returns true if the child exited on its own within the
-/// grace period, false if it had to be SIGKILLed.
 fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) -> bool {
     match &spec.stop {
         Some(stop) => {
@@ -214,9 +209,6 @@ pub fn healthcheck_to_cmd(hc: &str) -> String {
     }
 }
 
-/// Parse a dotenv-style env file into ordered key/value pairs.
-///
-/// Later files win over earlier, matching systemd's left-to-right precedence.
 pub fn parse_env_file(path: &std::path::Path) -> Result<Vec<(String, String)>, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read env file '{}': {}", path.display(), e))?;
@@ -226,7 +218,6 @@ pub fn parse_env_file(path: &std::path::Path) -> Result<Vec<(String, String)>, S
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        // Tolerate `export KEY=value`, a common dotenv idiom.
         let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
         let eq = match line.find('=') {
             Some(p) => p,
@@ -246,7 +237,6 @@ pub fn parse_env_file(path: &std::path::Path) -> Result<Vec<(String, String)>, S
                 i + 1
             ));
         }
-        // Strip one layer of matching surrounding quotes.
         let mut value = line[eq + 1..].trim().to_string();
         if value.len() >= 2
             && ((value.starts_with('"') && value.ends_with('"'))

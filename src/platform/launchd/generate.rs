@@ -84,8 +84,6 @@ pub fn generate_service_plist_with_deps(
         writeln!(p, "  <string>{}</string>", xml_escape(&resolved)).unwrap();
     }
 
-    // launchd has no EnvironmentFile= key, so read the files and inline them.
-    // Explicit ENV entries win, as they do under systemd.
     let mut effective: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
     for env_file in &service.env_files {
@@ -97,7 +95,6 @@ pub fn generate_service_plist_with_deps(
                 }
             }
             Err(e) => {
-                // systemd ignores a missing EnvironmentFile silently; we say so.
                 eprintln!("warning: {}", e);
             }
         }
@@ -682,8 +679,6 @@ mod tests {
         let cfg = test_config();
         assert_eq!(service_label(&cfg, "web"), "orch.web");
     }
-
-    // --- ENV_FILE on launchd -------------------------------------------------
 
     #[test]
     fn test_generate_service_plist__env_file_is_inlined() {

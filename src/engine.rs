@@ -15,7 +15,6 @@ pub enum EngineError {
     Runtime(#[from] crate::runtime::RuntimeError),
     #[error("platform error: {0}")]
     Platform(#[from] crate::platform::PlatformError),
-    /// One or more services could not be materialized, under `--strict`.
     #[error("service(s) skipped:\n{0}")]
     ServiceSkipped(String),
 }
@@ -91,8 +90,6 @@ pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), Engine
     }
 
     if !errors.is_empty() {
-        // A container service under the bare runtime is a supported setup (keep
-        // FROM, add a bare overlay), so this warns unless --strict.
         let summary = format!(
             "{} service(s) skipped (runtime incompatible):\n  {}",
             errors.len(),
@@ -296,8 +293,6 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     Ok(())
 }
 
-/// Directives the target platform has no way to express. systemd maps all of
-/// these; launchd has no equivalent key for any.
 fn unsupported_directives(platform: &str, svc: &crate::types::Service) -> Vec<&'static str> {
     if platform != "launchd" {
         return Vec::new();
@@ -331,8 +326,6 @@ fn unsupported_directives(platform: &str, svc: &crate::types::Service) -> Vec<&'
     out
 }
 
-/// Report directives and durations that generation would discard.
-/// A duration must match the spec grammar: `duration ::= integer ('s'|'m')`.
 fn lint_service(platform: &str, svc: &crate::types::Service) {
     let dropped = unsupported_directives(platform, svc);
     if !dropped.is_empty() {
@@ -344,8 +337,6 @@ fn lint_service(platform: &str, svc: &crate::types::Service) {
         );
     }
 
-    // RELOAD is parsed and validated by the spec (C3, host-only) but has no
-    // implementation on either platform yet.
     if svc.reload_command.is_some() {
         eprintln!(
             "warning: service '{}': RELOAD is not implemented yet; ignoring",
@@ -386,9 +377,6 @@ struct InputStamp {
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
 struct Stamp {
     config_hash: u64,
-    /// ENV_FILE paths are declared inside the Orchfile, so they are only
-    /// discoverable by parsing -- the thing this cache avoids. Recording them
-    /// lets the next run re-check them without parsing.
     inputs: Vec<InputStamp>,
 }
 
@@ -410,7 +398,6 @@ fn config_hash(config: &Config) -> u64 {
     for a in &config.args {
         a.hash(&mut h);
     }
-    // ORCH_ARG_* changes the parsed output, so it belongs in the hash.
     for (k, v) in env_arg_overrides() {
         k.hash(&mut h);
         v.hash(&mut h);
@@ -455,14 +442,12 @@ fn write_stamp(config: &Config, env_files: &[std::path::PathBuf]) {
     }
 }
 
-/// True when a recorded fingerprint of every input and setting still matches.
 fn is_up_to_date(config: &Config) -> bool {
     let units_dir = config.units_dir();
     if !units_dir.exists() {
         return false;
     }
 
-    // launchd writes .plist, systemd .service/.target; count any of them.
     let has_artifacts = std::fs::read_dir(&units_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -490,7 +475,6 @@ fn is_up_to_date(config: &Config) -> bool {
         return false;
     }
 
-    // A vanished, edited or resized input no longer matches its fingerprint.
     for recorded in &stamp.inputs {
         match fingerprint(std::path::Path::new(&recorded.path)) {
             Some(now) if now == *recorded => {}
@@ -501,17 +485,9 @@ fn is_up_to_date(config: &Config) -> bool {
     true
 }
 
-/// Parse the Orchfile (+ overlays) in-process via the `orch` library and return
-/// the resolved OrchFile. No subprocess, no `orch` binary on PATH.
-///
-/// Injects an in-memory overlay declaring orchd's built-in variables (ORCH_DATA,
-/// etc.) so Orchfiles can reference them without the user passing `--arg`.
 fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
     let mut files: Vec<(String, String)> = Vec::new();
 
-    // Built-in variable declarations (in-memory; was a temp overlay file).
-    // Declared before the user's files: ARG merges last-wins, so these are
-    // defaults the Orchfile and its overlays override.
     files.push(("orchd-vars.orch".to_string(), vars_overlay_content(config)));
 
     // Main Orchfile.
@@ -536,7 +512,6 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         files.push((overlay.display().to_string(), content));
     }
 
-    // Spec precedence: --arg flag > ORCH_ARG_* env > Orchfile default.
     let mut overrides = env_arg_overrides();
 
     for arg in &config.args {
@@ -560,8 +535,6 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         EngineError::OrchParse(msg)
     })?;
 
-    // The resolver applies an override only where an ARG of that name exists,
-    // so a typo or stale flag is otherwise inert.
     let mut unknown: Vec<&String> = overrides
         .keys()
         .filter(|k| !parsed.args.contains_key(*k))
@@ -577,8 +550,6 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
     Ok(parsed)
 }
 
-/// Collect `ORCH_ARG_<name>=value`. The orch CLI reads these, but orchd calls
-/// the-orch as a library and so has to.
 fn env_arg_overrides() -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     for (key, value) in std::env::vars() {
@@ -591,7 +562,6 @@ fn env_arg_overrides() -> std::collections::HashMap<String, String> {
     out
 }
 
-/// The in-memory ARG overlay declaring orchd's built-in variables.
 fn vars_overlay_content(config: &Config) -> String {
     format!(
         "# Auto-generated by orchd — built-in variable declarations\n\
@@ -611,17 +581,8 @@ fn vars_overlay_content(config: &Config) -> String {
 mod tests {
     use super::*;
 
-    // --- generate cache (is_up_to_date / stamp) ---
-
-    /// ORCH_ARG_* overrides are process-global, and the cache hash reads them.
-    /// Tests that mutate the env and tests that compute a hash must not
-    /// overlap, so both take this lock.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Build an isolated config + a fake generated artifact, then exercise the
-    /// cache. `artifact` is the file that lands in units_dir (".plist" on
-    /// launchd, ".service" on systemd). The returned guard holds ENV_LOCK for
-    /// the duration of the test.
     #[allow(clippy::type_complexity)]
     fn cache_fixture(
         name: &str,
@@ -771,8 +732,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // --- ORCH_ARG_* env tier + unknown-ARG warnings ---
-
     #[test]
     fn test_env_arg_overrides__reads_prefixed_env() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -820,11 +779,9 @@ mod tests {
         cfg.quiet = true;
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Default.
         let parsed = parse_orchfile(&cfg).unwrap();
         assert_eq!(parsed.args.get("port").map(String::as_str), Some("8000"));
 
-        // Env tier wins over the default.
         unsafe { std::env::set_var("ORCH_ARG_port", "9001") };
         let parsed = parse_orchfile(&cfg).unwrap();
         assert_eq!(
@@ -833,7 +790,6 @@ mod tests {
             "ORCH_ARG_* env must override the Orchfile default"
         );
 
-        // Flag tier wins over the env.
         cfg.args.push("port=7000".to_string());
         let parsed = parse_orchfile(&cfg).unwrap();
         assert_eq!(
@@ -845,8 +801,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
-
-    // --- fell / clean namespace scoping ---
 
     #[test]
     fn test_clean__scopes_to_namespace_prefix() {
@@ -861,8 +815,6 @@ mod tests {
 
         let units = root.join(".orch/units");
         std::fs::create_dir_all(&units).unwrap();
-        // clean() removes the *installed* copy in the platform dir, so put one
-        // there too and assert on what actually gets unlinked.
         let agents = root.join("Library/LaunchAgents");
         std::fs::create_dir_all(&agents).unwrap();
         std::fs::write(units.join("orch.web.plist"), "mine").unwrap();
@@ -1011,7 +963,6 @@ mod tests {
             Some("/my/data"),
             "Orchfile ARG must win over the built-in default"
         );
-        // Untouched built-ins keep orchd's values.
         assert_eq!(
             parsed.args.get("ORCH_PROJECT").map(String::as_str),
             Some(root.to_str().unwrap())
@@ -1019,8 +970,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
-
-    // --- lint: what generation would discard ---
 
     #[test]
     fn test_unsupported_directives__launchd_reports_what_it_cannot_map() {
@@ -1048,7 +997,6 @@ mod tests {
                 "START_LIMIT_INTERVAL"
             ]
         );
-        // systemd expresses all of them, so it reports nothing.
         assert!(unsupported_directives("systemd", &svc).is_empty());
     }
 

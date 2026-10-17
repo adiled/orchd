@@ -84,7 +84,6 @@ pub struct AppleRuntime {
     namespace: String,
     /// Data directory (for host-mode services that share the bare prepare step).
     data_dir: PathBuf,
-    /// Project root, used to anchor relative VOLUME sources.
     project_dir: PathBuf,
 }
 
@@ -266,11 +265,6 @@ impl AppleRuntime {
         })
     }
 
-    /// Resolve a VOLUME source for the container CLI.
-    ///
-    /// A source starting with `/`, `./` or `../` is a host path; anything else
-    /// is a named volume and passes through. Relative host paths anchor to the
-    /// project dir, as WORKDIR, ENV_FILE, STDOUT and STDERR already do.
     fn volume_source(&self, vol: &crate::types::VolumeMount) -> String {
         if vol.is_named || PathBuf::from(&vol.source).is_absolute() {
             vol.source.clone()
@@ -502,8 +496,6 @@ mod tests {
         assert_eq!(exec.start, "/usr/bin/nginx");
         assert!(exec.pre_start.is_none());
     }
-
-    // --- VOLUME source resolution -------------------------------------------
 
     fn volume(source: &str, is_named: bool) -> crate::types::VolumeMount {
         crate::types::VolumeMount {

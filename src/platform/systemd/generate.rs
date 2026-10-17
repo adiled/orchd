@@ -27,7 +27,6 @@ pub fn generate_service_unit(
         writeln!(unit, "BindsTo={}", binds_to_deps.join(" ")).unwrap();
     }
 
-    // systemd ignores StartLimit* in [Service]; these are [Unit] keys.
     if let Some(burst) = service.restart.start_limit_burst {
         writeln!(unit, "StartLimitBurst={}", burst).unwrap();
     }
@@ -176,10 +175,6 @@ pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
     writeln!(unit, "Type=oneshot").unwrap();
     writeln!(unit, "RemainAfterExit=yes").unwrap();
 
-    // A REQUIRES dependency with no HEALTHCHECK still gets a gate (enforcement
-    // is the point), but there is no probe to poll. Match the launchd path,
-    // which polls `true` in this case: gate on the unit coming up, which
-    // After= + BindsTo= above already express.
     match service.healthcheck.as_deref() {
         Some(healthcheck) => {
             let timeout = service.readiness_timeout.as_deref().unwrap_or("90s");
@@ -283,16 +278,6 @@ fn escape_bash(cmd: &str) -> String {
     cmd.replace('\'', "'\\''")
 }
 
-/// Escape a value written into a double-quoted systemd directive.
-///
-/// systemd.syntax(7) unquotes with C-style escapes, and systemd.exec(5) is
-/// explicit that Environment= performs *specifier* expansion ("Specifier
-/// expansion is performed"). So a literal `"`, `\` or `%` has to be escaped as
-/// `\"`, `\\` and `%%` or systemd either fails to parse the unit or silently
-/// substitutes a specifier such as %d or %n into the value.
-///
-/// `$` is deliberately left alone: the same man page states that variable
-/// expansion is not performed there and `$` has no special meaning.
 fn escape_systemd(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {
@@ -684,9 +669,6 @@ mod tests {
         assert!(unit.contains("done; exit 0"));
     }
 
-    /// A REQUIRES dependency with no HEALTHCHECK gets a gate, but has no probe
-    /// to poll. This used to panic on `.expect("ready gate requires a
-    /// healthcheck")` -- the fallback removed in #51 was reachable after all.
     #[test]
     fn test_generate_ready_gate__no_healthcheck_does_not_panic() {
         let config = test_config();
@@ -705,8 +687,6 @@ mod tests {
         assert!(!unit.contains("TimeoutStartSec="));
     }
 
-    /// End-to-end through the gate selection: a required dep lacking a
-    /// healthcheck is selected for a gate, so generation must survive it.
     #[test]
     fn test_required_dep_without_healthcheck_generates_without_panic() {
         let config = test_config();
@@ -806,8 +786,6 @@ mod tests {
         assert_eq!(result, "python manage.py runserver");
     }
 
-    // --- systemd value/path escaping ----------------------------------------
-
     #[test]
     fn test_escape_systemd__escapes_quotes_backslash_and_percent() {
         assert_eq!(escape_systemd("plain"), "plain");
@@ -815,7 +793,6 @@ mod tests {
         assert_eq!(escape_systemd(r"back\slash"), r"back\\slash");
         assert_eq!(escape_systemd("100%"), "100%%");
         assert_eq!(escape_systemd("%d"), "%%d");
-        // $ is explicitly NOT special inside Environment=, so leave it alone.
         assert_eq!(escape_systemd("$HOME"), "$HOME");
     }
 

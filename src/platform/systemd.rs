@@ -93,11 +93,6 @@ impl Platform for SystemdPlatform {
     fn clean(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
         let systemd_dir = self.systemd_dir(config);
-        // Only touch this namespace's units: `orch-<service>.service`,
-        // `orch-<service>-ready.service`, and the `orch.target` grove handle.
-        // status and stop both scope themselves to the prefix, so cleaning
-        // unconditionally here would let `fell` in one grove tear down a
-        // sibling grove sharing the same units_dir.
         let ns_prefix = format!("{}-", config.namespace);
         let ns_target = config.target_name();
 
@@ -115,8 +110,6 @@ impl Platform for SystemdPlatform {
             }
         }
 
-        // Leave the directory in place: it may hold another namespace's units
-        // and the generate-cache stamp.
         let _ = std::fs::create_dir_all(&units_dir);
 
         let mut cmd = std::process::Command::new("systemctl");

@@ -72,12 +72,13 @@ pub enum Commands {
         #[arg(long)]
         no_start: bool,
 
-        /// Fail if any service cannot be materialized, instead of warning.
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Fail if any service cannot be materialized, instead of warning."
+        )]
         strict: bool,
 
-        /// Regenerate even when the Orchfile has not changed.
-        #[arg(long)]
+        #[arg(long, help = "Regenerate even when the Orchfile has not changed.")]
         force: bool,
     },
 

@@ -86,9 +86,6 @@ fn read_stdin() -> Result<String, OrchardError> {
 /// Runtime transform. Reads an Orchfile spec, takes a cutting of each enabled
 /// service: the service plus the ExecSet for `config.runtime`. Pure: no image
 /// pulls, no I/O beyond stdio.
-///
-/// A service whose ExecSet cannot be produced is a hard error: this is a pipe
-/// stage, and a skip would hand `plant`/`tend` a grove smaller than the spec.
 pub fn sow(config: &Config) -> Result<(), OrchardError> {
     let input = read_stdin()?;
     let spec: OrchFile = serde_json::from_str(&input)?;
