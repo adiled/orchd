@@ -78,19 +78,19 @@ pub fn generate_service_unit(
 
     if let Some(ref workdir) = service.workdir {
         let resolved = resolve_workdir(workdir, &config.project_dir);
-        writeln!(unit, "WorkingDirectory={}", resolved).unwrap();
+        writeln!(unit, "WorkingDirectory=\"{}\"", escape_systemd(&resolved)).unwrap();
     }
 
     let mut env_keys: Vec<&String> = service.env.keys().collect();
     env_keys.sort();
     for key in env_keys {
         let value = &service.env[key];
-        writeln!(unit, "Environment=\"{}={}\"", key, value).unwrap();
+        writeln!(unit, "Environment=\"{}={}\"", key, escape_systemd(value)).unwrap();
     }
 
     for env_file in &service.env_files {
         let resolved = resolve_path(env_file, &config.project_dir);
-        writeln!(unit, "EnvironmentFile={}", resolved).unwrap();
+        writeln!(unit, "EnvironmentFile=\"{}\"", escape_systemd(&resolved)).unwrap();
     }
 
     if let Some(ref user) = service.user {
@@ -144,16 +144,16 @@ pub fn generate_service_unit(
     if let Some(ref stdout) = service.logging.stdout {
         writeln!(
             unit,
-            "StandardOutput=file:{}",
-            resolve_path(stdout, &config.project_dir)
+            "StandardOutput=\"file:{}\"",
+            escape_systemd(&resolve_path(stdout, &config.project_dir))
         )
         .unwrap();
     }
     if let Some(ref stderr) = service.logging.stderr {
         writeln!(
             unit,
-            "StandardError=file:{}",
-            resolve_path(stderr, &config.project_dir)
+            "StandardError=\"file:{}\"",
+            escape_systemd(&resolve_path(stderr, &config.project_dir))
         )
         .unwrap();
     }
@@ -276,6 +276,29 @@ fn build_dependencies(
 
 fn escape_bash(cmd: &str) -> String {
     cmd.replace('\'', "'\\''")
+}
+
+/// Escape a value written into a double-quoted systemd directive.
+///
+/// systemd.syntax(7) unquotes with C-style escapes, and systemd.exec(5) is
+/// explicit that Environment= performs *specifier* expansion ("Specifier
+/// expansion is performed"). So a literal `"`, `\` or `%` has to be escaped as
+/// `\"`, `\\` and `%%` or systemd either fails to parse the unit or silently
+/// substitutes a specifier such as %d or %n into the value.
+///
+/// `$` is deliberately left alone: the same man page states that variable
+/// expansion is not performed there and `$` has no special meaning.
+fn escape_systemd(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '%' => out.push_str("%%"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
@@ -565,7 +588,7 @@ mod tests {
 
         let unit = generate_service_unit(&svc, &exec, &config, &gates);
 
-        assert!(unit.contains("WorkingDirectory=/test/project/backend"));
+        assert!(unit.contains("WorkingDirectory=\"/test/project/backend\""));
     }
 
     #[test]
@@ -738,6 +761,84 @@ mod tests {
         assert_eq!(result, "python manage.py runserver");
     }
 
+    // --- systemd value/path escaping ----------------------------------------
+
+    /// systemd.exec(5): Environment= performs specifier expansion, and quoting
+    /// follows systemd.syntax(7). An unescaped `"` breaks the unit outright; an
+    /// unescaped `%` silently substitutes a specifier into the value.
+    #[test]
+    fn test_escape_systemd__escapes_quotes_backslash_and_percent() {
+        assert_eq!(escape_systemd("plain"), "plain");
+        assert_eq!(escape_systemd(r#"has "quotes""#), r#"has \"quotes\""#);
+        assert_eq!(escape_systemd(r"back\slash"), r"back\\slash");
+        assert_eq!(escape_systemd("100%"), "100%%");
+        assert_eq!(escape_systemd("%d"), "%%d");
+        // $ is explicitly NOT special inside Environment=, so leave it alone.
+        assert_eq!(escape_systemd("$HOME"), "$HOME");
+    }
+
+    #[test]
+    fn test_generate_service_unit__env_value_with_quote_is_escaped() {
+        let config = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.env.insert("NOTE".into(), r#"he said "hi""#.into());
+        let exec = simple_exec_set("app run");
+        let unit = generate_service_unit(&svc, &exec, &config, &HashSet::new());
+
+        assert!(
+            unit.contains(r#"Environment="NOTE=he said \"hi\"""#),
+            "quote not escaped:\n{}",
+            unit
+        );
+    }
+
+    #[test]
+    fn test_generate_service_unit__env_value_with_percent_is_escaped() {
+        let config = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.env.insert("PW".into(), "a%d%b".into());
+        let exec = simple_exec_set("app run");
+        let unit = generate_service_unit(&svc, &exec, &config, &HashSet::new());
+
+        assert!(
+            unit.contains(r#"Environment="PW=a%%d%%b""#),
+            "percent not escaped for specifier expansion:\n{}",
+            unit
+        );
+    }
+
+    /// A project path containing a space used to split the directive into two.
+    #[test]
+    fn test_generate_service_unit__paths_are_quoted() {
+        let config = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.workdir = Some("my dir".to_string());
+        svc.env_files = vec!["some dir/.env".to_string()];
+        svc.logging = LogConfig {
+            stdout: Some("log dir/out.log".to_string()),
+            stderr: Some("log dir/err.log".to_string()),
+        };
+        let exec = simple_exec_set("app run");
+        let unit = generate_service_unit(&svc, &exec, &config, &HashSet::new());
+
+        assert!(
+            unit.contains("WorkingDirectory=\"/test/project/my dir\""),
+            "workdir not quoted:\n{}",
+            unit
+        );
+        assert!(
+            unit.contains("EnvironmentFile=\"/test/project/some dir/.env\""),
+            "env file not quoted:\n{}",
+            unit
+        );
+        assert!(
+            unit.contains("StandardOutput=\"file:/test/project/log dir/out.log\""),
+            "stdout not quoted:\n{}",
+            unit
+        );
+        assert!(unit.contains("StandardError=\"file:/test/project/log dir/err.log\""));
+    }
+
     #[test]
     fn test_generate_service_unit__with_env_files() {
         let config = test_config();
@@ -748,8 +849,8 @@ mod tests {
 
         let unit = generate_service_unit(&svc, &exec, &config, &gates);
 
-        assert!(unit.contains("EnvironmentFile=/test/project/.env.local"));
-        assert!(unit.contains("EnvironmentFile=/etc/app/env"));
+        assert!(unit.contains("EnvironmentFile=\"/test/project/.env.local\""));
+        assert!(unit.contains("EnvironmentFile=\"/etc/app/env\""));
     }
 
     #[test]
@@ -782,7 +883,7 @@ mod tests {
 
         let unit = generate_service_unit(&svc, &exec, &config, &gates);
 
-        assert!(unit.contains("StandardOutput=file:/var/log/app/stdout.log"));
-        assert!(unit.contains("StandardError=file:/var/log/app/stderr.log"));
+        assert!(unit.contains("StandardOutput=\"file:/var/log/app/stdout.log\""));
+        assert!(unit.contains("StandardError=\"file:/var/log/app/stderr.log\""));
     }
 }
