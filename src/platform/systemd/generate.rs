@@ -164,12 +164,6 @@ pub fn generate_service_unit(
 }
 
 pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
-    let healthcheck = service
-        .healthcheck
-        .as_deref()
-        .expect("ready gate requires a healthcheck");
-    let timeout = service.readiness_timeout.as_deref().unwrap_or("90s");
-
     let mut unit = String::with_capacity(512);
 
     writeln!(unit, "[Unit]").unwrap();
@@ -181,13 +175,26 @@ pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
     writeln!(unit, "[Service]").unwrap();
     writeln!(unit, "Type=oneshot").unwrap();
     writeln!(unit, "RemainAfterExit=yes").unwrap();
-    writeln!(
-        unit,
-        "ExecStart=/bin/bash -c 'until {} >/dev/null 2>&1; do sleep 2; done; exit 0'",
-        escape_bash(&healthcheck_to_cmd(healthcheck))
-    )
-    .unwrap();
-    writeln!(unit, "TimeoutStartSec={}", timeout).unwrap();
+
+    // A REQUIRES dependency with no HEALTHCHECK still gets a gate (enforcement
+    // is the point), but there is no probe to poll. Match the launchd path,
+    // which polls `true` in this case: gate on the unit coming up, which
+    // After= + BindsTo= above already express.
+    match service.healthcheck.as_deref() {
+        Some(healthcheck) => {
+            let timeout = service.readiness_timeout.as_deref().unwrap_or("90s");
+            writeln!(
+                unit,
+                "ExecStart=/bin/bash -c 'until {} >/dev/null 2>&1; do sleep 2; done; exit 0'",
+                escape_bash(&healthcheck_to_cmd(healthcheck))
+            )
+            .unwrap();
+            writeln!(unit, "TimeoutStartSec={}", timeout).unwrap();
+        }
+        None => {
+            writeln!(unit, "ExecStart=/bin/true").unwrap();
+        }
+    }
 
     unit
 }
@@ -675,6 +682,46 @@ mod tests {
         let unit = generate_ready_gate(&svc, &config);
 
         assert!(unit.contains("done; exit 0"));
+    }
+
+    /// A REQUIRES dependency with no HEALTHCHECK gets a gate, but has no probe
+    /// to poll. This used to panic on `.expect("ready gate requires a
+    /// healthcheck")` -- the fallback removed in #51 was reachable after all.
+    #[test]
+    fn test_generate_ready_gate__no_healthcheck_does_not_panic() {
+        let config = test_config();
+        let svc = simple_host_service("postgres", "postgres -p 5433"); // no healthcheck
+
+        let unit = generate_ready_gate(&svc, &config);
+
+        assert!(unit.contains("After=orch-postgres.service"));
+        assert!(unit.contains("BindsTo=orch-postgres.service"));
+        assert!(unit.contains("ExecStart=/bin/true"));
+        assert!(
+            !unit.contains("until "),
+            "no probe to poll without a healthcheck:\n{}",
+            unit
+        );
+        assert!(!unit.contains("TimeoutStartSec="));
+    }
+
+    /// End-to-end through the gate selection: a required dep lacking a
+    /// healthcheck is selected for a gate, so generation must survive it.
+    #[test]
+    fn test_required_dep_without_healthcheck_generates_without_panic() {
+        let config = test_config();
+        let db = simple_host_service("postgres", "postgres -p 5433");
+        let mut web = simple_host_service("web", "web run");
+        web.requires = vec!["postgres".to_string()];
+        let services = vec![db, web];
+
+        let gates = services_needing_ready_gates(&services);
+        assert!(gates.contains("postgres"));
+
+        for svc in services.iter().filter(|s| gates.contains(&s.name)) {
+            let unit = generate_ready_gate(svc, &config);
+            assert!(unit.contains("ExecStart=/bin/true"));
+        }
     }
 
     #[test]
