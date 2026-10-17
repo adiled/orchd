@@ -15,6 +15,9 @@ pub enum EngineError {
     Runtime(#[from] crate::runtime::RuntimeError),
     #[error("platform error: {0}")]
     Platform(#[from] crate::platform::PlatformError),
+    /// One or more services could not be materialized, under `--strict`.
+    #[error("service(s) skipped:\n{0}")]
+    ServiceSkipped(String),
 }
 
 /// Run the full generate pipeline:
@@ -23,7 +26,7 @@ pub enum EngineError {
 /// 3. Create runtime, check prerequisites
 /// 4. For each enabled service: runtime.prepare() + runtime.exec_set()
 /// 5. Platform generate_all() + install()
-pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
+pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), EngineError> {
     // 1. Skip if artifacts are newer than Orchfile (unless --force)
     if !force && is_up_to_date(config) {
         if !config.quiet {
@@ -86,13 +89,19 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
     }
 
     if !errors.is_empty() {
-        // Warn but continue — container services without overlays are expected
-        // to fail in bare runtime. The user can add overlays or disable them.
-        eprintln!(
-            "warning: {} service(s) skipped (runtime incompatible):\n  {}",
+        // Tolerating a container service under the bare runtime is a documented
+        // workflow (keep FROM in the Orchfile, add a bare overlay locally), so
+        // this stays a warning by default. `--strict` turns it into a failure
+        // for scripts that must not proceed with a partial grove.
+        let summary = format!(
+            "{} service(s) skipped (runtime incompatible):\n  {}",
             errors.len(),
             errors.join("\n  ")
         );
+        if strict {
+            return Err(EngineError::ServiceSkipped(summary));
+        }
+        eprintln!("warning: {}", summary);
     }
 
     if !config.quiet {
@@ -147,14 +156,37 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
         eprintln!("installed {} units", generated.len());
     }
 
+    // Record what this build depended on, so the next run can tell whether
+    // regeneration is needed without re-parsing the Orchfile.
+    let mut env_files: Vec<std::path::PathBuf> = Vec::new();
+    for service in &orchfile.services {
+        for ef in &service.env_files {
+            let resolved = if std::path::Path::new(ef).is_absolute() {
+                std::path::PathBuf::from(ef)
+            } else {
+                config.project_dir.join(ef)
+            };
+            if !env_files.contains(&resolved) {
+                env_files.push(resolved);
+            }
+        }
+    }
+    write_stamp(config, &env_files);
+
     Ok(())
 }
 
 /// Generate and start services.
 /// If `no_generate` is false, runs generate first.
-pub fn up(config: &Config, services: &[String], no_generate: bool) -> Result<(), EngineError> {
+pub fn up(
+    config: &Config,
+    services: &[String],
+    no_generate: bool,
+    strict: bool,
+    force: bool,
+) -> Result<(), EngineError> {
     if !no_generate {
-        generate(config, false)?;
+        generate(config, force, strict)?;
     }
 
     if !config.quiet {
@@ -184,11 +216,17 @@ pub fn fell(config: &Config, keep_data: bool) -> Result<(), EngineError> {
 }
 
 /// Bring the grove up: generate artifacts, then start (unless `no_start`).
-pub fn grow(config: &Config, services: &[String], no_start: bool) -> Result<(), EngineError> {
+pub fn grow(
+    config: &Config,
+    services: &[String],
+    no_start: bool,
+    strict: bool,
+    force: bool,
+) -> Result<(), EngineError> {
     if no_start {
-        generate(config, false)
+        generate(config, force, strict)
     } else {
-        up(config, services, false)
+        up(config, services, false, strict, force)
     }
 }
 
@@ -260,63 +298,139 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     Ok(())
 }
 
-/// Check if generated artifacts are newer than all input files (Orchfile + overlays).
-/// Returns true if no regeneration is needed.
+/// One file the generated artifacts depend on, fingerprinted at generate time.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct InputStamp {
+    path: String,
+    mtime_ns: u128,
+    size: u64,
+}
+
+/// Everything the generated artifacts depend on that is not itself a file we
+/// re-stat: settings, flags, and env-var overrides.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct Stamp {
+    config_hash: u64,
+    /// Orchfile + overlays + every ENV_FILE inlined into the artifacts. ENV_FILE
+    /// paths are declared inside the Orchfile, so they are only discoverable by
+    /// parsing -- which is what this cache exists to avoid. Recording them here
+    /// lets the next run re-check them without parsing.
+    inputs: Vec<InputStamp>,
+}
+
+fn stamp_path(config: &Config) -> std::path::PathBuf {
+    config.units_dir().join(".orchd-stamp")
+}
+
+/// Hash every setting that changes the generated output but not the files.
+fn config_hash(config: &Config) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    config.runtime.hash(&mut h);
+    config.platform.hash(&mut h);
+    config.namespace.hash(&mut h);
+    format!("{:?}", config.scope).hash(&mut h);
+    config.state_dir.hash(&mut h);
+    config.project_dir.hash(&mut h);
+    config.data_dir.hash(&mut h);
+    for a in &config.args {
+        a.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn fingerprint(path: &std::path::Path) -> Option<InputStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime_ns = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(InputStamp {
+        path: path.display().to_string(),
+        mtime_ns,
+        size: meta.len(),
+    })
+}
+
+fn write_stamp(config: &Config, env_files: &[std::path::PathBuf]) {
+    let mut inputs: Vec<InputStamp> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let sources = std::iter::once(&config.orchfile)
+        .chain(config.overlays.iter())
+        .chain(env_files.iter());
+    for p in sources {
+        if let Some(fp) = fingerprint(p) {
+            if seen.insert(fp.path.clone()) {
+                inputs.push(fp);
+            }
+        }
+    }
+    let stamp = Stamp {
+        config_hash: config_hash(config),
+        inputs,
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&stamp) {
+        let _ = std::fs::write(stamp_path(config), json);
+    }
+}
+
+/// Decide whether the generated artifacts can be reused.
+///
+/// This used to compare mtimes and look for `.service`/`.target` files, which
+/// meant it never matched on launchd (that platform writes `.plist`), so the
+/// cache was dead there and every `grow` regenerated. It also ignored every
+/// non-file input, so flipping --runtime or changing --arg reused stale units.
+///
+/// A recorded fingerprint of all inputs plus a hash of all settings answers
+/// both: any change to a file, a flag, or the environment invalidates.
 fn is_up_to_date(config: &Config) -> bool {
     let units_dir = config.units_dir();
     if !units_dir.exists() {
         return false;
     }
 
-    // Find the newest input mtime (Orchfile + overlays)
-    let mut newest_input = match std::fs::metadata(&config.orchfile) {
-        Ok(m) => match m.modified() {
-            Ok(t) => t,
-            Err(_) => return false,
-        },
+    // Generated artifacts must actually be present. launchd writes .plist,
+    // systemd writes .service/.target; count any of them.
+    let has_artifacts = std::fs::read_dir(&units_dir)
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                matches!(
+                    e.path().extension().and_then(|x| x.to_str()),
+                    Some("plist") | Some("service") | Some("target")
+                )
+            })
+        })
+        .unwrap_or(false);
+    if !has_artifacts {
+        return false;
+    }
+
+    let data = match std::fs::read_to_string(stamp_path(config)) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let stamp: Stamp = match serde_json::from_str(&data) {
+        Ok(s) => s,
         Err(_) => return false,
     };
 
-    for overlay in &config.overlays {
-        if let Ok(m) = std::fs::metadata(overlay) {
-            if let Ok(t) = m.modified() {
-                if t > newest_input {
-                    newest_input = t;
-                }
-            }
+    if stamp.config_hash != config_hash(config) {
+        return false;
+    }
+
+    // Every recorded input, including any ENV_FILE inlined into the last build.
+    // A vanished, edited, or resized file no longer matches its fingerprint.
+    for recorded in &stamp.inputs {
+        match fingerprint(std::path::Path::new(&recorded.path)) {
+            Some(now) if now == *recorded => {}
+            _ => return false,
         }
     }
 
-    // Find the oldest generated unit file mtime
-    let entries = match std::fs::read_dir(&units_dir) {
-        Ok(e) => e,
-        Err(_) => return false,
-    };
-
-    let mut has_units = false;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("service")
-            || path.extension().and_then(|e| e.to_str()) == Some("target")
-        {
-            has_units = true;
-            match std::fs::metadata(&path) {
-                Ok(m) => match m.modified() {
-                    Ok(t) => {
-                        if t < newest_input {
-                            // At least one unit is older than input
-                            return false;
-                        }
-                    }
-                    Err(_) => return false,
-                },
-                Err(_) => return false,
-            }
-        }
-    }
-
-    // If no units found, not up to date
-    has_units
+    true
 }
 
 /// Parse the Orchfile (+ overlays) in-process via the `orch` library and return
@@ -393,6 +507,157 @@ fn vars_overlay_content(config: &Config) -> String {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    // --- generate cache (is_up_to_date / stamp) ---
+
+    /// Build an isolated config + a fake generated artifact, then exercise the
+    /// cache. `artifact` is the file that lands in units_dir (".plist" on
+    /// launchd, ".service" on systemd).
+    fn cache_fixture(name: &str, artifact: &str) -> (Config, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("orchd-cache-{}", name));
+        let _ = std::fs::remove_dir_all(&root);
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("Orchfile"), "SERVICE web\nRUN sleep 1\n").unwrap();
+        let cfg = Config {
+            orchfile: proj.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: if artifact == "plist" {
+                "launchd".to_string()
+            } else {
+                "systemd".to_string()
+            },
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: proj,
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+        std::fs::create_dir_all(cfg.units_dir()).unwrap();
+        std::fs::write(cfg.units_dir().join(format!("orch.web.{}", artifact)), "x").unwrap();
+        (cfg, root)
+    }
+
+    /// The old check only looked for .service/.target, so on launchd (which
+    /// writes .plist) it always reported stale and every `grow` regenerated.
+    #[test]
+    fn test_is_up_to_date__launchd_plist_counts_as_generated() {
+        let (cfg, root) = cache_fixture("plist", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(
+            is_up_to_date(&cfg),
+            "a fresh launchd build with only .plist must be considered up to date"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__no_stamp_means_regenerate() {
+        let (cfg, root) = cache_fixture("nostamp", "plist");
+        assert!(!is_up_to_date(&cfg), "no stamp file means not up to date");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__missing_artifacts_means_regenerate() {
+        let (cfg, root) = cache_fixture("noart", "plist");
+        write_stamp(&cfg, &[]);
+        std::fs::remove_file(cfg.units_dir().join("orch.web.plist")).unwrap();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_orchfile_invalidates() {
+        let (cfg, root) = cache_fixture("edit", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(cfg.orchfile.clone(), "SERVICE web\nRUN sleep 2\n").unwrap();
+        assert!(!is_up_to_date(&cfg), "edited Orchfile must invalidate");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The old check only looked at file mtimes, so changing --arg or the
+    /// runtime reused stale units.
+    #[test]
+    fn test_is_up_to_date__changed_runtime_invalidates() {
+        let (mut cfg, root) = cache_fixture("runtime", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        cfg.runtime = "apple".to_string();
+        assert!(!is_up_to_date(&cfg), "runtime change must invalidate");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_arg_invalidates() {
+        let (mut cfg, root) = cache_fixture("arg", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        cfg.args.push("port=9999".to_string());
+        assert!(!is_up_to_date(&cfg), "--arg change must invalidate");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_namespace_invalidates() {
+        let (mut cfg, root) = cache_fixture("ns", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        cfg.namespace = "staging".to_string();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// launchd inlines ENV_FILE values into the plist, so an env file is a
+    /// real generate-time input (see the ENV_FILE fix).
+    #[test]
+    fn test_is_up_to_date__changed_env_file_invalidates() {
+        let (cfg, root) = cache_fixture("envfile", "plist");
+        let envf = cfg.project_dir.join("app.env");
+        std::fs::write(&envf, "A=1\n").unwrap();
+        write_stamp(&cfg, &[envf.clone()]);
+        assert!(is_up_to_date(&cfg));
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&envf, "A=2\n").unwrap();
+        assert!(
+            !is_up_to_date(&cfg),
+            "an edited ENV_FILE must invalidate the launchd build"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__deleted_env_file_invalidates() {
+        let (cfg, root) = cache_fixture("envgone", "plist");
+        let envf = cfg.project_dir.join("app.env");
+        std::fs::write(&envf, "A=1\n").unwrap();
+        write_stamp(&cfg, &[envf.clone()]);
+        assert!(is_up_to_date(&cfg));
+        std::fs::remove_file(&envf).unwrap();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_overlay_invalidates() {
+        let (mut cfg, root) = cache_fixture("overlay", "service");
+        let ov = cfg.project_dir.join("staging.orch");
+        std::fs::write(&ov, "# overlay\n").unwrap();
+        cfg.overlays = vec![ov.clone()];
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&ov, "# changed\n").unwrap();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     // --- EngineError Display ---
 
