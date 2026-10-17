@@ -71,6 +71,15 @@ pub enum Commands {
         /// Write and install but do not start.
         #[arg(long)]
         no_start: bool,
+
+        #[arg(
+            long,
+            help = "Fail if any service cannot be materialized, instead of warning."
+        )]
+        strict: bool,
+
+        #[arg(long, help = "Regenerate even when the Orchfile has not changed.")]
+        force: bool,
     },
 
     /// Report the grove: each tree's state.

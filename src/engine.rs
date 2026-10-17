@@ -15,6 +15,8 @@ pub enum EngineError {
     Runtime(#[from] crate::runtime::RuntimeError),
     #[error("platform error: {0}")]
     Platform(#[from] crate::platform::PlatformError),
+    #[error("service(s) skipped:\n{0}")]
+    ServiceSkipped(String),
 }
 
 /// Run the full generate pipeline:
@@ -23,9 +25,12 @@ pub enum EngineError {
 /// 3. Create runtime, check prerequisites
 /// 4. For each enabled service: runtime.prepare() + runtime.exec_set()
 /// 5. Platform generate_all() + install()
-pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
-    // 1. Skip if artifacts are newer than Orchfile (unless --force)
-    if !force && is_up_to_date(config) {
+fn should_skip_generate(config: &Config, force: bool, strict: bool) -> bool {
+    !force && !strict && is_up_to_date(config)
+}
+
+pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), EngineError> {
+    if should_skip_generate(config, force, strict) {
         if !config.quiet {
             eprintln!("artifacts up to date, skipping generate (use --force to override)");
         }
@@ -65,6 +70,8 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
             continue;
         }
 
+        lint_service(&config.platform, service);
+
         // Prepare (create data dirs, etc.)
         if let Err(e) = rt.prepare(service) {
             errors.push(format!("{}: {}", service.name, e));
@@ -86,13 +93,15 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
     }
 
     if !errors.is_empty() {
-        // Warn but continue — container services without overlays are expected
-        // to fail in bare runtime. The user can add overlays or disable them.
-        eprintln!(
-            "warning: {} service(s) skipped (runtime incompatible):\n  {}",
+        let summary = format!(
+            "{} service(s) skipped (runtime incompatible):\n  {}",
             errors.len(),
             errors.join("\n  ")
         );
+        if strict {
+            return Err(EngineError::ServiceSkipped(summary));
+        }
+        eprintln!("warning: {}", summary);
     }
 
     if !config.quiet {
@@ -147,14 +156,35 @@ pub fn generate(config: &Config, force: bool) -> Result<(), EngineError> {
         eprintln!("installed {} units", generated.len());
     }
 
+    let mut env_files: Vec<std::path::PathBuf> = Vec::new();
+    for service in &orchfile.services {
+        for ef in &service.env_files {
+            let resolved = if std::path::Path::new(ef).is_absolute() {
+                std::path::PathBuf::from(ef)
+            } else {
+                config.project_dir.join(ef)
+            };
+            if !env_files.contains(&resolved) {
+                env_files.push(resolved);
+            }
+        }
+    }
+    write_stamp(config, &env_files);
+
     Ok(())
 }
 
 /// Generate and start services.
 /// If `no_generate` is false, runs generate first.
-pub fn up(config: &Config, services: &[String], no_generate: bool) -> Result<(), EngineError> {
+pub fn up(
+    config: &Config,
+    services: &[String],
+    no_generate: bool,
+    strict: bool,
+    force: bool,
+) -> Result<(), EngineError> {
     if !no_generate {
-        generate(config, false)?;
+        generate(config, force, strict)?;
     }
 
     if !config.quiet {
@@ -184,11 +214,17 @@ pub fn fell(config: &Config, keep_data: bool) -> Result<(), EngineError> {
 }
 
 /// Bring the grove up: generate artifacts, then start (unless `no_start`).
-pub fn grow(config: &Config, services: &[String], no_start: bool) -> Result<(), EngineError> {
+pub fn grow(
+    config: &Config,
+    services: &[String],
+    no_start: bool,
+    strict: bool,
+    force: bool,
+) -> Result<(), EngineError> {
     if no_start {
-        generate(config, false)
+        generate(config, force, strict)
     } else {
-        up(config, services, false)
+        up(config, services, false, strict, force)
     }
 }
 
@@ -243,6 +279,11 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
         }
     }
 
+    // The stamp describes artifacts that no longer exist, and its config hash
+    // includes the namespace, so keeping it would let the next `grow` skip
+    // generate and install nothing.
+    let _ = std::fs::remove_file(stamp_path(config));
+
     if !config.quiet {
         eprintln!("removed generated units");
     }
@@ -260,72 +301,207 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     Ok(())
 }
 
-/// Check if generated artifacts are newer than all input files (Orchfile + overlays).
-/// Returns true if no regeneration is needed.
+fn unsupported_directives(platform: &str, svc: &crate::types::Service) -> Vec<&'static str> {
+    if platform != "launchd" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let r = &svc.resources;
+    if r.memory.is_some() {
+        out.push("MEMORY");
+    }
+    if r.cpus.is_some() {
+        out.push("CPUS");
+    }
+    if r.cpu_quota.is_some() {
+        out.push("CPU_QUOTA");
+    }
+    if r.tasks_max.is_some() {
+        out.push("TASKS_MAX");
+    }
+    if r.io_weight.is_some() {
+        out.push("IO_WEIGHT");
+    }
+    if svc.timeouts.start.is_some() {
+        out.push("TIMEOUT_START");
+    }
+    if svc.restart.start_limit_burst.is_some() {
+        out.push("START_LIMIT_BURST");
+    }
+    if svc.restart.start_limit_interval.is_some() {
+        out.push("START_LIMIT_INTERVAL");
+    }
+    out
+}
+
+fn lint_service(platform: &str, svc: &crate::types::Service) {
+    let dropped = unsupported_directives(platform, svc);
+    if !dropped.is_empty() {
+        eprintln!(
+            "warning: service '{}': {} not supported on {}; ignoring",
+            svc.name,
+            dropped.join(", "),
+            platform
+        );
+    }
+
+    if svc.reload_command.is_some() {
+        eprintln!(
+            "warning: service '{}': RELOAD is not implemented yet; ignoring",
+            svc.name
+        );
+    }
+
+    let durations: [(&str, Option<&String>); 5] = [
+        ("RESTART_DELAY", svc.restart.delay.as_ref()),
+        (
+            "START_LIMIT_INTERVAL",
+            svc.restart.start_limit_interval.as_ref(),
+        ),
+        ("TIMEOUT_START", svc.timeouts.start.as_ref()),
+        ("TIMEOUT_STOP", svc.timeouts.stop.as_ref()),
+        ("READINESS_TIMEOUT", svc.readiness_timeout.as_ref()),
+    ];
+    for (name, value) in durations {
+        if let Some(v) = value {
+            if crate::orchdi::parse_duration_secs(v).is_none() {
+                eprintln!(
+                    "warning: service '{}': {} '{}' is not a valid duration \
+                     (grammar: integer followed by 's' or 'm')",
+                    svc.name, name, v
+                );
+            }
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct InputStamp {
+    path: String,
+    mtime_ns: u128,
+    size: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct Stamp {
+    config_hash: u64,
+    inputs: Vec<InputStamp>,
+}
+
+fn stamp_path(config: &Config) -> std::path::PathBuf {
+    config.units_dir().join(".orchd-stamp")
+}
+
+fn config_hash(config: &Config) -> u64 {
+    config_hash_for(config, env!("CARGO_PKG_VERSION"))
+}
+
+fn config_hash_for(config: &Config, orchd_version: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    orchd_version.hash(&mut h);
+    config.runtime.hash(&mut h);
+    config.platform.hash(&mut h);
+    config.namespace.hash(&mut h);
+    format!("{:?}", config.scope).hash(&mut h);
+    config.state_dir.hash(&mut h);
+    config.project_dir.hash(&mut h);
+    config.data_dir.hash(&mut h);
+    for a in &config.args {
+        a.hash(&mut h);
+    }
+    for (k, v) in env_arg_overrides() {
+        k.hash(&mut h);
+        v.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn fingerprint(path: &std::path::Path) -> Option<InputStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime_ns = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(InputStamp {
+        path: path.display().to_string(),
+        mtime_ns,
+        size: meta.len(),
+    })
+}
+
+fn write_stamp(config: &Config, env_files: &[std::path::PathBuf]) {
+    let mut inputs: Vec<InputStamp> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let sources = std::iter::once(&config.orchfile)
+        .chain(config.overlays.iter())
+        .chain(env_files.iter());
+    for p in sources {
+        if let Some(fp) = fingerprint(p) {
+            if seen.insert(fp.path.clone()) {
+                inputs.push(fp);
+            }
+        }
+    }
+    let stamp = Stamp {
+        config_hash: config_hash(config),
+        inputs,
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&stamp) {
+        let _ = std::fs::write(stamp_path(config), json);
+    }
+}
+
 fn is_up_to_date(config: &Config) -> bool {
     let units_dir = config.units_dir();
     if !units_dir.exists() {
         return false;
     }
 
-    // Find the newest input mtime (Orchfile + overlays)
-    let mut newest_input = match std::fs::metadata(&config.orchfile) {
-        Ok(m) => match m.modified() {
-            Ok(t) => t,
-            Err(_) => return false,
-        },
+    let has_artifacts = std::fs::read_dir(&units_dir)
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                matches!(
+                    e.path().extension().and_then(|x| x.to_str()),
+                    Some("plist") | Some("service") | Some("target")
+                )
+            })
+        })
+        .unwrap_or(false);
+    if !has_artifacts {
+        return false;
+    }
+
+    let data = match std::fs::read_to_string(stamp_path(config)) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let stamp: Stamp = match serde_json::from_str(&data) {
+        Ok(s) => s,
         Err(_) => return false,
     };
 
-    for overlay in &config.overlays {
-        if let Ok(m) = std::fs::metadata(overlay) {
-            if let Ok(t) = m.modified() {
-                if t > newest_input {
-                    newest_input = t;
-                }
-            }
+    if stamp.config_hash != config_hash(config) {
+        return false;
+    }
+
+    for recorded in &stamp.inputs {
+        match fingerprint(std::path::Path::new(&recorded.path)) {
+            Some(now) if now == *recorded => {}
+            _ => return false,
         }
     }
 
-    // Find the oldest generated unit file mtime
-    let entries = match std::fs::read_dir(&units_dir) {
-        Ok(e) => e,
-        Err(_) => return false,
-    };
-
-    let mut has_units = false;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("service")
-            || path.extension().and_then(|e| e.to_str()) == Some("target")
-        {
-            has_units = true;
-            match std::fs::metadata(&path) {
-                Ok(m) => match m.modified() {
-                    Ok(t) => {
-                        if t < newest_input {
-                            // At least one unit is older than input
-                            return false;
-                        }
-                    }
-                    Err(_) => return false,
-                },
-                Err(_) => return false,
-            }
-        }
-    }
-
-    // If no units found, not up to date
-    has_units
+    true
 }
 
-/// Parse the Orchfile (+ overlays) in-process via the `orch` library and return
-/// the resolved OrchFile. No subprocess, no `orch` binary on PATH.
-///
-/// Injects an in-memory overlay declaring orchd's built-in variables (ORCH_DATA,
-/// etc.) so Orchfiles can reference them without the user passing `--arg`.
 fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
     let mut files: Vec<(String, String)> = Vec::new();
+
+    files.push(("orchd-vars.orch".to_string(), vars_overlay_content(config)));
 
     // Main Orchfile.
     let content = std::fs::read_to_string(&config.orchfile).map_err(|e| {
@@ -336,9 +512,6 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         ))
     })?;
     files.push((config.orchfile.display().to_string(), content));
-
-    // Built-in variable declarations (in-memory; was a temp overlay file).
-    files.push(("orchd-vars.orch".to_string(), vars_overlay_content(config)));
 
     // User overlays (merged left-to-right, so these override).
     for overlay in &config.overlays {
@@ -352,11 +525,13 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         files.push((overlay.display().to_string(), content));
     }
 
-    // `--arg key=value` overrides take precedence over ARG defaults.
-    let mut overrides: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut overrides = env_arg_overrides();
+
     for arg in &config.args {
         if let Some((k, v)) = arg.split_once('=') {
             overrides.insert(k.to_string(), v.to_string());
+        } else if config.verbose {
+            eprintln!("warning: ignoring --arg '{}' (expected name=value)", arg);
         }
     }
 
@@ -364,17 +539,42 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         eprintln!("parsing {} file(s) in-process via the-orch", files.len());
     }
 
-    the_orch::parse_files(&files, &overrides).map_err(|errs| {
+    let parsed = the_orch::parse_files(&files, &overrides).map_err(|errs| {
         let msg = errs
             .iter()
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join("; ");
         EngineError::OrchParse(msg)
-    })
+    })?;
+
+    let mut unknown: Vec<&String> = overrides
+        .keys()
+        .filter(|k| !parsed.args.contains_key(*k))
+        .collect();
+    unknown.sort();
+    for key in unknown {
+        eprintln!(
+            "warning: no ARG named '{}' is declared; the override is ignored",
+            key
+        );
+    }
+
+    Ok(parsed)
 }
 
-/// The in-memory ARG overlay declaring orchd's built-in variables.
+fn env_arg_overrides() -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (key, value) in std::env::vars() {
+        if let Some(name) = key.strip_prefix("ORCH_ARG_") {
+            if !name.is_empty() {
+                out.insert(name.to_string(), value);
+            }
+        }
+    }
+    out
+}
+
 fn vars_overlay_content(config: &Config) -> String {
     format!(
         "# Auto-generated by orchd — built-in variable declarations\n\
@@ -393,6 +593,522 @@ fn vars_overlay_content(config: &Config) -> String {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[allow(clippy::type_complexity)]
+    fn cache_fixture(
+        name: &str,
+        artifact: &str,
+    ) -> (
+        Config,
+        std::path::PathBuf,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("orchd-cache-{}", name));
+        let _ = std::fs::remove_dir_all(&root);
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("Orchfile"), "SERVICE web\nRUN sleep 1\n").unwrap();
+        let cfg = Config {
+            orchfile: proj.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: if artifact == "plist" {
+                "launchd".to_string()
+            } else {
+                "systemd".to_string()
+            },
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: proj,
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+        std::fs::create_dir_all(cfg.units_dir()).unwrap();
+        std::fs::write(cfg.units_dir().join(format!("orch.web.{}", artifact)), "x").unwrap();
+        (cfg, root, guard)
+    }
+
+    #[test]
+    fn test_is_up_to_date__launchd_plist_counts_as_generated() {
+        let (cfg, root, _guard) = cache_fixture("plist", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(
+            is_up_to_date(&cfg),
+            "a fresh launchd build with only .plist must be considered up to date"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__no_stamp_means_regenerate() {
+        let (cfg, root, _guard) = cache_fixture("nostamp", "plist");
+        assert!(!is_up_to_date(&cfg), "no stamp file means not up to date");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__missing_artifacts_means_regenerate() {
+        let (cfg, root, _guard) = cache_fixture("noart", "plist");
+        write_stamp(&cfg, &[]);
+        std::fs::remove_file(cfg.units_dir().join("orch.web.plist")).unwrap();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_orchfile_invalidates() {
+        let (cfg, root, _guard) = cache_fixture("edit", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(cfg.orchfile.clone(), "SERVICE web\nRUN sleep 2\n").unwrap();
+        assert!(!is_up_to_date(&cfg), "edited Orchfile must invalidate");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_runtime_invalidates() {
+        let (mut cfg, root, _guard) = cache_fixture("runtime", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        cfg.runtime = "apple".to_string();
+        assert!(!is_up_to_date(&cfg), "runtime change must invalidate");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_arg_invalidates() {
+        let (mut cfg, root, _guard) = cache_fixture("arg", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        cfg.args.push("port=9999".to_string());
+        assert!(!is_up_to_date(&cfg), "--arg change must invalidate");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_namespace_invalidates() {
+        let (mut cfg, root, _guard) = cache_fixture("ns", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        cfg.namespace = "staging".to_string();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_env_file_invalidates() {
+        let (cfg, root, _guard) = cache_fixture("envfile", "plist");
+        let envf = cfg.project_dir.join("app.env");
+        std::fs::write(&envf, "A=1\n").unwrap();
+        write_stamp(&cfg, &[envf.clone()]);
+        assert!(is_up_to_date(&cfg));
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&envf, "A=2\n").unwrap();
+        assert!(
+            !is_up_to_date(&cfg),
+            "an edited ENV_FILE must invalidate the launchd build"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__deleted_env_file_invalidates() {
+        let (cfg, root, _guard) = cache_fixture("envgone", "plist");
+        let envf = cfg.project_dir.join("app.env");
+        std::fs::write(&envf, "A=1\n").unwrap();
+        write_stamp(&cfg, &[envf.clone()]);
+        assert!(is_up_to_date(&cfg));
+        std::fs::remove_file(&envf).unwrap();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_should_skip_generate__fell_then_grow_regenerates() {
+        use crate::platform::Platform;
+        use crate::platform::launchd::LaunchdPlatform;
+
+        let (cfg, root, _guard) = cache_fixture("fellgrow", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(should_skip_generate(&cfg, false, false));
+
+        LaunchdPlatform::new().clean(&cfg).unwrap();
+        std::fs::remove_file(stamp_path(&cfg)).ok();
+
+        assert!(
+            !should_skip_generate(&cfg, false, false),
+            "after fell the artifacts are gone, so grow must not report up to date \
+             and skip installing them"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_should_skip_generate__strict_never_skips() {
+        let (cfg, root, _guard) = cache_fixture("strictskip", "plist");
+        write_stamp(&cfg, &[]);
+
+        assert!(should_skip_generate(&cfg, false, false));
+        assert!(!should_skip_generate(&cfg, true, false));
+        assert!(
+            !should_skip_generate(&cfg, false, true),
+            "--strict must re-evaluate even on a warm cache, otherwise it reports success for a grove it never verified"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_is_up_to_date__changed_overlay_invalidates() {
+        let (mut cfg, root, _guard) = cache_fixture("overlay", "service");
+        let ov = cfg.project_dir.join("staging.orch");
+        std::fs::write(&ov, "# overlay\n").unwrap();
+        cfg.overlays = vec![ov.clone()];
+        write_stamp(&cfg, &[]);
+        assert!(is_up_to_date(&cfg));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&ov, "# changed\n").unwrap();
+        assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_config_hash__includes_orchd_version() {
+        let (cfg, root, _guard) = cache_fixture("version", "plist");
+        assert_ne!(
+            config_hash_for(&cfg, "0.3.4"),
+            config_hash_for(&cfg, "0.3.5"),
+            "an orchd upgrade must invalidate the generate cache"
+        );
+        assert_eq!(
+            config_hash_for(&cfg, "0.3.4"),
+            config_hash_for(&cfg, "0.3.4"),
+            "hash must be stable for a fixed version"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_env_arg_overrides__reads_prefixed_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("ORCH_ARG_prometheus_port", "9999");
+            std::env::set_var("ORCH_ARG_", "ignored-no-name");
+            std::env::set_var("NOT_ORCH_ARG_x", "no");
+        }
+        let got = env_arg_overrides();
+        unsafe {
+            std::env::remove_var("ORCH_ARG_prometheus_port");
+            std::env::remove_var("ORCH_ARG_");
+            std::env::remove_var("NOT_ORCH_ARG_x");
+        }
+        assert_eq!(got.get("prometheus_port").map(String::as_str), Some("9999"));
+        assert!(!got.contains_key(""), "empty ARG name must be skipped");
+        assert!(!got.contains_key("NOT_ORCH_ARG_x"));
+    }
+
+    #[test]
+    fn test_parse_orchfile__orch_arg_env_overrides_default() {
+        let root = std::env::temp_dir().join("orchd-orcharg-env");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Orchfile"),
+            "ARG port=8000\nSERVICE web\nRUN ./s ${port}\n",
+        )
+        .unwrap();
+
+        let mut cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "systemd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+        cfg.quiet = true;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(parsed.args.get("port").map(String::as_str), Some("8000"));
+
+        unsafe { std::env::set_var("ORCH_ARG_port", "9001") };
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(
+            parsed.args.get("port").map(String::as_str),
+            Some("9001"),
+            "ORCH_ARG_* env must override the Orchfile default"
+        );
+
+        cfg.args.push("port=7000".to_string());
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(
+            parsed.args.get("port").map(String::as_str),
+            Some("7000"),
+            "--arg must win over ORCH_ARG_*"
+        );
+        unsafe { std::env::remove_var("ORCH_ARG_port") };
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_clean__scopes_to_namespace_prefix() {
+        use crate::platform::Platform;
+        use crate::platform::launchd::LaunchdPlatform;
+
+        let root = std::env::temp_dir().join("orchd-clean-ns");
+        let _ = std::fs::remove_dir_all(&root);
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &root) };
+
+        let units = root.join(".orch/units");
+        std::fs::create_dir_all(&units).unwrap();
+        let agents = root.join("Library/LaunchAgents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(units.join("orch.web.plist"), "mine").unwrap();
+        std::fs::write(units.join("staging.api.plist"), "theirs").unwrap();
+        std::fs::write(units.join("notes.txt"), "unrelated").unwrap();
+        std::fs::write(agents.join("orch.web.plist"), "mine").unwrap();
+        std::fs::write(agents.join("staging.api.plist"), "theirs").unwrap();
+
+        let cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "launchd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+
+        LaunchdPlatform::new().clean(&cfg).unwrap();
+
+        assert!(
+            !agents.join("orch.web.plist").exists(),
+            "own namespace should be unlinked from LaunchAgents"
+        );
+        assert!(
+            agents.join("staging.api.plist").exists(),
+            "a sibling namespace must survive fell"
+        );
+        assert!(
+            units.join("notes.txt").exists(),
+            "unrelated files must survive fell"
+        );
+        assert!(units.exists(), "units_dir itself must survive");
+
+        match prev_home {
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_clean__systemd_target_is_scoped_too() {
+        use crate::platform::Platform;
+        use crate::platform::systemd::SystemdPlatform;
+
+        let root = std::env::temp_dir().join("orchd-clean-ns-systemd");
+        let _ = std::fs::remove_dir_all(&root);
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &root.join("xdg")) };
+
+        let units = root.join(".orch/units");
+        std::fs::create_dir_all(&units).unwrap();
+        let sysd = root.join("xdg/systemd/user");
+        std::fs::create_dir_all(&sysd).unwrap();
+        for n in [
+            "orch-web.service",
+            "orch.target",
+            "staging-web.service",
+            "staging.target",
+        ] {
+            std::fs::write(units.join(n), "x").unwrap();
+        }
+        for n in [
+            "orch-web.service",
+            "orch.target",
+            "staging-web.service",
+            "staging.target",
+        ] {
+            std::fs::write(sysd.join(n), "installed").unwrap();
+        }
+
+        let cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "systemd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+
+        SystemdPlatform::new().clean(&cfg).unwrap();
+
+        assert!(
+            !sysd.join("orch-web.service").exists(),
+            "own unit should be unlinked"
+        );
+        assert!(
+            !sysd.join("orch.target").exists(),
+            "the grove target must be removed with its namespace"
+        );
+        assert!(
+            sysd.join("staging-web.service").exists(),
+            "a sibling namespace's unit must survive"
+        );
+        assert!(sysd.join("staging.target").exists());
+
+        match prev_xdg {
+            Some(h) => unsafe { std::env::set_var("XDG_CONFIG_HOME", h) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_orchfile__orchfile_can_override_builtin_args() {
+        let root = std::env::temp_dir().join("orchd-builtin-args");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Orchfile"),
+            "ARG ORCH_DATA=/my/data\nSERVICE web\nRUN ./s ${ORCH_DATA}\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "systemd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(
+            parsed.args.get("ORCH_DATA").map(String::as_str),
+            Some("/my/data"),
+            "Orchfile ARG must win over the built-in default"
+        );
+        assert_eq!(
+            parsed.args.get("ORCH_PROJECT").map(String::as_str),
+            Some(root.to_str().unwrap())
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_unsupported_directives__launchd_reports_what_it_cannot_map() {
+        let mut svc = simple_service();
+        svc.resources.memory = Some("1G".into());
+        svc.resources.cpus = Some(2.0);
+        svc.resources.cpu_quota = Some("150%".into());
+        svc.resources.tasks_max = Some(100u64);
+        svc.resources.io_weight = Some(500u32);
+        svc.timeouts.start = Some("30s".into());
+        svc.restart.start_limit_burst = Some(3);
+        svc.restart.start_limit_interval = Some("60s".into());
+
+        let got = unsupported_directives("launchd", &svc);
+        assert_eq!(
+            got,
+            vec![
+                "MEMORY",
+                "CPUS",
+                "CPU_QUOTA",
+                "TASKS_MAX",
+                "IO_WEIGHT",
+                "TIMEOUT_START",
+                "START_LIMIT_BURST",
+                "START_LIMIT_INTERVAL"
+            ]
+        );
+        assert!(unsupported_directives("systemd", &svc).is_empty());
+    }
+
+    #[test]
+    fn test_unsupported_directives__limits_launchd_does_map_are_not_listed() {
+        let mut svc = simple_service();
+        svc.resources.limit_nofile = Some(1024u64);
+        svc.resources.limit_nproc = Some(64u64);
+        assert!(unsupported_directives("launchd", &svc).is_empty());
+    }
+
+    #[test]
+    fn test_unsupported_directives__clean_service_reports_nothing() {
+        let svc = simple_service();
+        assert!(unsupported_directives("launchd", &svc).is_empty());
+    }
+
+    fn simple_service() -> crate::types::Service {
+        use crate::types::*;
+        Service {
+            name: "app".into(),
+            mode: ServiceMode::Host,
+            image: None,
+            run_command: Some("./run".into()),
+            entrypoint: None,
+            cmd: None,
+            publish: Vec::new(),
+            volumes: Vec::new(),
+            user: None,
+            stop_command: None,
+            reload_command: None,
+            workdir: None,
+            env: std::collections::HashMap::new(),
+            env_files: Vec::new(),
+            requires: Vec::new(),
+            after: Vec::new(),
+            healthcheck: None,
+            readiness_timeout: None,
+            oneshot: false,
+            disabled: false,
+            recreate: RecreatePolicy::default(),
+            restart: RestartConfig::default(),
+            timeouts: TimeoutConfig::default(),
+            resources: ResourceLimits::default(),
+            logging: LogConfig::default(),
+        }
+    }
 
     // --- EngineError Display ---
 

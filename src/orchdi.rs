@@ -87,8 +87,15 @@ pub fn run(spec_path: &Path) -> i32 {
 
     loop {
         if TERM.load(Ordering::SeqCst) {
-            teardown(&spec, &mut child, pgid);
-            return 0;
+            return if teardown(&spec, &mut child, pgid) {
+                0
+            } else {
+                eprintln!(
+                    "supervise[{}]: did not exit within {}s; killed",
+                    spec.label, spec.stop_timeout_secs
+                );
+                1
+            };
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -112,7 +119,7 @@ pub fn run(spec_path: &Path) -> i32 {
     }
 }
 
-fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
+fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) -> bool {
     match &spec.stop {
         Some(stop) => {
             run_cmd(stop);
@@ -123,6 +130,7 @@ fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
     }
 
     let deadline = Instant::now() + Duration::from_secs(spec.stop_timeout_secs.max(1) as u64);
+    let mut graceful = true;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -130,6 +138,7 @@ fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
                 if Instant::now() >= deadline {
                     unsafe { libc::killpg(pgid, libc::SIGKILL) };
                     let _ = child.wait();
+                    graceful = false;
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -139,6 +148,7 @@ fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
     }
 
     run_optional(&spec.post_stop);
+    graceful
 }
 
 fn run_optional(cmd: &Option<String>) {
@@ -197,6 +207,49 @@ pub fn healthcheck_to_cmd(hc: &str) -> String {
     } else {
         hc.to_string()
     }
+}
+
+pub fn parse_env_file(path: &std::path::Path) -> Result<Vec<(String, String)>, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read env file '{}': {}", path.display(), e))?;
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (i, raw) in content.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let eq = match line.find('=') {
+            Some(p) => p,
+            None => {
+                return Err(format!(
+                    "invalid env file '{}' line {}: expected KEY=value",
+                    path.display(),
+                    i + 1
+                ));
+            }
+        };
+        let key = line[..eq].trim().to_string();
+        if key.is_empty() {
+            return Err(format!(
+                "invalid env file '{}' line {}: empty key",
+                path.display(),
+                i + 1
+            ));
+        }
+        let mut value = line[eq + 1..].trim().to_string();
+        if value.len() >= 2
+            && ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+        {
+            value = value[1..value.len() - 1].to_string();
+        }
+        match pairs.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = value,
+            None => pairs.push((key, value)),
+        }
+    }
+    Ok(pairs)
 }
 
 pub struct DepGate {

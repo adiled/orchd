@@ -97,13 +97,13 @@ pub fn sow(config: &Config) -> Result<(), OrchardError> {
         if service.disabled {
             continue;
         }
-        match rt.exec_set(service) {
-            Ok(exec) => cuttings.push(Cutting {
-                service: service.clone(),
-                exec,
-            }),
-            Err(e) => eprintln!("sow: skip {}: {}", service.name, e),
-        }
+        let exec = rt
+            .exec_set(service)
+            .map_err(|e| OrchardError::Other(format!("sow: service '{}': {}", service.name, e)))?;
+        cuttings.push(Cutting {
+            service: service.clone(),
+            exec,
+        });
     }
 
     let out = Cuttings {

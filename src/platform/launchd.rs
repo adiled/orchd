@@ -87,6 +87,7 @@ impl Platform for LaunchdPlatform {
     fn clean(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
         let dest_dir = install_dir(config);
+        let ns_prefix = format!("{}.", config.namespace);
 
         // bootout + remove each installed plist
         if let Ok(entries) = std::fs::read_dir(&units_dir) {
@@ -96,7 +97,11 @@ impl Platform for LaunchdPlatform {
                     continue;
                 }
                 if let Some(name) = path.file_name() {
-                    let dest = dest_dir.join(name);
+                    let name = name.to_string_lossy();
+                    if !name.starts_with(&ns_prefix) {
+                        continue;
+                    }
+                    let dest = dest_dir.join(name.as_ref());
                     if dest.exists() {
                         let dom = if config.scope.is_user() {
                             format!("gui/{}", current_uid())
@@ -108,17 +113,17 @@ impl Platform for LaunchdPlatform {
                             .status();
                         let _ = std::fs::remove_file(&dest);
                     }
+                    let _ = std::fs::remove_file(&path);
                 }
             }
         }
 
-        let _ = std::fs::remove_dir_all(&units_dir);
+        let _ = std::fs::create_dir_all(&units_dir);
         Ok(())
     }
 }
 
 impl LaunchdPlatform {
-    /// Generate plists for all enabled services. Mirrors SystemdPlatform::generate_all.
     pub fn generate_all(
         &self,
         services: &[Service],

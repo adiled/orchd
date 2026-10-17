@@ -2,7 +2,9 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::exec::ExecSet;
-use crate::orchdi::{DepGate, parse_duration_secs, service_label, supervise_spec_path};
+use crate::orchdi::{
+    DepGate, parse_duration_secs, parse_env_file, service_label, supervise_spec_path,
+};
 use crate::types::{RestartPolicy, Service};
 
 #[cfg(test)]
@@ -82,8 +84,27 @@ pub fn generate_service_plist_with_deps(
         writeln!(p, "  <string>{}</string>", xml_escape(&resolved)).unwrap();
     }
 
-    let has_path = service.env.keys().any(|k| k == "PATH");
-    if !service.env.is_empty() || !has_path {
+    let mut effective: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for env_file in &service.env_files {
+        let resolved = resolve_path(env_file, &config.project_dir);
+        match parse_env_file(std::path::Path::new(&resolved)) {
+            Ok(pairs) => {
+                for (k, v) in pairs {
+                    effective.insert(k, v);
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: {}", e);
+            }
+        }
+    }
+    for (k, v) in &service.env {
+        effective.insert(k.clone(), v.clone());
+    }
+
+    let has_path = effective.keys().any(|k| k == "PATH");
+    if !effective.is_empty() || !has_path {
         writeln!(p, "  <key>EnvironmentVariables</key>").unwrap();
         writeln!(p, "  <dict>").unwrap();
         if !has_path {
@@ -94,11 +115,9 @@ pub fn generate_service_plist_with_deps(
             )
             .unwrap();
         }
-        let mut keys: Vec<&String> = service.env.keys().collect();
-        keys.sort();
-        for k in keys {
+        for (k, v) in &effective {
             writeln!(p, "    <key>{}</key>", xml_escape(k)).unwrap();
-            writeln!(p, "    <string>{}</string>", xml_escape(&service.env[k])).unwrap();
+            writeln!(p, "    <string>{}</string>", xml_escape(v)).unwrap();
         }
         writeln!(p, "  </dict>").unwrap();
     }
@@ -659,6 +678,104 @@ mod tests {
     fn test_service_label__format() {
         let cfg = test_config();
         assert_eq!(service_label(&cfg, "web"), "orch.web");
+    }
+
+    #[test]
+    fn test_generate_service_plist__env_file_is_inlined() {
+        let cfg = test_config();
+        let tmp = std::env::temp_dir().join("orchd-test-envfile");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let env_path = tmp.join("app.env");
+        std::fs::write(
+            &env_path,
+            "# comment\nDB_HOST=db.internal\nDB_PORT=5433\nexport TOK=abc\nQUOTED=\"hi there\"\n",
+        )
+        .unwrap();
+
+        let mut svc = simple_host_service("app", "app run");
+        svc.env_files = vec![env_path.display().to_string()]; // absolute
+        let exec = simple_exec_set("app run");
+        let p = generate_service_plist(&svc, &exec, &cfg);
+
+        assert!(p.contains("<key>DB_HOST</key>"), "missing DB_HOST:\n{}", p);
+        assert!(p.contains("<string>db.internal</string>"));
+        assert!(p.contains("<key>DB_PORT</key>"));
+        assert!(p.contains("<string>5433</string>"));
+        assert!(p.contains("<key>TOK</key>"), "export prefix not stripped");
+        assert!(p.contains("<key>QUOTED</key>"));
+        assert!(
+            p.contains("<string>hi there</string>"),
+            "quotes not stripped"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_generate_service_plist__env_overrides_env_file() {
+        let cfg = test_config();
+        let tmp = std::env::temp_dir().join("orchd-test-envfile-override");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let env_path = tmp.join("app.env");
+        std::fs::write(&env_path, "MODE=from-file\nONLY_FILE=keep\n").unwrap();
+
+        let mut svc = simple_host_service("app", "app run");
+        svc.env_files = vec![env_path.display().to_string()];
+        svc.env.insert("MODE".into(), "from-env".into());
+        let exec = simple_exec_set("app run");
+        let p = generate_service_plist(&svc, &exec, &cfg);
+
+        assert!(p.contains("<string>from-env</string>"));
+        assert!(!p.contains("<string>from-file</string>"));
+        assert!(p.contains("<key>ONLY_FILE</key>"), "env file entry lost");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_generate_service_plist__later_env_file_wins() {
+        let cfg = test_config();
+        let tmp = std::env::temp_dir().join("orchd-test-envfile-order");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let a = tmp.join("a.env");
+        let b = tmp.join("b.env");
+        std::fs::write(&a, "SHARED=from-a\nA_ONLY=a\n").unwrap();
+        std::fs::write(&b, "SHARED=from-b\n").unwrap();
+
+        let mut svc = simple_host_service("app", "app run");
+        svc.env_files = vec![a.display().to_string(), b.display().to_string()];
+        let exec = simple_exec_set("app run");
+        let p = generate_service_plist(&svc, &exec, &cfg);
+
+        assert!(p.contains("<string>from-b</string>"));
+        assert!(!p.contains("<string>from-a</string>"));
+        assert!(p.contains("<key>A_ONLY</key>"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_generate_service_plist__relative_env_file_resolves_against_project_dir() {
+        let proj = std::env::temp_dir().join("orchd-test-projdir-envfile");
+        let _ = std::fs::remove_dir_all(&proj);
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("local.env"), "FROM_PROJECT=yes\n").unwrap();
+
+        let mut cfg = test_config();
+        cfg.project_dir = proj.clone();
+
+        let mut svc = simple_host_service("app", "app run");
+        svc.env_files = vec!["local.env".to_string()];
+        let exec = simple_exec_set("app run");
+        let p = generate_service_plist(&svc, &exec, &cfg);
+
+        assert!(
+            p.contains("<key>FROM_PROJECT</key>"),
+            "relative env file not resolved against project_dir:\n{}",
+            p
+        );
+
+        let _ = std::fs::remove_dir_all(&proj);
     }
 
     #[test]

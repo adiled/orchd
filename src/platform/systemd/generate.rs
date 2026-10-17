@@ -27,9 +27,6 @@ pub fn generate_service_unit(
         writeln!(unit, "BindsTo={}", binds_to_deps.join(" ")).unwrap();
     }
 
-    // Start limiting is a [Unit] directive. systemd rejects (and silently
-    // ignores) these keys in [Service], so a RESTART burst limit written
-    // here would leave the unit crash-looping forever.
     if let Some(burst) = service.restart.start_limit_burst {
         writeln!(unit, "StartLimitBurst={}", burst).unwrap();
     }
@@ -78,19 +75,19 @@ pub fn generate_service_unit(
 
     if let Some(ref workdir) = service.workdir {
         let resolved = resolve_workdir(workdir, &config.project_dir);
-        writeln!(unit, "WorkingDirectory={}", resolved).unwrap();
+        writeln!(unit, "WorkingDirectory=\"{}\"", escape_systemd(&resolved)).unwrap();
     }
 
     let mut env_keys: Vec<&String> = service.env.keys().collect();
     env_keys.sort();
     for key in env_keys {
         let value = &service.env[key];
-        writeln!(unit, "Environment=\"{}={}\"", key, value).unwrap();
+        writeln!(unit, "Environment=\"{}={}\"", key, escape_systemd(value)).unwrap();
     }
 
     for env_file in &service.env_files {
         let resolved = resolve_path(env_file, &config.project_dir);
-        writeln!(unit, "EnvironmentFile={}", resolved).unwrap();
+        writeln!(unit, "EnvironmentFile=\"{}\"", escape_systemd(&resolved)).unwrap();
     }
 
     if let Some(ref user) = service.user {
@@ -144,16 +141,16 @@ pub fn generate_service_unit(
     if let Some(ref stdout) = service.logging.stdout {
         writeln!(
             unit,
-            "StandardOutput=file:{}",
-            resolve_path(stdout, &config.project_dir)
+            "StandardOutput=\"file:{}\"",
+            escape_systemd(&resolve_path(stdout, &config.project_dir))
         )
         .unwrap();
     }
     if let Some(ref stderr) = service.logging.stderr {
         writeln!(
             unit,
-            "StandardError=file:{}",
-            resolve_path(stderr, &config.project_dir)
+            "StandardError=\"file:{}\"",
+            escape_systemd(&resolve_path(stderr, &config.project_dir))
         )
         .unwrap();
     }
@@ -166,12 +163,6 @@ pub fn generate_service_unit(
 }
 
 pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
-    let healthcheck = service
-        .healthcheck
-        .as_deref()
-        .expect("ready gate requires a healthcheck");
-    let timeout = service.readiness_timeout.as_deref().unwrap_or("90s");
-
     let mut unit = String::with_capacity(512);
 
     writeln!(unit, "[Unit]").unwrap();
@@ -183,13 +174,22 @@ pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
     writeln!(unit, "[Service]").unwrap();
     writeln!(unit, "Type=oneshot").unwrap();
     writeln!(unit, "RemainAfterExit=yes").unwrap();
-    writeln!(
-        unit,
-        "ExecStart=/bin/bash -c 'until {} >/dev/null 2>&1; do sleep 2; done; exit 0'",
-        escape_bash(&healthcheck_to_cmd(healthcheck))
-    )
-    .unwrap();
-    writeln!(unit, "TimeoutStartSec={}", timeout).unwrap();
+
+    match service.healthcheck.as_deref() {
+        Some(healthcheck) => {
+            let timeout = service.readiness_timeout.as_deref().unwrap_or("90s");
+            writeln!(
+                unit,
+                "ExecStart=/bin/bash -c 'until {} >/dev/null 2>&1; do sleep 2; done; exit 0'",
+                escape_bash(&healthcheck_to_cmd(healthcheck))
+            )
+            .unwrap();
+            writeln!(unit, "TimeoutStartSec={}", timeout).unwrap();
+        }
+        None => {
+            writeln!(unit, "ExecStart=/bin/true").unwrap();
+        }
+    }
 
     unit
 }
@@ -276,6 +276,19 @@ fn build_dependencies(
 
 fn escape_bash(cmd: &str) -> String {
     cmd.replace('\'', "'\\''")
+}
+
+fn escape_systemd(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '%' => out.push_str("%%"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
@@ -565,7 +578,7 @@ mod tests {
 
         let unit = generate_service_unit(&svc, &exec, &config, &gates);
 
-        assert!(unit.contains("WorkingDirectory=/test/project/backend"));
+        assert!(unit.contains("WorkingDirectory=\"/test/project/backend\""));
     }
 
     #[test]
@@ -657,6 +670,41 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_ready_gate__no_healthcheck_does_not_panic() {
+        let config = test_config();
+        let svc = simple_host_service("postgres", "postgres -p 5433"); // no healthcheck
+
+        let unit = generate_ready_gate(&svc, &config);
+
+        assert!(unit.contains("After=orch-postgres.service"));
+        assert!(unit.contains("BindsTo=orch-postgres.service"));
+        assert!(unit.contains("ExecStart=/bin/true"));
+        assert!(
+            !unit.contains("until "),
+            "no probe to poll without a healthcheck:\n{}",
+            unit
+        );
+        assert!(!unit.contains("TimeoutStartSec="));
+    }
+
+    #[test]
+    fn test_required_dep_without_healthcheck_generates_without_panic() {
+        let config = test_config();
+        let db = simple_host_service("postgres", "postgres -p 5433");
+        let mut web = simple_host_service("web", "web run");
+        web.requires = vec!["postgres".to_string()];
+        let services = vec![db, web];
+
+        let gates = services_needing_ready_gates(&services);
+        assert!(gates.contains("postgres"));
+
+        for svc in services.iter().filter(|s| gates.contains(&s.name)) {
+            let unit = generate_ready_gate(svc, &config);
+            assert!(unit.contains("ExecStart=/bin/true"));
+        }
+    }
+
+    #[test]
     fn test_generate_target() {
         let config = test_config();
         let unit = generate_target(&config);
@@ -739,6 +787,77 @@ mod tests {
     }
 
     #[test]
+    fn test_escape_systemd__escapes_quotes_backslash_and_percent() {
+        assert_eq!(escape_systemd("plain"), "plain");
+        assert_eq!(escape_systemd(r#"has "quotes""#), r#"has \"quotes\""#);
+        assert_eq!(escape_systemd(r"back\slash"), r"back\\slash");
+        assert_eq!(escape_systemd("100%"), "100%%");
+        assert_eq!(escape_systemd("%d"), "%%d");
+        assert_eq!(escape_systemd("$HOME"), "$HOME");
+    }
+
+    #[test]
+    fn test_generate_service_unit__env_value_with_quote_is_escaped() {
+        let config = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.env.insert("NOTE".into(), r#"he said "hi""#.into());
+        let exec = simple_exec_set("app run");
+        let unit = generate_service_unit(&svc, &exec, &config, &HashSet::new());
+
+        assert!(
+            unit.contains(r#"Environment="NOTE=he said \"hi\"""#),
+            "quote not escaped:\n{}",
+            unit
+        );
+    }
+
+    #[test]
+    fn test_generate_service_unit__env_value_with_percent_is_escaped() {
+        let config = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.env.insert("PW".into(), "a%d%b".into());
+        let exec = simple_exec_set("app run");
+        let unit = generate_service_unit(&svc, &exec, &config, &HashSet::new());
+
+        assert!(
+            unit.contains(r#"Environment="PW=a%%d%%b""#),
+            "percent not escaped for specifier expansion:\n{}",
+            unit
+        );
+    }
+
+    #[test]
+    fn test_generate_service_unit__paths_are_quoted() {
+        let config = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.workdir = Some("my dir".to_string());
+        svc.env_files = vec!["some dir/.env".to_string()];
+        svc.logging = LogConfig {
+            stdout: Some("log dir/out.log".to_string()),
+            stderr: Some("log dir/err.log".to_string()),
+        };
+        let exec = simple_exec_set("app run");
+        let unit = generate_service_unit(&svc, &exec, &config, &HashSet::new());
+
+        assert!(
+            unit.contains("WorkingDirectory=\"/test/project/my dir\""),
+            "workdir not quoted:\n{}",
+            unit
+        );
+        assert!(
+            unit.contains("EnvironmentFile=\"/test/project/some dir/.env\""),
+            "env file not quoted:\n{}",
+            unit
+        );
+        assert!(
+            unit.contains("StandardOutput=\"file:/test/project/log dir/out.log\""),
+            "stdout not quoted:\n{}",
+            unit
+        );
+        assert!(unit.contains("StandardError=\"file:/test/project/log dir/err.log\""));
+    }
+
+    #[test]
     fn test_generate_service_unit__with_env_files() {
         let config = test_config();
         let mut svc = simple_host_service("app", "python run.py");
@@ -748,8 +867,8 @@ mod tests {
 
         let unit = generate_service_unit(&svc, &exec, &config, &gates);
 
-        assert!(unit.contains("EnvironmentFile=/test/project/.env.local"));
-        assert!(unit.contains("EnvironmentFile=/etc/app/env"));
+        assert!(unit.contains("EnvironmentFile=\"/test/project/.env.local\""));
+        assert!(unit.contains("EnvironmentFile=\"/etc/app/env\""));
     }
 
     #[test]
@@ -782,7 +901,7 @@ mod tests {
 
         let unit = generate_service_unit(&svc, &exec, &config, &gates);
 
-        assert!(unit.contains("StandardOutput=file:/var/log/app/stdout.log"));
-        assert!(unit.contains("StandardError=file:/var/log/app/stderr.log"));
+        assert!(unit.contains("StandardOutput=\"file:/var/log/app/stdout.log\""));
+        assert!(unit.contains("StandardError=\"file:/var/log/app/stderr.log\""));
     }
 }
