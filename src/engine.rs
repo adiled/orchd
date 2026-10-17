@@ -337,6 +337,11 @@ fn config_hash(config: &Config) -> u64 {
     for a in &config.args {
         a.hash(&mut h);
     }
+    // ORCH_ARG_* feeds the parse, so it must invalidate the cache too.
+    for (k, v) in env_arg_overrides() {
+        k.hash(&mut h);
+        v.hash(&mut h);
+    }
     h.finish()
 }
 
@@ -466,11 +471,16 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         files.push((overlay.display().to_string(), content));
     }
 
-    // `--arg key=value` overrides take precedence over ARG defaults.
-    let mut overrides: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // ARG override precedence, per the spec: --arg flag > ORCH_ARG_* env >
+    // Orchfile default. orchd parses in-process rather than shelling out to the
+    // orch CLI, so the env tier has to be collected here or it never applies.
+    let mut overrides = env_arg_overrides();
+
     for arg in &config.args {
         if let Some((k, v)) = arg.split_once('=') {
             overrides.insert(k.to_string(), v.to_string());
+        } else if config.verbose {
+            eprintln!("warning: ignoring --arg '{}' (expected name=value)", arg);
         }
     }
 
@@ -478,14 +488,48 @@ fn parse_orchfile(config: &Config) -> Result<OrchFile, EngineError> {
         eprintln!("parsing {} file(s) in-process via the-orch", files.len());
     }
 
-    the_orch::parse_files(&files, &overrides).map_err(|errs| {
+    let parsed = the_orch::parse_files(&files, &overrides).map_err(|errs| {
         let msg = errs
             .iter()
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join("; ");
         EngineError::OrchParse(msg)
-    })
+    })?;
+
+    // The resolver only applies an override to an ARG that exists, so a typo
+    // or a stale flag is silently inert. Say so rather than pretending it took.
+    let mut unknown: Vec<&String> = overrides
+        .keys()
+        .filter(|k| !parsed.args.contains_key(*k))
+        .collect();
+    unknown.sort();
+    for key in unknown {
+        eprintln!(
+            "warning: no ARG named '{}' is declared; the override is ignored",
+            key
+        );
+    }
+
+    Ok(parsed)
+}
+
+/// Collect `ORCH_ARG_<name>=value` from the environment.
+///
+/// This is a documented tier of the spec's ARG precedence ("--arg flag >
+/// ORCH_ARG_* env var > Orchfile default"). orchd calls the-orch as a library,
+/// bypassing the orch CLI that would otherwise read these, so without this the
+/// whole env tier is dead under orchd.
+fn env_arg_overrides() -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (key, value) in std::env::vars() {
+        if let Some(name) = key.strip_prefix("ORCH_ARG_") {
+            if !name.is_empty() {
+                out.insert(name.to_string(), value);
+            }
+        }
+    }
+    out
 }
 
 /// The in-memory ARG overlay declaring orchd's built-in variables.
@@ -656,6 +700,81 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(&ov, "# changed\n").unwrap();
         assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // --- ORCH_ARG_* env tier + unknown-ARG warnings ---
+
+    #[test]
+    fn test_env_arg_overrides__reads_prefixed_env() {
+        unsafe {
+            std::env::set_var("ORCH_ARG_prometheus_port", "9999");
+            std::env::set_var("ORCH_ARG_", "ignored-no-name");
+            std::env::set_var("NOT_ORCH_ARG_x", "no");
+        }
+        let got = env_arg_overrides();
+        unsafe {
+            std::env::remove_var("ORCH_ARG_prometheus_port");
+            std::env::remove_var("ORCH_ARG_");
+            std::env::remove_var("NOT_ORCH_ARG_x");
+        }
+        assert_eq!(got.get("prometheus_port").map(String::as_str), Some("9999"));
+        assert!(!got.contains_key(""), "empty ARG name must be skipped");
+        assert!(!got.contains_key("NOT_ORCH_ARG_x"));
+    }
+
+    /// The spec's precedence is --arg flag > ORCH_ARG_* env > Orchfile default.
+    /// orchd parses in-process, so the env tier has to be applied explicitly.
+    #[test]
+    fn test_parse_orchfile__orch_arg_env_overrides_default() {
+        let root = std::env::temp_dir().join("orchd-orcharg-env");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Orchfile"),
+            "ARG port=8000\nSERVICE web\nRUN ./s ${port}\n",
+        )
+        .unwrap();
+
+        let mut cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "systemd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+        cfg.quiet = true;
+
+        // Default.
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(parsed.args.get("port").map(String::as_str), Some("8000"));
+
+        // Env tier wins over the default.
+        unsafe { std::env::set_var("ORCH_ARG_port", "9001") };
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(
+            parsed.args.get("port").map(String::as_str),
+            Some("9001"),
+            "ORCH_ARG_* env must override the Orchfile default"
+        );
+
+        // Flag tier wins over the env.
+        cfg.args.push("port=7000".to_string());
+        let parsed = parse_orchfile(&cfg).unwrap();
+        assert_eq!(
+            parsed.args.get("port").map(String::as_str),
+            Some("7000"),
+            "--arg must win over ORCH_ARG_*"
+        );
+        unsafe { std::env::remove_var("ORCH_ARG_port") };
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
