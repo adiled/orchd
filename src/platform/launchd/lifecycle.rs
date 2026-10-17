@@ -138,26 +138,34 @@ fn query_status(label: &str, config: &Config) -> (String, String, Option<u32>) {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
         _ => return ("inactive".to_string(), "dead".to_string(), None),
     };
+    parse_launchctl_status(&stdout)
+}
 
+fn parse_launchctl_status(stdout: &str) -> (String, String, Option<u32>) {
     let mut pid: Option<u32> = None;
     let mut state = "inactive".to_string();
     let mut sub = "dead".to_string();
 
     for line in stdout.lines() {
         let t = line.trim();
-        if let Some(v) = t.strip_prefix("pid =") {
-            if let Ok(p) = v.trim().trim_end_matches(',').parse::<u32>() {
-                if p > 0 {
-                    pid = Some(p);
+        if pid.is_none() {
+            if let Some(v) = t.strip_prefix("pid =") {
+                if let Ok(p) = v.trim().trim_end_matches(',').parse::<u32>() {
+                    if p > 0 {
+                        pid = Some(p);
+                    }
                 }
             }
-        } else if let Some(v) = t.strip_prefix("state =") {
-            sub = v.trim().trim_end_matches(',').to_string();
-            state = if sub == "running" {
-                "active".to_string()
-            } else {
-                "inactive".to_string()
-            };
+        }
+        if sub == "dead" {
+            if let Some(v) = t.strip_prefix("state =") {
+                sub = v.trim().trim_end_matches(',').to_string();
+                state = if sub == "running" {
+                    "active".to_string()
+                } else {
+                    "inactive".to_string()
+                };
+            }
         }
     }
     (state, sub, pid)
@@ -249,4 +257,71 @@ fn labels_for(services: &[String], config: &Config) -> Result<Vec<String>, Platf
         }
     }
     Ok(labels)
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    const RUNNING_PRINT: &str = concat!(
+        "com.apple.xpc.launchd.agent = {\n",
+        "\tstate = running\n",
+        "\tpid = 28700\n",
+        "\tprogram = /bin/sleep\n",
+        "\tjetsam coalition = {\n",
+        "\t\ttype = jetsam\n",
+        "\t}\n",
+        "\tendpoint = {\n",
+        "\t\tcom.apple.builtin.iokit = {\n",
+        "\t\t\ttype = state = active\n",
+        "\t\t}\n",
+        "\t}\n",
+        "\tsocket = {\n",
+        "\t\ttype = state = active\n",
+        "\t}\n",
+        "}\n"
+    );
+
+    #[test]
+    fn test_parse_launchctl_status__job_state_wins_over_nested() {
+        let (state, sub, pid) = parse_launchctl_status(RUNNING_PRINT);
+        assert_eq!(state, "active", "a running job must not report inactive");
+        assert_eq!(sub, "running");
+        assert_eq!(pid, Some(28700));
+    }
+
+    #[test]
+    fn test_parse_launchctl_status__not_running_job() {
+        let text = concat!(
+            "com.apple.xpc.launchd.agent = {\n",
+            "\tstate = not running\n",
+            "\tlast exit code = 0\n",
+            "\tjetsam coalition = {\n",
+            "\t\ttype = state = active\n",
+            "\t}\n",
+            "}\n"
+        );
+        let (state, sub, pid) = parse_launchctl_status(text);
+        assert_eq!(state, "inactive");
+        assert_eq!(sub, "not running");
+        assert_eq!(pid, None);
+    }
+
+    #[test]
+    fn test_parse_launchctl_status__pid_only() {
+        let (state, sub, pid) =
+            parse_launchctl_status("com.apple.xpc.launchd.agent = {\n\tpid = 5\n}\n");
+        assert_eq!(state, "inactive");
+        assert_eq!(sub, "dead");
+        assert_eq!(pid, Some(5));
+    }
+
+    #[test]
+    fn test_parse_launchctl_status__empty_output() {
+        assert_eq!(
+            parse_launchctl_status(""),
+            ("inactive".to_string(), "dead".to_string(), None)
+        );
+    }
 }
