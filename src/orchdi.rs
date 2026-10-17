@@ -199,6 +199,56 @@ pub fn healthcheck_to_cmd(hc: &str) -> String {
     }
 }
 
+/// Parse a dotenv-style env file into ordered key/value pairs.
+///
+/// launchd has no `EnvironmentFile=` equivalent, so ENV_FILE values must be
+/// read at generate time and inlined into the plist. Later files win over
+/// earlier ones, matching systemd's left-to-right precedence.
+pub fn parse_env_file(path: &std::path::Path) -> Result<Vec<(String, String)>, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read env file '{}': {}", path.display(), e))?;
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (i, raw) in content.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Tolerate `export KEY=value`, a common dotenv idiom.
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let eq = match line.find('=') {
+            Some(p) => p,
+            None => {
+                return Err(format!(
+                    "invalid env file '{}' line {}: expected KEY=value",
+                    path.display(),
+                    i + 1
+                ));
+            }
+        };
+        let key = line[..eq].trim().to_string();
+        if key.is_empty() {
+            return Err(format!(
+                "invalid env file '{}' line {}: empty key",
+                path.display(),
+                i + 1
+            ));
+        }
+        // Strip one layer of matching surrounding quotes.
+        let mut value = line[eq + 1..].trim().to_string();
+        if value.len() >= 2
+            && ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+        {
+            value = value[1..value.len() - 1].to_string();
+        }
+        match pairs.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = value,
+            None => pairs.push((key, value)),
+        }
+    }
+    Ok(pairs)
+}
+
 pub struct DepGate {
     pub poll_cmd: String,
     pub timeout_secs: u32,
