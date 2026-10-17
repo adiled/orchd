@@ -3,7 +3,8 @@ use std::fmt::Write;
 use crate::config::Config;
 use crate::exec::ExecSet;
 use crate::orchdi::{
-    DepGate, parse_duration_secs, parse_env_file, service_label, supervise_spec_path,
+    DepGate, parse_duration_secs, parse_env_file, parse_memory_bytes, service_label,
+    supervise_spec_path,
 };
 use crate::types::{RestartPolicy, Service};
 
@@ -144,7 +145,15 @@ pub fn generate_service_plist_with_deps(
     writeln!(p, "  <key>StandardErrorPath</key>").unwrap();
     writeln!(p, "  <string>{}</string>", xml_escape(&err)).unwrap();
 
-    if service.resources.limit_nofile.is_some() || service.resources.limit_nproc.is_some() {
+    let resident = service
+        .resources
+        .memory
+        .as_deref()
+        .and_then(parse_memory_bytes);
+    if service.resources.limit_nofile.is_some()
+        || service.resources.limit_nproc.is_some()
+        || resident.is_some()
+    {
         writeln!(p, "  <key>SoftResourceLimits</key>").unwrap();
         writeln!(p, "  <dict>").unwrap();
         if let Some(nofile) = service.resources.limit_nofile {
@@ -154,6 +163,10 @@ pub fn generate_service_plist_with_deps(
         if let Some(nproc) = service.resources.limit_nproc {
             writeln!(p, "    <key>NumberOfProcesses</key>").unwrap();
             writeln!(p, "    <integer>{}</integer>", nproc).unwrap();
+        }
+        if let Some(bytes) = resident {
+            writeln!(p, "    <key>ResidentSetSize</key>").unwrap();
+            writeln!(p, "    <integer>{}</integer>", bytes).unwrap();
         }
         writeln!(p, "  </dict>").unwrap();
     }
@@ -672,6 +685,53 @@ mod tests {
 
         assert!(p.contains("<key>ExitTimeOut</key>"));
         assert!(p.contains("<integer>30</integer>"));
+    }
+
+    #[test]
+    fn test_generate_service_plist__memory_becomes_resident_set_size() {
+        let cfg = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.resources.memory = Some("512M".to_string());
+        let exec = simple_exec_set("app run");
+        let p = generate_service_plist(&svc, &exec, &cfg);
+
+        assert!(p.contains("<key>ResidentSetSize</key>"), "{}", p);
+        assert!(
+            p.contains(&format!("<integer>{}</integer>", 512 * 1024 * 1024)),
+            "{}",
+            p
+        );
+    }
+
+    #[test]
+    fn test_generate_service_plist__memory_alongside_other_limits() {
+        let cfg = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.resources.memory = Some("1G".to_string());
+        svc.resources.limit_nofile = Some(1024);
+        svc.resources.limit_nproc = Some(64);
+        let exec = simple_exec_set("app run");
+        let p = generate_service_plist(&svc, &exec, &cfg);
+
+        assert_eq!(p.matches("<key>SoftResourceLimits</key>").count(), 1);
+        assert!(p.contains("<key>NumberOfFiles</key>"));
+        assert!(p.contains("<key>NumberOfProcesses</key>"));
+        assert!(p.contains("<key>ResidentSetSize</key>"));
+    }
+
+    #[test]
+    fn test_generate_service_plist__non_grammar_memory_is_omitted_not_guessed() {
+        let cfg = test_config();
+        let mut svc = simple_host_service("app", "app run");
+        svc.resources.memory = Some("512MB".to_string());
+        let exec = simple_exec_set("app run");
+        let p = generate_service_plist(&svc, &exec, &cfg);
+
+        assert!(
+            !p.contains("<key>SoftResourceLimits</key>"),
+            "an unparseable size must not emit a wrong limit:\n{}",
+            p
+        );
     }
 
     #[test]
