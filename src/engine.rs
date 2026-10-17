@@ -385,9 +385,14 @@ fn stamp_path(config: &Config) -> std::path::PathBuf {
 }
 
 fn config_hash(config: &Config) -> u64 {
+    config_hash_for(config, env!("CARGO_PKG_VERSION"))
+}
+
+fn config_hash_for(config: &Config, orchd_version: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
+    orchd_version.hash(&mut h);
     config.runtime.hash(&mut h);
     config.platform.hash(&mut h);
     config.namespace.hash(&mut h);
@@ -729,6 +734,22 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(&ov, "# changed\n").unwrap();
         assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_config_hash__includes_orchd_version() {
+        let (cfg, root, _guard) = cache_fixture("version", "plist");
+        assert_ne!(
+            config_hash_for(&cfg, "0.3.4"),
+            config_hash_for(&cfg, "0.3.5"),
+            "an orchd upgrade must invalidate the generate cache"
+        );
+        assert_eq!(
+            config_hash_for(&cfg, "0.3.4"),
+            config_hash_for(&cfg, "0.3.4"),
+            "hash must be stable for a fixed version"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
