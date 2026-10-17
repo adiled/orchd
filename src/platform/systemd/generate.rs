@@ -27,6 +27,16 @@ pub fn generate_service_unit(
         writeln!(unit, "BindsTo={}", binds_to_deps.join(" ")).unwrap();
     }
 
+    // Start limiting is a [Unit] directive. systemd rejects (and silently
+    // ignores) these keys in [Service], so a RESTART burst limit written
+    // here would leave the unit crash-looping forever.
+    if let Some(burst) = service.restart.start_limit_burst {
+        writeln!(unit, "StartLimitBurst={}", burst).unwrap();
+    }
+    if let Some(ref interval) = service.restart.start_limit_interval {
+        writeln!(unit, "StartLimitIntervalSec={}", interval).unwrap();
+    }
+
     writeln!(unit).unwrap();
     writeln!(unit, "[Service]").unwrap();
 
@@ -98,13 +108,6 @@ pub fn generate_service_unit(
         if let Some(ref delay) = service.restart.delay {
             writeln!(unit, "RestartSec={}", delay).unwrap();
         }
-    }
-
-    if let Some(burst) = service.restart.start_limit_burst {
-        writeln!(unit, "StartLimitBurst={}", burst).unwrap();
-    }
-    if let Some(ref interval) = service.restart.start_limit_interval {
-        writeln!(unit, "StartLimitIntervalSec={}", interval).unwrap();
     }
 
     if let Some(ref start) = service.timeouts.start {
@@ -423,6 +426,73 @@ mod tests {
         assert!(unit.contains("RestartSec=5s"));
         assert!(unit.contains("StartLimitBurst=3"));
         assert!(unit.contains("StartLimitIntervalSec=60s"));
+    }
+
+    /// Start limiting lives in [Unit]. systemd logs "Unknown key name
+    /// 'StartLimitBurst' in section 'Service'" and ignores it there, which
+    /// silently turns a bounded restart policy into an infinite crash loop.
+    #[test]
+    fn test_generate_service_unit__start_limits_are_in_unit_section() {
+        let config = test_config();
+        let mut svc = simple_host_service("worker", "celery -A myapp worker");
+        svc.restart = RestartConfig {
+            policy: RestartPolicy::OnFailure,
+            delay: Some("5s".to_string()),
+            start_limit_burst: Some(3),
+            start_limit_interval: Some("60s".to_string()),
+        };
+        let exec = simple_exec_set("celery -A myapp worker");
+        let gates = HashSet::new();
+
+        let unit = generate_service_unit(&svc, &exec, &config, &gates);
+
+        let (unit_section, service_section) = split_sections(&unit);
+        assert!(
+            unit_section.contains("StartLimitBurst=3"),
+            "StartLimitBurst must be in [Unit], got:\n{}",
+            unit_section
+        );
+        assert!(
+            unit_section.contains("StartLimitIntervalSec=60s"),
+            "StartLimitIntervalSec must be in [Unit], got:\n{}",
+            unit_section
+        );
+        assert!(
+            !service_section.contains("StartLimitBurst"),
+            "StartLimitBurst must not be in [Service], got:\n{}",
+            service_section
+        );
+        assert!(
+            !service_section.contains("StartLimitIntervalSec"),
+            "StartLimitIntervalSec must not be in [Service], got:\n{}",
+            service_section
+        );
+        // Restart=/RestartSec= are [Service] keys and must stay there.
+        assert!(service_section.contains("Restart=on-failure"));
+        assert!(service_section.contains("RestartSec=5s"));
+    }
+
+    /// Split a unit file into its [Unit] and [Service] section bodies.
+    fn split_sections(unit: &str) -> (String, String) {
+        let mut current = String::new();
+        let mut unit_section = String::new();
+        let mut service_section = String::new();
+        for line in unit.lines() {
+            match line.trim() {
+                "[Unit]" => current = "unit".to_string(),
+                "[Service]" => current = "service".to_string(),
+                _ => {
+                    if current == "unit" {
+                        unit_section.push_str(line);
+                        unit_section.push('\n');
+                    } else if current == "service" {
+                        service_section.push_str(line);
+                        service_section.push('\n');
+                    }
+                }
+            }
+        }
+        (unit_section, service_section)
     }
 
     #[test]
