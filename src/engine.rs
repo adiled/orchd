@@ -279,6 +279,11 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
         }
     }
 
+    // The stamp describes artifacts that no longer exist, and its config hash
+    // includes the namespace, so keeping it would let the next `grow` skip
+    // generate and install nothing.
+    let _ = std::fs::remove_file(stamp_path(config));
+
     if !config.quiet {
         eprintln!("removed generated units");
     }
@@ -723,6 +728,27 @@ mod tests {
         assert!(is_up_to_date(&cfg));
         std::fs::remove_file(&envf).unwrap();
         assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_should_skip_generate__fell_then_grow_regenerates() {
+        use crate::platform::Platform;
+        use crate::platform::launchd::LaunchdPlatform;
+
+        let (cfg, root, _guard) = cache_fixture("fellgrow", "plist");
+        write_stamp(&cfg, &[]);
+        assert!(should_skip_generate(&cfg, false, false));
+
+        LaunchdPlatform::new().clean(&cfg).unwrap();
+        std::fs::remove_file(stamp_path(&cfg)).ok();
+
+        assert!(
+            !should_skip_generate(&cfg, false, false),
+            "after fell the artifacts are gone, so grow must not report up to date \
+             and skip installing them"
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -113,6 +113,7 @@ impl Platform for LaunchdPlatform {
                             .status();
                         let _ = std::fs::remove_file(&dest);
                     }
+                    let _ = std::fs::remove_file(&path);
                 }
             }
         }

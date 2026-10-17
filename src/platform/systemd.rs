@@ -106,6 +106,7 @@ impl Platform for SystemdPlatform {
                     }
                     let dest = systemd_dir.join(name.as_ref());
                     let _ = std::fs::remove_file(&dest);
+                    let _ = std::fs::remove_file(&entry.path());
                 }
             }
         }
