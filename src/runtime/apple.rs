@@ -84,6 +84,8 @@ pub struct AppleRuntime {
     namespace: String,
     /// Data directory (for host-mode services that share the bare prepare step).
     data_dir: PathBuf,
+    /// Project root, used to anchor relative VOLUME sources.
+    project_dir: PathBuf,
 }
 
 impl AppleRuntime {
@@ -98,6 +100,7 @@ impl AppleRuntime {
             bin,
             namespace: config.namespace.clone(),
             data_dir: config.data_dir.clone(),
+            project_dir: config.project_dir.clone(),
         }
     }
 
@@ -209,7 +212,8 @@ impl AppleRuntime {
             start.push_str(&format!(" --env-file {ef}"));
         }
         for vol in &service.volumes {
-            start.push_str(&format!(" --volume {}:{}", vol.source, vol.destination));
+            let src = self.volume_source(vol);
+            start.push_str(&format!(" --volume {}:{}", src, vol.destination));
         }
         for p in &service.publish {
             match &p.address {
@@ -260,6 +264,22 @@ impl AppleRuntime {
                 service.name
             ))
         })
+    }
+
+    /// Resolve a VOLUME source for the container CLI.
+    ///
+    /// The spec marks a source as a host path (not a named volume) when it
+    /// starts with `/`, `./` or `../`; everything else is a named volume and is
+    /// passed through untouched. A relative host path is anchored to the
+    /// project dir, matching how WORKDIR, ENV_FILE, STDOUT and STDERR are
+    /// resolved. Without this the path was handed to the CLI verbatim and
+    /// resolved against whatever cwd the init system gave the process.
+    fn volume_source(&self, vol: &crate::types::VolumeMount) -> String {
+        if vol.is_named || PathBuf::from(&vol.source).is_absolute() {
+            vol.source.clone()
+        } else {
+            self.project_dir.join(&vol.source).display().to_string()
+        }
     }
 
     /// Host-mode services are handled identically across all three modes:
@@ -361,6 +381,7 @@ mod tests {
             bin,
             namespace: "orch".to_string(),
             data_dir: std::env::temp_dir().join("orchd-apple-test-data"),
+            project_dir: PathBuf::from("/proj"),
         }
     }
 
@@ -483,6 +504,62 @@ mod tests {
         let exec = rt.exec_set(&svc).expect("host passthrough");
         assert_eq!(exec.start, "/usr/bin/nginx");
         assert!(exec.pre_start.is_none());
+    }
+
+    // --- VOLUME source resolution -------------------------------------------
+
+    fn volume(source: &str, is_named: bool) -> crate::types::VolumeMount {
+        crate::types::VolumeMount {
+            source: source.into(),
+            destination: "/data".into(),
+            is_named,
+        }
+    }
+
+    /// The spec treats /, ./ and ../ sources as host paths. A relative one is
+    /// anchored to the project dir; otherwise it resolved against whatever cwd
+    /// the init system happened to hand the process.
+    #[test]
+    fn test_volume_source__relative_host_path_anchors_to_project_dir() {
+        let rt = runtime(AppleMode::ContainerCli, None);
+        assert_eq!(rt.volume_source(&volume("./data", false)), "/proj/./data");
+        assert_eq!(rt.volume_source(&volume("../up", false)), "/proj/../up");
+    }
+
+    #[test]
+    fn test_volume_source__absolute_host_path_untouched() {
+        let rt = runtime(AppleMode::ContainerCli, None);
+        assert_eq!(
+            rt.volume_source(&volume("/var/lib/pg", false)),
+            "/var/lib/pg"
+        );
+    }
+
+    /// A named volume is a runtime-managed name, never a filesystem path.
+    #[test]
+    fn test_volume_source__named_volume_untouched() {
+        let rt = runtime(AppleMode::ContainerCli, None);
+        assert_eq!(rt.volume_source(&volume("pgdata", true)), "pgdata");
+    }
+
+    #[test]
+    fn test_cli_exec_set__resolves_relative_volume_source() {
+        let rt = runtime(AppleMode::ContainerCli, None);
+        let mut svc: Service = serde_json::from_str(STUB_CONTAINER).unwrap();
+        svc.image = Some("postgres:15".into());
+        svc.volumes = vec![volume("./pgdata", false), volume("named-vol", true)];
+
+        let exec = rt.exec_set(&svc).expect("exec_set");
+        assert!(
+            exec.start.contains(" --volume /proj/./pgdata:/data"),
+            "relative volume not anchored: {}",
+            exec.start
+        );
+        assert!(
+            exec.start.contains(" --volume named-vol:/data"),
+            "named volume mangled: {}",
+            exec.start
+        );
     }
 
     const STUB_CONTAINER: &str = r#"{
