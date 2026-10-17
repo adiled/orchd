@@ -68,6 +68,9 @@ pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), Engine
             continue;
         }
 
+        // Say what will be discarded rather than dropping it in silence.
+        lint_service(&config.platform, service);
+
         // Prepare (create data dirs, etc.)
         if let Err(e) = rt.prepare(service) {
             errors.push(format!("{}: {}", service.name, e));
@@ -296,6 +299,91 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     }
 
     Ok(())
+}
+
+/// Directives the spec defines that the target platform cannot express, so
+/// generating for it discards them. systemd maps everything below; launchd has
+/// no equivalent key and used to drop them without a word.
+fn unsupported_directives(platform: &str, svc: &crate::types::Service) -> Vec<&'static str> {
+    if platform != "launchd" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let r = &svc.resources;
+    if r.memory.is_some() {
+        out.push("MEMORY");
+    }
+    if r.cpus.is_some() {
+        out.push("CPUS");
+    }
+    if r.cpu_quota.is_some() {
+        out.push("CPU_QUOTA");
+    }
+    if r.tasks_max.is_some() {
+        out.push("TASKS_MAX");
+    }
+    if r.io_weight.is_some() {
+        out.push("IO_WEIGHT");
+    }
+    if svc.timeouts.start.is_some() {
+        out.push("TIMEOUT_START");
+    }
+    if svc.restart.start_limit_burst.is_some() {
+        out.push("START_LIMIT_BURST");
+    }
+    if svc.restart.start_limit_interval.is_some() {
+        out.push("START_LIMIT_INTERVAL");
+    }
+    out
+}
+
+/// Warn about anything the spec declares that would not survive generation.
+///
+/// Two classes: a directive the platform has no way to express, and a duration
+/// that does not match the spec grammar (`duration ::= integer ('s'|'m')`).
+/// Both used to fail silently, which is how `RESTART_DELAY 2h` produced a
+/// service with no throttle at all.
+fn lint_service(platform: &str, svc: &crate::types::Service) {
+    let dropped = unsupported_directives(platform, svc);
+    if !dropped.is_empty() {
+        eprintln!(
+            "warning: service '{}': {} not supported on {}; ignoring",
+            svc.name,
+            dropped.join(", "),
+            platform
+        );
+    }
+
+    // RELOAD is parsed and validated by the spec (C3, host-only) but has no
+    // implementation on either platform yet.
+    if svc.reload_command.is_some() {
+        eprintln!(
+            "warning: service '{}': RELOAD is not implemented yet; ignoring",
+            svc.name
+        );
+    }
+
+    let durations: [(&str, Option<&String>); 5] = [
+        ("RESTART_DELAY", svc.restart.delay.as_ref()),
+        (
+            "START_LIMIT_INTERVAL",
+            svc.restart.start_limit_interval.as_ref(),
+        ),
+        ("TIMEOUT_START", svc.timeouts.start.as_ref()),
+        ("TIMEOUT_STOP", svc.timeouts.stop.as_ref()),
+        ("READINESS_TIMEOUT", svc.readiness_timeout.as_ref()),
+    ];
+    for (name, value) in durations {
+        if let Some(v) = value {
+            if crate::orchdi::parse_duration_secs(v).is_none() {
+                eprintln!(
+                    "warning: service '{}': {} '{}' is not a valid duration \
+                     (grammar: integer followed by 's' or 'm')",
+                    svc.name, name, v
+                );
+            }
+        }
+    }
 }
 
 /// One file the generated artifacts depend on, fingerprinted at generate time.
@@ -932,6 +1020,83 @@ mod tests {
             None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // --- lint: what generation would discard ---
+
+    #[test]
+    fn test_unsupported_directives__launchd_reports_what_it_cannot_map() {
+        let mut svc = simple_service();
+        svc.resources.memory = Some("1G".into());
+        svc.resources.cpus = Some(2.0);
+        svc.resources.cpu_quota = Some("150%".into());
+        svc.resources.tasks_max = Some(100u64);
+        svc.resources.io_weight = Some(500u32);
+        svc.timeouts.start = Some("30s".into());
+        svc.restart.start_limit_burst = Some(3);
+        svc.restart.start_limit_interval = Some("60s".into());
+
+        let got = unsupported_directives("launchd", &svc);
+        assert_eq!(
+            got,
+            vec![
+                "MEMORY",
+                "CPUS",
+                "CPU_QUOTA",
+                "TASKS_MAX",
+                "IO_WEIGHT",
+                "TIMEOUT_START",
+                "START_LIMIT_BURST",
+                "START_LIMIT_INTERVAL"
+            ]
+        );
+        // systemd expresses all of them, so it reports nothing.
+        assert!(unsupported_directives("systemd", &svc).is_empty());
+    }
+
+    #[test]
+    fn test_unsupported_directives__limits_launchd_does_map_are_not_listed() {
+        let mut svc = simple_service();
+        svc.resources.limit_nofile = Some(1024u64);
+        svc.resources.limit_nproc = Some(64u64);
+        assert!(unsupported_directives("launchd", &svc).is_empty());
+    }
+
+    #[test]
+    fn test_unsupported_directives__clean_service_reports_nothing() {
+        let svc = simple_service();
+        assert!(unsupported_directives("launchd", &svc).is_empty());
+    }
+
+    fn simple_service() -> crate::types::Service {
+        use crate::types::*;
+        Service {
+            name: "app".into(),
+            mode: ServiceMode::Host,
+            image: None,
+            run_command: Some("./run".into()),
+            entrypoint: None,
+            cmd: None,
+            publish: Vec::new(),
+            volumes: Vec::new(),
+            user: None,
+            stop_command: None,
+            reload_command: None,
+            workdir: None,
+            env: std::collections::HashMap::new(),
+            env_files: Vec::new(),
+            requires: Vec::new(),
+            after: Vec::new(),
+            healthcheck: None,
+            readiness_timeout: None,
+            oneshot: false,
+            disabled: false,
+            recreate: RecreatePolicy::default(),
+            restart: RestartConfig::default(),
+            timeouts: TimeoutConfig::default(),
+            resources: ResourceLimits::default(),
+            logging: LogConfig::default(),
+        }
     }
 
     // --- EngineError Display ---
