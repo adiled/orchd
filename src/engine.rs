@@ -25,9 +25,12 @@ pub enum EngineError {
 /// 3. Create runtime, check prerequisites
 /// 4. For each enabled service: runtime.prepare() + runtime.exec_set()
 /// 5. Platform generate_all() + install()
+fn should_skip_generate(config: &Config, force: bool, strict: bool) -> bool {
+    !force && !strict && is_up_to_date(config)
+}
+
 pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), EngineError> {
-    // 1. Skip if artifacts are newer than Orchfile (unless --force)
-    if !force && is_up_to_date(config) {
+    if should_skip_generate(config, force, strict) {
         if !config.quiet {
             eprintln!("artifacts up to date, skipping generate (use --force to override)");
         }
@@ -720,6 +723,21 @@ mod tests {
         assert!(is_up_to_date(&cfg));
         std::fs::remove_file(&envf).unwrap();
         assert!(!is_up_to_date(&cfg));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_should_skip_generate__strict_never_skips() {
+        let (cfg, root, _guard) = cache_fixture("strictskip", "plist");
+        write_stamp(&cfg, &[]);
+
+        assert!(should_skip_generate(&cfg, false, false));
+        assert!(!should_skip_generate(&cfg, true, false));
+        assert!(
+            !should_skip_generate(&cfg, false, true),
+            "--strict must re-evaluate even on a warm cache, otherwise it reports success for a grove it never verified"
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
