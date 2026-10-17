@@ -87,6 +87,11 @@ impl Platform for LaunchdPlatform {
     fn clean(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
         let dest_dir = install_dir(config);
+        // Only touch this namespace's plists. status and stop both scope
+        // themselves to the prefix, so cleaning every plist here would let
+        // `orchd fell` in one grove tear down a sibling grove sharing the
+        // same units_dir.
+        let ns_prefix = format!("{}.", config.namespace);
 
         // bootout + remove each installed plist
         if let Ok(entries) = std::fs::read_dir(&units_dir) {
@@ -96,7 +101,11 @@ impl Platform for LaunchdPlatform {
                     continue;
                 }
                 if let Some(name) = path.file_name() {
-                    let dest = dest_dir.join(name);
+                    let name = name.to_string_lossy();
+                    if !name.starts_with(&ns_prefix) {
+                        continue;
+                    }
+                    let dest = dest_dir.join(name.as_ref());
                     if dest.exists() {
                         let dom = if config.scope.is_user() {
                             format!("gui/{}", current_uid())
@@ -112,7 +121,9 @@ impl Platform for LaunchdPlatform {
             }
         }
 
-        let _ = std::fs::remove_dir_all(&units_dir);
+        // Leave the directory in place: it may hold another namespace's plists
+        // and the generate-cache stamp.
+        let _ = std::fs::create_dir_all(&units_dir);
         Ok(())
     }
 }

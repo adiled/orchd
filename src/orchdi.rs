@@ -87,8 +87,18 @@ pub fn run(spec_path: &Path) -> i32 {
 
     loop {
         if TERM.load(Ordering::SeqCst) {
-            teardown(&spec, &mut child, pgid);
-            return 0;
+            return if teardown(&spec, &mut child, pgid) {
+                0
+            } else {
+                // The service ignored the stop command and the grace period, so
+                // teardown had to SIGKILL it. Reporting 0 here would tell
+                // launchd/systemd this was a clean stop.
+                eprintln!(
+                    "supervise[{}]: did not exit within {}s; killed",
+                    spec.label, spec.stop_timeout_secs
+                );
+                1
+            };
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -112,7 +122,9 @@ pub fn run(spec_path: &Path) -> i32 {
     }
 }
 
-fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
+/// Run the stop path. Returns true if the child exited on its own within the
+/// grace period, false if it had to be SIGKILLed.
+fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) -> bool {
     match &spec.stop {
         Some(stop) => {
             run_cmd(stop);
@@ -123,6 +135,7 @@ fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
     }
 
     let deadline = Instant::now() + Duration::from_secs(spec.stop_timeout_secs.max(1) as u64);
+    let mut graceful = true;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -130,6 +143,7 @@ fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
                 if Instant::now() >= deadline {
                     unsafe { libc::killpg(pgid, libc::SIGKILL) };
                     let _ = child.wait();
+                    graceful = false;
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -139,6 +153,7 @@ fn teardown(spec: &SuperviseSpec, child: &mut Child, pgid: i32) {
     }
 
     run_optional(&spec.post_stop);
+    graceful
 }
 
 fn run_optional(cmd: &Option<String>) {

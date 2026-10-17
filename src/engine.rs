@@ -554,10 +554,25 @@ mod tests {
 
     // --- generate cache (is_up_to_date / stamp) ---
 
+    /// ORCH_ARG_* overrides are process-global, and the cache hash reads them.
+    /// Tests that mutate the env and tests that compute a hash must not
+    /// overlap, so both take this lock.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Build an isolated config + a fake generated artifact, then exercise the
     /// cache. `artifact` is the file that lands in units_dir (".plist" on
-    /// launchd, ".service" on systemd).
-    fn cache_fixture(name: &str, artifact: &str) -> (Config, std::path::PathBuf) {
+    /// launchd, ".service" on systemd). The returned guard holds ENV_LOCK for
+    /// the duration of the test.
+    #[allow(clippy::type_complexity)]
+    fn cache_fixture(
+        name: &str,
+        artifact: &str,
+    ) -> (
+        Config,
+        std::path::PathBuf,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("orchd-cache-{}", name));
         let _ = std::fs::remove_dir_all(&root);
         let proj = root.join("proj");
@@ -583,14 +598,14 @@ mod tests {
         };
         std::fs::create_dir_all(cfg.units_dir()).unwrap();
         std::fs::write(cfg.units_dir().join(format!("orch.web.{}", artifact)), "x").unwrap();
-        (cfg, root)
+        (cfg, root, guard)
     }
 
     /// The old check only looked for .service/.target, so on launchd (which
     /// writes .plist) it always reported stale and every `grow` regenerated.
     #[test]
     fn test_is_up_to_date__launchd_plist_counts_as_generated() {
-        let (cfg, root) = cache_fixture("plist", "plist");
+        let (cfg, root, _guard) = cache_fixture("plist", "plist");
         write_stamp(&cfg, &[]);
         assert!(
             is_up_to_date(&cfg),
@@ -601,14 +616,14 @@ mod tests {
 
     #[test]
     fn test_is_up_to_date__no_stamp_means_regenerate() {
-        let (cfg, root) = cache_fixture("nostamp", "plist");
+        let (cfg, root, _guard) = cache_fixture("nostamp", "plist");
         assert!(!is_up_to_date(&cfg), "no stamp file means not up to date");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn test_is_up_to_date__missing_artifacts_means_regenerate() {
-        let (cfg, root) = cache_fixture("noart", "plist");
+        let (cfg, root, _guard) = cache_fixture("noart", "plist");
         write_stamp(&cfg, &[]);
         std::fs::remove_file(cfg.units_dir().join("orch.web.plist")).unwrap();
         assert!(!is_up_to_date(&cfg));
@@ -617,7 +632,7 @@ mod tests {
 
     #[test]
     fn test_is_up_to_date__changed_orchfile_invalidates() {
-        let (cfg, root) = cache_fixture("edit", "plist");
+        let (cfg, root, _guard) = cache_fixture("edit", "plist");
         write_stamp(&cfg, &[]);
         assert!(is_up_to_date(&cfg));
         std::thread::sleep(std::time::Duration::from_millis(1100));
@@ -630,7 +645,7 @@ mod tests {
     /// runtime reused stale units.
     #[test]
     fn test_is_up_to_date__changed_runtime_invalidates() {
-        let (mut cfg, root) = cache_fixture("runtime", "plist");
+        let (mut cfg, root, _guard) = cache_fixture("runtime", "plist");
         write_stamp(&cfg, &[]);
         assert!(is_up_to_date(&cfg));
         cfg.runtime = "apple".to_string();
@@ -640,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_is_up_to_date__changed_arg_invalidates() {
-        let (mut cfg, root) = cache_fixture("arg", "plist");
+        let (mut cfg, root, _guard) = cache_fixture("arg", "plist");
         write_stamp(&cfg, &[]);
         assert!(is_up_to_date(&cfg));
         cfg.args.push("port=9999".to_string());
@@ -650,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_is_up_to_date__changed_namespace_invalidates() {
-        let (mut cfg, root) = cache_fixture("ns", "plist");
+        let (mut cfg, root, _guard) = cache_fixture("ns", "plist");
         write_stamp(&cfg, &[]);
         assert!(is_up_to_date(&cfg));
         cfg.namespace = "staging".to_string();
@@ -662,7 +677,7 @@ mod tests {
     /// real generate-time input (see the ENV_FILE fix).
     #[test]
     fn test_is_up_to_date__changed_env_file_invalidates() {
-        let (cfg, root) = cache_fixture("envfile", "plist");
+        let (cfg, root, _guard) = cache_fixture("envfile", "plist");
         let envf = cfg.project_dir.join("app.env");
         std::fs::write(&envf, "A=1\n").unwrap();
         write_stamp(&cfg, &[envf.clone()]);
@@ -679,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_is_up_to_date__deleted_env_file_invalidates() {
-        let (cfg, root) = cache_fixture("envgone", "plist");
+        let (cfg, root, _guard) = cache_fixture("envgone", "plist");
         let envf = cfg.project_dir.join("app.env");
         std::fs::write(&envf, "A=1\n").unwrap();
         write_stamp(&cfg, &[envf.clone()]);
@@ -691,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_is_up_to_date__changed_overlay_invalidates() {
-        let (mut cfg, root) = cache_fixture("overlay", "service");
+        let (mut cfg, root, _guard) = cache_fixture("overlay", "service");
         let ov = cfg.project_dir.join("staging.orch");
         std::fs::write(&ov, "# overlay\n").unwrap();
         cfg.overlays = vec![ov.clone()];
@@ -707,6 +722,7 @@ mod tests {
 
     #[test]
     fn test_env_arg_overrides__reads_prefixed_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("ORCH_ARG_prometheus_port", "9999");
             std::env::set_var("ORCH_ARG_", "ignored-no-name");
@@ -751,6 +767,7 @@ mod tests {
             quiet: true,
         };
         cfg.quiet = true;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Default.
         let parsed = parse_orchfile(&cfg).unwrap();
@@ -775,6 +792,145 @@ mod tests {
         );
         unsafe { std::env::remove_var("ORCH_ARG_port") };
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // --- fell / clean namespace scoping ---
+
+    /// `fell` must only remove the units of the namespace it was invoked for.
+    /// status and stop both scope themselves to the namespace prefix; clean
+    /// used to iterate every file in units_dir, so `orchd fell` in one grove
+    /// tore down a sibling grove sharing the same state dir.
+    #[test]
+    fn test_clean__scopes_to_namespace_prefix() {
+        use crate::platform::Platform;
+        use crate::platform::launchd::LaunchdPlatform;
+
+        let root = std::env::temp_dir().join("orchd-clean-ns");
+        let _ = std::fs::remove_dir_all(&root);
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &root) };
+
+        let units = root.join(".orch/units");
+        std::fs::create_dir_all(&units).unwrap();
+        // clean() removes the *installed* copy in the platform dir, so put one
+        // there too and assert on what actually gets unlinked.
+        let agents = root.join("Library/LaunchAgents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(units.join("orch.web.plist"), "mine").unwrap();
+        std::fs::write(units.join("staging.api.plist"), "theirs").unwrap();
+        std::fs::write(units.join("notes.txt"), "unrelated").unwrap();
+        std::fs::write(agents.join("orch.web.plist"), "mine").unwrap();
+        std::fs::write(agents.join("staging.api.plist"), "theirs").unwrap();
+
+        let cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "launchd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+
+        LaunchdPlatform::new().clean(&cfg).unwrap();
+
+        assert!(
+            !agents.join("orch.web.plist").exists(),
+            "own namespace should be unlinked from LaunchAgents"
+        );
+        assert!(
+            agents.join("staging.api.plist").exists(),
+            "a sibling namespace must survive fell"
+        );
+        assert!(
+            units.join("notes.txt").exists(),
+            "unrelated files must survive fell"
+        );
+        assert!(units.exists(), "units_dir itself must survive");
+
+        match prev_home {
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The systemd grove handle is `<ns>.target`, not `<ns>-<svc>.service`, so
+    /// a prefix check on the hyphen form alone would strand it.
+    #[test]
+    fn test_clean__systemd_target_is_scoped_too() {
+        use crate::platform::Platform;
+        use crate::platform::systemd::SystemdPlatform;
+
+        let root = std::env::temp_dir().join("orchd-clean-ns-systemd");
+        let _ = std::fs::remove_dir_all(&root);
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &root.join("xdg")) };
+
+        let units = root.join(".orch/units");
+        std::fs::create_dir_all(&units).unwrap();
+        let sysd = root.join("xdg/systemd/user");
+        std::fs::create_dir_all(&sysd).unwrap();
+        for n in [
+            "orch-web.service",
+            "orch.target",
+            "staging-web.service",
+            "staging.target",
+        ] {
+            std::fs::write(units.join(n), "x").unwrap();
+        }
+        for n in [
+            "orch-web.service",
+            "orch.target",
+            "staging-web.service",
+            "staging.target",
+        ] {
+            std::fs::write(sysd.join(n), "installed").unwrap();
+        }
+
+        let cfg = Config {
+            orchfile: root.join("Orchfile"),
+            overlays: vec![],
+            runtime: "bare".to_string(),
+            platform: "systemd".to_string(),
+            scope: crate::config::Scope::User,
+            state_dir: root.join(".orch"),
+            project_dir: root.clone(),
+            data_dir: root.join(".orch/data"),
+            namespace: "orch".to_string(),
+            args: vec![],
+            verbose: false,
+            quiet: true,
+        };
+
+        SystemdPlatform::new().clean(&cfg).unwrap();
+
+        assert!(
+            !sysd.join("orch-web.service").exists(),
+            "own unit should be unlinked"
+        );
+        assert!(
+            !sysd.join("orch.target").exists(),
+            "the grove target must be removed with its namespace"
+        );
+        assert!(
+            sysd.join("staging-web.service").exists(),
+            "a sibling namespace's unit must survive"
+        );
+        assert!(sysd.join("staging.target").exists());
+
+        match prev_xdg {
+            Some(h) => unsafe { std::env::set_var("XDG_CONFIG_HOME", h) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
