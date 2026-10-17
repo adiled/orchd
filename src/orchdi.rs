@@ -282,6 +282,20 @@ pub fn parse_duration_secs(s: &str) -> Option<u32> {
     }
 }
 
+pub fn parse_memory_bytes(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (digits, mult) = match s.as_bytes().last()? {
+        b'K' => (&s[..s.len() - 1], 1024u64),
+        b'M' => (&s[..s.len() - 1], 1024 * 1024),
+        b'G' => (&s[..s.len() - 1], 1024 * 1024 * 1024),
+        _ => return None,
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()?.checked_mul(mult)
+}
+
 pub fn build_supervise_spec(
     service: &Service,
     exec_set: &ExecSet,
@@ -434,6 +448,31 @@ mod tests {
             resources: ResourceLimits::default(),
             logging: LogConfig::default(),
         }
+    }
+
+    #[test]
+    fn test_parse_memory_bytes__grammar() {
+        assert_eq!(parse_memory_bytes("2K"), Some(2 * 1024));
+        assert_eq!(parse_memory_bytes("512M"), Some(512 * 1024 * 1024));
+        assert_eq!(parse_memory_bytes("4G"), Some(4 * 1024 * 1024 * 1024));
+        assert_eq!(parse_memory_bytes(" 1G "), Some(1024 * 1024 * 1024));
+        assert_eq!(parse_memory_bytes("0K"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_memory_bytes__rejects_non_grammar() {
+        assert_eq!(parse_memory_bytes("4"), None, "suffix is required");
+        assert_eq!(parse_memory_bytes("4GB"), None, "only K/M/G");
+        assert_eq!(parse_memory_bytes("4g"), None, "uppercase only");
+        assert_eq!(parse_memory_bytes("1.5G"), None, "integer only");
+        assert_eq!(parse_memory_bytes("G"), None, "digits required");
+        assert_eq!(parse_memory_bytes("4X"), None);
+        assert_eq!(parse_memory_bytes(""), None);
+    }
+
+    #[test]
+    fn test_parse_memory_bytes__rejects_overflow() {
+        assert_eq!(parse_memory_bytes("99999999999999G"), None);
     }
 
     #[test]

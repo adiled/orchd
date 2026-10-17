@@ -307,9 +307,6 @@ fn unsupported_directives(platform: &str, svc: &crate::types::Service) -> Vec<&'
     }
     let mut out = Vec::new();
     let r = &svc.resources;
-    if r.memory.is_some() {
-        out.push("MEMORY");
-    }
     if r.cpus.is_some() {
         out.push("CPUS");
     }
@@ -350,6 +347,16 @@ fn lint_service(platform: &str, svc: &crate::types::Service) {
             "warning: service '{}': RELOAD is not implemented yet; ignoring",
             svc.name
         );
+    }
+
+    if let Some(mem) = &svc.resources.memory {
+        if crate::orchdi::parse_memory_bytes(mem).is_none() {
+            eprintln!(
+                "warning: service '{}': MEMORY '{}' is not a valid size \
+                 (grammar: integer followed by K, M or G)",
+                svc.name, mem
+            );
+        }
     }
 
     let durations: [(&str, Option<&String>); 5] = [
@@ -1039,7 +1046,6 @@ mod tests {
     #[test]
     fn test_unsupported_directives__launchd_reports_what_it_cannot_map() {
         let mut svc = simple_service();
-        svc.resources.memory = Some("1G".into());
         svc.resources.cpus = Some(2.0);
         svc.resources.cpu_quota = Some("150%".into());
         svc.resources.tasks_max = Some(100u64);
@@ -1052,7 +1058,6 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                "MEMORY",
                 "CPUS",
                 "CPU_QUOTA",
                 "TASKS_MAX",
@@ -1071,6 +1076,16 @@ mod tests {
         svc.resources.limit_nofile = Some(1024u64);
         svc.resources.limit_nproc = Some(64u64);
         assert!(unsupported_directives("launchd", &svc).is_empty());
+    }
+
+    #[test]
+    fn test_unsupported_directives__memory_is_not_reported() {
+        let mut svc = simple_service();
+        svc.resources.memory = Some("1G".into());
+        assert!(
+            !unsupported_directives("launchd", &svc).contains(&"MEMORY"),
+            "MEMORY maps to SoftResourceLimits.ResidentSetSize on launchd"
+        );
     }
 
     #[test]
