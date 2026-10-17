@@ -27,9 +27,7 @@ pub fn generate_service_unit(
         writeln!(unit, "BindsTo={}", binds_to_deps.join(" ")).unwrap();
     }
 
-    // Start limiting is a [Unit] directive. systemd rejects (and silently
-    // ignores) these keys in [Service], so a RESTART burst limit written
-    // here would leave the unit crash-looping forever.
+    // systemd ignores StartLimit* in [Service]; these are [Unit] keys.
     if let Some(burst) = service.restart.start_limit_burst {
         writeln!(unit, "StartLimitBurst={}", burst).unwrap();
     }
@@ -763,9 +761,6 @@ mod tests {
 
     // --- systemd value/path escaping ----------------------------------------
 
-    /// systemd.exec(5): Environment= performs specifier expansion, and quoting
-    /// follows systemd.syntax(7). An unescaped `"` breaks the unit outright; an
-    /// unescaped `%` silently substitutes a specifier into the value.
     #[test]
     fn test_escape_systemd__escapes_quotes_backslash_and_percent() {
         assert_eq!(escape_systemd("plain"), "plain");
@@ -807,7 +802,6 @@ mod tests {
         );
     }
 
-    /// A project path containing a space used to split the directive into two.
     #[test]
     fn test_generate_service_unit__paths_are_quoted() {
         let config = test_config();

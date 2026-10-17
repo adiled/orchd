@@ -84,9 +84,8 @@ pub fn generate_service_plist_with_deps(
         writeln!(p, "  <string>{}</string>", xml_escape(&resolved)).unwrap();
     }
 
-    // ENV_FILE is a common (non-C2/C3) directive, so host services on launchd are
-    // entitled to it. launchd has no EnvironmentFile= key, so read the files now
-    // and inline them; explicit ENV entries win, as they do under systemd.
+    // launchd has no EnvironmentFile= key, so read the files and inline them.
+    // Explicit ENV entries win, as they do under systemd.
     let mut effective: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
     for env_file in &service.env_files {
@@ -686,9 +685,6 @@ mod tests {
 
     // --- ENV_FILE on launchd -------------------------------------------------
 
-    /// ENV_FILE is a common directive, so a host service on launchd must get it.
-    /// launchd has no EnvironmentFile= key, so the values are read at generate
-    /// time and inlined. This previously dropped the file entirely.
     #[test]
     fn test_generate_service_plist__env_file_is_inlined() {
         let cfg = test_config();
@@ -720,7 +716,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Explicit ENV must win over ENV_FILE, as it does under systemd.
     #[test]
     fn test_generate_service_plist__env_overrides_env_file() {
         let cfg = test_config();
@@ -742,7 +737,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Later env files win over earlier ones, matching systemd precedence.
     #[test]
     fn test_generate_service_plist__later_env_file_wins() {
         let cfg = test_config();
@@ -765,7 +759,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// A relative ENV_FILE resolves against the project dir, as on systemd.
     #[test]
     fn test_generate_service_plist__relative_env_file_resolves_against_project_dir() {
         let proj = std::env::temp_dir().join("orchd-test-projdir-envfile");

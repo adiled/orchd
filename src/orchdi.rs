@@ -216,9 +216,7 @@ pub fn healthcheck_to_cmd(hc: &str) -> String {
 
 /// Parse a dotenv-style env file into ordered key/value pairs.
 ///
-/// launchd has no `EnvironmentFile=` equivalent, so ENV_FILE values must be
-/// read at generate time and inlined into the plist. Later files win over
-/// earlier ones, matching systemd's left-to-right precedence.
+/// Later files win over earlier, matching systemd's left-to-right precedence.
 pub fn parse_env_file(path: &std::path::Path) -> Result<Vec<(String, String)>, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read env file '{}': {}", path.display(), e))?;

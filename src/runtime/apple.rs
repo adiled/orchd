@@ -268,12 +268,9 @@ impl AppleRuntime {
 
     /// Resolve a VOLUME source for the container CLI.
     ///
-    /// The spec marks a source as a host path (not a named volume) when it
-    /// starts with `/`, `./` or `../`; everything else is a named volume and is
-    /// passed through untouched. A relative host path is anchored to the
-    /// project dir, matching how WORKDIR, ENV_FILE, STDOUT and STDERR are
-    /// resolved. Without this the path was handed to the CLI verbatim and
-    /// resolved against whatever cwd the init system gave the process.
+    /// A source starting with `/`, `./` or `../` is a host path; anything else
+    /// is a named volume and passes through. Relative host paths anchor to the
+    /// project dir, as WORKDIR, ENV_FILE, STDOUT and STDERR already do.
     fn volume_source(&self, vol: &crate::types::VolumeMount) -> String {
         if vol.is_named || PathBuf::from(&vol.source).is_absolute() {
             vol.source.clone()
@@ -516,9 +513,6 @@ mod tests {
         }
     }
 
-    /// The spec treats /, ./ and ../ sources as host paths. A relative one is
-    /// anchored to the project dir; otherwise it resolved against whatever cwd
-    /// the init system happened to hand the process.
     #[test]
     fn test_volume_source__relative_host_path_anchors_to_project_dir() {
         let rt = runtime(AppleMode::ContainerCli, None);
@@ -535,7 +529,6 @@ mod tests {
         );
     }
 
-    /// A named volume is a runtime-managed name, never a filesystem path.
     #[test]
     fn test_volume_source__named_volume_untouched() {
         let rt = runtime(AppleMode::ContainerCli, None);

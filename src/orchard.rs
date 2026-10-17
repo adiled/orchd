@@ -87,10 +87,8 @@ fn read_stdin() -> Result<String, OrchardError> {
 /// service: the service plus the ExecSet for `config.runtime`. Pure: no image
 /// pulls, no I/O beyond stdio.
 ///
-/// A service whose ExecSet cannot be produced is a hard error, not a skip. This
-/// is a pipe stage: silently dropping a service here hands `plant`/`tend` a
-/// smaller grove than the spec declared, and they would install and start that
-/// incomplete set without complaint.
+/// A service whose ExecSet cannot be produced is a hard error: this is a pipe
+/// stage, and a skip would hand `plant`/`tend` a grove smaller than the spec.
 pub fn sow(config: &Config) -> Result<(), OrchardError> {
     let input = read_stdin()?;
     let spec: OrchFile = serde_json::from_str(&input)?;
