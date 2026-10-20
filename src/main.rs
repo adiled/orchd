@@ -15,9 +15,12 @@ use config::Config;
 fn main() {
     let cli = Cli::parse();
 
-    // `supervise` is a leaf process (launchd execs it); it doesn't need the
-    // full engine config and must run before Config::load to stay lightweight.
-    if let Commands::Supervise { spec } = &cli.command {
+    if let Commands::Tend {
+        service: _,
+        spec: Some(spec),
+        ..
+    } = &cli.command
+    {
         std::process::exit(orchdi::run(spec));
     }
 
@@ -39,8 +42,21 @@ fn main() {
         } => engine::logs(&config, service, *follow, *lines).map_err(boxed),
         Commands::Sow {} => orchard::sow(&config).map_err(boxed_orchard),
         Commands::Plant {} => orchard::plant(&config).map_err(boxed_orchard),
-        Commands::Tend { no_start } => orchard::tend(&config, !*no_start).map_err(boxed_orchard),
-        Commands::Supervise { .. } => unreachable!("handled above"),
+        Commands::Tend {
+            service,
+            spec,
+            no_start,
+        } => {
+            let path = match (service, spec) {
+                (Some(svc), _) => Some(resolve_supervise_spec(&config, svc)),
+                (None, Some(p)) => Some(p.clone()),
+                (None, None) => None,
+            };
+            match path {
+                Some(p) => std::process::exit(orchdi::run(&p)),
+                None => orchard::tend(&config, !*no_start).map_err(boxed_orchard),
+            }
+        }
     };
 
     if let Err(e) = result {
@@ -55,4 +71,9 @@ fn boxed(e: engine::EngineError) -> Box<dyn std::error::Error> {
 
 fn boxed_orchard(e: orchard::OrchardError) -> Box<dyn std::error::Error> {
     Box::new(e)
+}
+
+fn resolve_supervise_spec(config: &Config, service: &str) -> std::path::PathBuf {
+    let label = crate::orchdi::service_label(config, service);
+    std::path::PathBuf::from(crate::orchdi::supervise_spec_path(config, &label))
 }

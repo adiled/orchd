@@ -118,17 +118,19 @@ pub enum Commands {
     Plant {},
 
     /// Row: beds (stdin) -> running. Write, install, and start.
+    /// With a service, supervise that one service for its lifetime instead.
     Tend {
-        /// Write and install but do not start.
-        #[arg(long)]
-        no_start: bool,
-    },
+        #[arg(help = "Service to supervise for its lifetime (the tree keeper)")]
+        service: Option<String>,
 
-    /// Supervise a single service from a spec file (invoked by launchd; internal).
-    #[command(hide = true)]
-    Supervise {
-        /// Path to the SuperviseSpec JSON.
-        #[arg(long)]
-        spec: PathBuf,
+        #[arg(
+            long,
+            conflicts_with = "service",
+            help = "Supervise from an explicit spec file. Used by launchd and orchdi, which know the path because plant baked it."
+        )]
+        spec: Option<PathBuf>,
+
+        #[arg(long, help = "Write and install but do not start.")]
+        no_start: bool,
     },
 }

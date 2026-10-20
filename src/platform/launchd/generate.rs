@@ -41,7 +41,7 @@ pub fn generate_service_plist_with_deps(
     if needs_supervisor {
         let spec_path = supervise_spec_path(config, &label);
         writeln!(p, "    <string>{}</string>", xml_escape(&orchd_exe())).unwrap();
-        writeln!(p, "    <string>supervise</string>").unwrap();
+        writeln!(p, "    <string>tend</string>").unwrap();
         writeln!(p, "    <string>--spec</string>").unwrap();
         writeln!(p, "    <string>{}</string>", xml_escape(&spec_path)).unwrap();
     } else {
@@ -524,7 +524,7 @@ mod tests {
         };
         let p = generate_service_plist(&svc, &exec, &cfg);
 
-        assert!(p.contains("<string>supervise</string>"));
+        assert!(p.contains("<string>tend</string>"));
         assert!(p.contains("<string>--spec</string>"));
         assert!(p.contains("orch.postgres.json"));
         assert!(!p.contains("__orch_down"));
@@ -638,7 +638,7 @@ mod tests {
         ];
         let p = generate_service_plist_with_deps(&svc, &exec, &cfg, &deps);
 
-        assert!(p.contains("<string>supervise</string>"));
+        assert!(p.contains("<string>tend</string>"));
         assert!(p.contains("orch.app.json"));
         assert!(!p.contains("__orch_wait")); // no inline bash poll loop anymore
     }

@@ -3,6 +3,8 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -28,6 +30,10 @@ pub struct SuperviseSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_marker: Option<String>,
     pub stop_timeout_secs: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
 }
 
 static TERM: AtomicBool = AtomicBool::new(false);
@@ -76,7 +82,7 @@ pub fn run(spec_path: &Path) -> i32 {
     }
 
     install_signal_handlers();
-    let mut child = match spawn_in_group(&spec.start) {
+    let mut child = match spawn_in_group(&spec.start, &spec) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("supervise[{}]: failed to start: {e}", spec.label);
@@ -157,10 +163,18 @@ fn run_optional(cmd: &Option<String>) {
     }
 }
 
-fn spawn_in_group(cmd: &str) -> std::io::Result<Child> {
+fn spawn_in_group(cmd: &str, spec: &SuperviseSpec) -> std::io::Result<Child> {
     use std::os::unix::process::CommandExt;
     let mut c = Command::new("/bin/sh");
     c.arg("-c").arg(cmd);
+    if let Some(env) = &spec.env {
+        for (k, v) in env {
+            c.env(k, v);
+        }
+    }
+    if let Some(dir) = &spec.workdir {
+        c.current_dir(dir);
+    }
     unsafe {
         c.pre_exec(|| {
             if libc::setpgid(0, 0) != 0 {
@@ -282,6 +296,14 @@ pub fn parse_duration_secs(s: &str) -> Option<u32> {
     }
 }
 
+pub fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
+    if std::path::Path::new(path).is_absolute() {
+        path.to_string()
+    } else {
+        project_dir.join(path).display().to_string()
+    }
+}
+
 pub fn parse_memory_bytes(s: &str) -> Option<u64> {
     let s = s.trim();
     let (digits, mult) = match s.as_bytes().last()? {
@@ -319,6 +341,15 @@ pub fn build_supervise_spec(
     } else {
         None
     };
+    let env = if service.env.is_empty() {
+        None
+    } else {
+        Some(service.env.clone())
+    };
+    let workdir = service
+        .workdir
+        .as_deref()
+        .map(|w| resolve_path(w, &config.project_dir));
     SuperviseSpec {
         label: service_label(config, &service.name),
         pre_start: exec_set.pre_start.clone(),
@@ -326,6 +357,8 @@ pub fn build_supervise_spec(
         stop: exec_set.stop.clone(),
         post_stop: exec_set.post_stop.clone(),
         ready_marker,
+        env,
+        workdir,
         deps: deps
             .iter()
             .map(|d| DepSpec {
@@ -400,7 +433,7 @@ mod tests {
     use super::*;
     use crate::config::Scope;
     use crate::types::*;
-    use std::collections::HashMap;
+
     use std::path::PathBuf;
 
     fn test_config() -> Config {
@@ -476,8 +509,53 @@ mod tests {
     }
 
     #[test]
+    fn test_build_supervise_spec__carries_env_and_workdir() {
+        let cfg = test_config();
+        let mut svc = simple_host_service("arbiter", "/bin/echo up");
+        svc.env.insert("MODELS".into(), "glm53server".into());
+        svc.workdir = Some("probe".into());
+        let exec = ExecSet {
+            start: "/bin/echo up".into(),
+            pre_start: None,
+            stop: None,
+            post_stop: None,
+        };
+
+        let spec = build_supervise_spec(&svc, &exec, &cfg, &[]);
+
+        assert_eq!(
+            spec.env.as_ref().unwrap().get("MODELS").map(String::as_str),
+            Some("glm53server")
+        );
+        assert_eq!(
+            spec.workdir.as_deref(),
+            Some("/test/project/probe"),
+            "workdir must be resolved against the project dir"
+        );
+    }
+
+    #[test]
+    fn test_build_supervise_spec__no_env_no_workdir_is_none() {
+        let cfg = test_config();
+        let svc = simple_host_service("arbiter", "/bin/echo up");
+        let exec = ExecSet {
+            start: "/bin/echo up".into(),
+            pre_start: None,
+            stop: None,
+            post_stop: None,
+        };
+
+        let spec = build_supervise_spec(&svc, &exec, &cfg, &[]);
+
+        assert!(spec.env.is_none());
+        assert!(spec.workdir.is_none());
+    }
+
+    #[test]
     fn test_spec_roundtrip() {
         let spec = SuperviseSpec {
+            env: None,
+            workdir: None,
             label: "orch.pg".into(),
             pre_start: Some("echo pull".into()),
             start: "sleep 1".into(),
