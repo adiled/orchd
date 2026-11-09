@@ -2,9 +2,9 @@
 #
 # Cross-platform: everywhere it builds orchd and its bare rootstock
 # (orchd-rootstock-bare); on macOS it also builds the Apple container runtimes
-# (orchd-apple, orchd-osx) and fetches the kernel. Requires rust (cargo) and
-# zig 0.17.1; macOS also needs zstd/curl for the kernel. Install just with
-# `brew install just`.
+# (orchd-apple, orchd-osx) and fetches the kernel. Requires zig 0.17.1, and orch
+# on PATH to bundle the parser; macOS also needs zstd/curl for the kernel.
+# Install just with `brew install just`.
 
 set shell := ["bash", "-uc"]
 
@@ -12,6 +12,7 @@ prefix   := env_var_or_default("PREFIX", "/usr/local")
 kernel   := env_var_or_default("HOME", "") / ".orch/osx/kernel/vmlinux"
 kata_ver := "3.31.0"
 opt      := "ReleaseSafe"
+target   := if os() == "linux" { "-Dtarget=" + arch() + "-linux-musl" } else { "" }
 
 # List recipes.
 default:
@@ -26,10 +27,10 @@ build:
     if [ "{{os()}}" = "macos" ]; then just build-apple && just build-osx; fi
 
 build-orchd:
-    cargo build --release
+    zig build -Doptimize={{opt}} {{target}}
 
 build-bare:
-    cd orchd-rootstock-bare && zig build -Doptimize={{opt}}
+    cd orchd-rootstock-bare && zig build -Doptimize={{opt}} {{target}}
 
 [macos]
 build-apple:
@@ -63,7 +64,7 @@ dist: build
     set -euo pipefail
     root="$PWD"
     rm -rf dist && mkdir -p dist/bin
-    cp target/release/orchd dist/bin/
+    cp zig-out/bin/orchd dist/bin/
     cp orchd-rootstock-bare/zig-out/bin/orchd-rootstock-bare dist/bin/
     if [ "{{os()}}" = "macos" ]; then
         cp orchd-apple/zig-out/bin/orchd-apple  dist/bin/
@@ -87,7 +88,7 @@ install: dist
 test:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo test
+    zig build test
     (cd orchd-rootstock-bare && zig build test)
     if [ "{{os()}}" = "macos" ]; then
         (cd orchd-apple && zig build test)
@@ -95,5 +96,4 @@ test:
     fi
 
 clean:
-    cargo clean
-    rm -rf dist orchd-rootstock-bare/zig-out orchd-apple/zig-out orchd-osx/zig-out
+    rm -rf dist zig-out orchd-rootstock-bare/zig-out orchd-apple/zig-out orchd-osx/zig-out

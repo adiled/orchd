@@ -6,6 +6,7 @@ const types = @import("../types.zig");
 const Config = @import("../config.zig").Config;
 const supervise = @import("../supervise.zig");
 const exe = @import("../exe.zig");
+const bed = @import("../bed.zig");
 const Service = types.Service;
 const ExecSet = types.ExecSet;
 const Diagnostic = types.Diagnostic;
@@ -167,33 +168,51 @@ pub fn systemdDir(arena: Allocator, config: Config) ![]const u8 {
     };
 }
 
-fn writeFileWith(arena: Allocator, io: Io, path: []const u8, comptime render: anytype, args: anytype) !void {
-    var out: Io.Writer.Allocating = .init(arena);
-    try @call(.auto, render, .{ arena, &out.writer } ++ args);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.written() });
+pub fn beds(arena: Allocator, config: Config, all: []const Service, planted: []const types.Planted) ![]const bed.Bed {
+    const units = try config.unitsDir(arena);
+    const gates = try gatesNeeded(arena, all);
+    var out: std.ArrayList(bed.Bed) = .empty;
+    for (planted) |p| {
+        const unit = try config.unitName(arena, p.service.name);
+        var artifacts: std.ArrayList(bed.Artifact) = .empty;
+        try artifacts.append(arena, .{
+            .kind = "unit",
+            .path = try std.fs.path.join(arena, &.{ units, unit }),
+            .content = try bed.render(arena, writeUnitTo, .{ arena, config, p.service, p.set, gates }),
+        });
+        if (gates.contains(p.service.name)) try artifacts.append(arena, .{
+            .kind = "ready-gate",
+            .path = try std.fs.path.join(arena, &.{ units, try gateName(arena, config, p.service.name) }),
+            .content = try bed.render(arena, writeReadyGateTo, .{ arena, config, p.service }),
+        });
+        try out.append(arena, .{ .label = unit, .name = p.service.name, .artifacts = artifacts.items });
+    }
+    const target = try config.targetName(arena);
+    try out.append(arena, .{
+        .label = target,
+        .artifacts = try arena.dupe(bed.Artifact, &.{.{
+            .kind = "target",
+            .path = try std.fs.path.join(arena, &.{ units, target }),
+            .content = try bed.render(arena, writeTargetTo, .{ arena, config, planted }),
+        }}),
+    });
+    return out.items;
+}
+
+fn writeUnitTo(w: *Io.Writer, arena: Allocator, config: Config, service: Service, set: ExecSet, gates: Gates) !void {
+    return writeUnit(arena, w, config, service, set, gates);
+}
+
+fn writeReadyGateTo(w: *Io.Writer, arena: Allocator, config: Config, service: Service) !void {
+    return writeReadyGate(arena, w, config, service);
+}
+
+fn writeTargetTo(w: *Io.Writer, arena: Allocator, config: Config, planted: []const types.Planted) !void {
+    return writeTarget(arena, w, config, planted);
 }
 
 pub fn generate(arena: Allocator, io: Io, config: Config, all: []const Service, planted: []const types.Planted) ![]const []const u8 {
-    const units = try config.unitsDir(arena);
-    try Io.Dir.cwd().createDirPath(io, units);
-    const gates = try gatesNeeded(arena, all);
-    var written: std.ArrayList([]const u8) = .empty;
-
-    for (planted) |p| {
-        const path = try std.fs.path.join(arena, &.{ units, try config.unitName(arena, p.service.name) });
-        try writeFileWith(arena, io, path, writeUnit, .{ config, p.service, p.set, gates });
-        try written.append(arena, path);
-    }
-    for (all) |s| {
-        if (!gates.contains(s.name)) continue;
-        const path = try std.fs.path.join(arena, &.{ units, try gateName(arena, config, s.name) });
-        try writeFileWith(arena, io, path, writeReadyGate, .{ config, s });
-        try written.append(arena, path);
-    }
-    const target = try std.fs.path.join(arena, &.{ units, try config.targetName(arena) });
-    try writeFileWith(arena, io, target, writeTarget, .{ config, planted });
-    try written.append(arena, target);
-    return written.items;
+    return bed.plant(arena, io, try beds(arena, config, all, planted));
 }
 
 fn systemctl(arena: Allocator, io: Io, config: Config, args: []const []const u8, diag: *Diagnostic) !void {

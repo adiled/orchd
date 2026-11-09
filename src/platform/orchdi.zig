@@ -7,6 +7,7 @@ const types = @import("../types.zig");
 const Config = @import("../config.zig").Config;
 const supervise = @import("../supervise.zig");
 const exe = @import("../exe.zig");
+const bed = @import("../bed.zig");
 const Diagnostic = types.Diagnostic;
 
 fn statePath(arena: Allocator, config: Config, parts: []const []const u8) ![]const u8 {
@@ -86,16 +87,8 @@ fn labels(arena: Allocator, config: Config, names: []const []const u8) ![]const 
     return out;
 }
 
-pub fn generate(
-    arena: Allocator,
-    io: Io,
-    config: Config,
-    all: []const types.Service,
-    planted: []const types.Planted,
-) ![]const []const u8 {
-    const cwd = Io.Dir.cwd();
-    try cwd.createDirPath(io, try statePath(arena, config, &.{ "supervise", "disabled" }));
-    var written: std.ArrayList([]const u8) = .empty;
+pub fn beds(arena: Allocator, config: Config, all: []const types.Service, planted: []const types.Planted) ![]const bed.Bed {
+    var out: std.ArrayList(bed.Bed) = .empty;
     for (planted) |p| {
         const label = try supervise.serviceLabel(arena, config, p.service.name);
         const deps = try supervise.buildDepGates(arena, config, p.service, all);
@@ -103,14 +96,28 @@ pub fn generate(
         const enabled = try supervise.superviseSpecPath(arena, config, label);
         const disabled = try disabledSpecPath(arena, config, label);
         const path, const other = if (p.service.disabled) .{ disabled, enabled } else .{ enabled, disabled };
-        cwd.deleteFile(io, other) catch {};
-        try cwd.writeFile(io, .{
-            .sub_path = path,
-            .data = try std.json.Stringify.valueAlloc(arena, spec, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }),
+        try out.append(arena, .{
+            .label = label,
+            .name = p.service.name,
+            .artifacts = try arena.dupe(bed.Artifact, &.{.{
+                .kind = "supervise-spec",
+                .path = path,
+                .content = try std.json.Stringify.valueAlloc(arena, spec, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }),
+            }}),
+            .stale = try arena.dupe([]const u8, &.{other}),
         });
-        try written.append(arena, path);
     }
-    return written.items;
+    return out.items;
+}
+
+pub fn generate(
+    arena: Allocator,
+    io: Io,
+    config: Config,
+    all: []const types.Service,
+    planted: []const types.Planted,
+) ![]const []const u8 {
+    return bed.plant(arena, io, try beds(arena, config, all, planted));
 }
 
 pub fn clean(arena: Allocator, io: Io, config: Config) !void {

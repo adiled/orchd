@@ -6,6 +6,7 @@ const types = @import("../types.zig");
 const Config = @import("../config.zig").Config;
 const supervise = @import("../supervise.zig");
 const exe = @import("../exe.zig");
+const bed = @import("../bed.zig");
 const Service = types.Service;
 const ExecSet = types.ExecSet;
 const Diagnostic = types.Diagnostic;
@@ -180,6 +181,47 @@ pub fn plistFor(
     };
 }
 
+pub fn beds(
+    arena: Allocator,
+    io: Io,
+    config: Config,
+    all: []const Service,
+    planted: []const types.Planted,
+    log: *Io.Writer,
+) ![]const bed.Bed {
+    const units = try unitsDir(arena, config);
+    const disabled = try disabledDir(arena, config);
+    const orchd = exe.selfPath(arena, io);
+    var out: std.ArrayList(bed.Bed) = .empty;
+    for (planted) |p| {
+        const deps = try supervise.buildDepGates(arena, config, p.service, all);
+        const plist = try plistFor(arena, io, config, p.service, p.set, deps, orchd, log);
+        var artifacts: std.ArrayList(bed.Artifact) = .empty;
+        if (plist.keeper) |k| {
+            const spec = try supervise.buildSuperviseSpec(arena, config, p.service, p.set, deps);
+            try artifacts.append(arena, .{
+                .kind = "supervise-spec",
+                .path = k.spec,
+                .content = try std.json.Stringify.valueAlloc(arena, spec, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }),
+            });
+        }
+        const name = try plistName(arena, plist.label);
+        const dir, const other = if (p.service.disabled) .{ disabled, units } else .{ units, disabled };
+        try artifacts.append(arena, .{
+            .kind = "plist",
+            .path = try std.fs.path.join(arena, &.{ dir, name }),
+            .content = try bed.render(arena, writePlist, .{plist}),
+        });
+        try out.append(arena, .{
+            .label = plist.label,
+            .name = p.service.name,
+            .artifacts = artifacts.items,
+            .stale = try arena.dupe([]const u8, &.{try std.fs.path.join(arena, &.{ other, name })}),
+        });
+    }
+    return out.items;
+}
+
 pub fn generate(
     arena: Allocator,
     io: Io,
@@ -188,39 +230,11 @@ pub fn generate(
     planted: []const types.Planted,
     log: *Io.Writer,
 ) ![]const []const u8 {
-    const cwd = Io.Dir.cwd();
-    const units = try unitsDir(arena, config);
-    const disabled = try disabledDir(arena, config);
-    try cwd.createDirPath(io, disabled);
-    try cwd.createDirPath(io, try std.fs.path.join(arena, &.{ config.state_dir, "logs" }));
-    const orchd = exe.selfPath(arena, io);
-
-    var written: std.ArrayList([]const u8) = .empty;
-    for (planted) |p| {
-        const deps = try supervise.buildDepGates(arena, config, p.service, all);
-        const plist = try plistFor(arena, io, config, p.service, p.set, deps, orchd, log);
-        if (plist.keeper) |k| {
-            try cwd.createDirPath(io, std.fs.path.dirname(k.spec).?);
-            const spec = try supervise.buildSuperviseSpec(arena, config, p.service, p.set, deps);
-            try cwd.writeFile(io, .{
-                .sub_path = k.spec,
-                .data = try std.json.Stringify.valueAlloc(arena, spec, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }),
-            });
-            try written.append(arena, k.spec);
-        }
-        var out: Io.Writer.Allocating = .init(arena);
-        try writePlist(&out.writer, plist);
-        const name = try plistName(arena, plist.label);
-        const dir, const other = if (p.service.disabled) .{ disabled, units } else .{ units, disabled };
-        cwd.deleteFile(io, try std.fs.path.join(arena, &.{ other, name })) catch {};
-        const path = try std.fs.path.join(arena, &.{ dir, name });
-        try cwd.writeFile(io, .{ .sub_path = path, .data = out.written() });
-        try written.append(arena, path);
-    }
-    return written.items;
+    try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ config.state_dir, "logs" }));
+    return bed.plant(arena, io, try beds(arena, io, config, all, planted, log));
 }
 
-fn plistsIn(arena: Allocator, io: Io, dir_path: []const u8, prefix: []const u8) ![]const []const u8 {
+fn plistsIn(arena: Allocator, io: Io, dir_path: []const u8, prefix: []const u8) ![][]const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return out.items;
     defer dir.close(io);
