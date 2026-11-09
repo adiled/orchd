@@ -68,6 +68,24 @@ install: dist
     install dist/bin/* "{{prefix}}/bin/"
     echo "installed -> {{prefix}}/bin"
 
+# Check before a pull request: format, every test suite this machine runs, and
+# the Linux builds (orchd, bare, containerd) cross-compiled.
+check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    zig fmt --check build.zig build.zig.zon src orchd-rootstock-*
+    zig build test
+    for plugin in orchd-rootstock-bare orchd-rootstock-containerd; do (cd "$plugin" && zig build test); done
+    if [ "{{os()}}" = "macos" ]; then
+        for plugin in orchd-rootstock-apple orchd-rootstock-applz; do (cd "$plugin" && zig build test); done
+    fi
+    for target in x86_64-linux-musl aarch64-linux-musl; do
+        out="$PWD/.zig-cache/check/$target"
+        zig build -Dtarget="$target" -p "$out"
+        for plugin in orchd-rootstock-bare orchd-rootstock-containerd; do (cd "$plugin" && zig build -Dtarget="$target" -p "$out"); done
+    done
+    echo "checks passed"
+
 # Run the test suites for this platform.
 test:
     #!/usr/bin/env bash

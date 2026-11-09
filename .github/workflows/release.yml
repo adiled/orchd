@@ -4,11 +4,7 @@ on:
   push:
     tags:
       - "v*"
-  pull_request:
-    paths:
-      - ".github/workflows/release.yml"
-      - "justfile"
-      - "install"
+  workflow_dispatch:
 
 permissions:
   contents: write
