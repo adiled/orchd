@@ -80,6 +80,13 @@ pub enum Commands {
 
         #[arg(long, help = "Regenerate even when the Orchfile has not changed.")]
         force: bool,
+
+        #[arg(
+            long,
+            conflicts_with = "no_start",
+            help = "Run each living tree's RELOAD instead of restarting it."
+        )]
+        reload: bool,
     },
 
     /// Report the grove: each tree's state.
@@ -165,5 +172,15 @@ mod tests {
             cli.command,
             Commands::Fell { ref services, keep_data: false } if services.is_empty()
         ));
+    }
+
+    #[test]
+    fn test_grow__reload_names_trees_and_refuses_no_start() {
+        let cli = Cli::try_parse_from(["orchd", "grow", "web", "--reload"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Grow { ref services, reload: true, .. } if services == &["web"]
+        ));
+        assert!(Cli::try_parse_from(["orchd", "grow", "--reload", "--no-start"]).is_err());
     }
 }

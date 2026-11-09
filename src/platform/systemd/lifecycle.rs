@@ -25,6 +25,10 @@ pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> 
     }
 }
 
+pub fn reload(service: &str, config: &Config) -> Result<(), PlatformError> {
+    systemctl(&["reload", &config.unit_name(service)], config)
+}
+
 pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
     if services.is_empty() {
         systemctl(&["stop", &config.target_name()], config)

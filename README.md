@@ -57,11 +57,12 @@ use `podman` or `containerd` instead.)
 ## Use it
 
 ```sh
-orchd grow      # start everything
-orchd survey    # see what is running
-orchd logs web  # watch one service
-orchd fell web  # stop one service and clean it up
-orchd fell      # stop everything and clean up
+orchd grow               # start everything
+orchd grow web --reload  # run web's RELOAD instead of restarting it
+orchd survey             # see what is running
+orchd logs web           # watch one service
+orchd fell web           # stop one service and clean it up
+orchd fell               # stop everything and clean up
 ```
 
 That is the day-to-day. Run `orchd grow` again any time you change the Orchfile.

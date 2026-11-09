@@ -20,4 +20,6 @@ pub struct ExecSet {
     /// Optional post-stop command (ExecStopPost=)
     /// e.g., container rm <name> (if recreate=always)
     pub post_stop: Option<String>,
+
+    pub reload: Option<String>,
 }
