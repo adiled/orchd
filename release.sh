@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# release.sh - bump version, sync lockfile, tag, and push.
+# release.sh - bump version, tag, and push.
 # Usage: ./release.sh [patch|minor|major]
 #
 # Examples:
@@ -9,11 +9,10 @@ set -euo pipefail
 #     ./release.sh minor            # bumps 0.3.2 -> 0.4.0
 #     ./release.sh major            # bumps 0.3.2 -> 1.0.0
 #
-# Core (always): Cargo.toml + Cargo.lock.
+# Core (always): build.zig.zon, whose version the orchd binary reports.
 
 # --- Project add-ons (optional) ----------------------------------------------
-# Extra files kept in version lockstep with Cargo.toml. Leave empty for plain
-# Rust projects. Example: (orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
+# Extra files kept in version lockstep with build.zig.zon.
 EXTRA_VERSIONED_FILES=(orchd-rootstock-bare/build.zig.zon orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
 # -----------------------------------------------------------------------------
 
@@ -29,19 +28,17 @@ git reset --hard origin/main
 
 # Determine version
 NEW_VER=""
+OLD_VER="$(grep '^ *\.version = ' build.zig.zon | sed 's/.*"\(.*\)".*/\1/')"
 case "${1:-patch}" in
   patch)
-    OLD_VER="$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VER"
     NEW_VER="$MAJOR.$MINOR.$((PATCH + 1))"
      ;;
   minor)
-    OLD_VER="$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VER"
     NEW_VER="$MAJOR.$((MINOR + 1)).0"
      ;;
   major)
-    OLD_VER="$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VER"
     NEW_VER="$((MAJOR + 1)).0.0"
      ;;
@@ -51,8 +48,8 @@ case "${1:-patch}" in
      ;;
 esac
 
-# Files kept in version lockstep with Cargo.toml
-VERSIONED_FILES=(Cargo.toml "${EXTRA_VERSIONED_FILES[@]}")
+# Files kept in version lockstep with build.zig.zon
+VERSIONED_FILES=(build.zig.zon "${EXTRA_VERSIONED_FILES[@]}")
 
 # Every versioned file must already carry OLD_VER, or versions have drifted.
 for f in "${VERSIONED_FILES[@]}"; do
@@ -62,20 +59,13 @@ for f in "${VERSIONED_FILES[@]}"; do
   fi
 done
 
-# Bump versions in all lockstep files:
-#   Cargo.toml      -> `version = "x.y.z"`
-#   build.zig.zon   -> `.version = "x.y.z"`   (fingerprint is name-bound, unchanged)
+# Bump `.version = "x.y.z"` in every lockstep file (fingerprints are name-bound, unchanged).
 for f in "${VERSIONED_FILES[@]}"; do
-  sed -i '' -e "s/^version = \"$OLD_VER\"/version = \"$NEW_VER\"/" \
-            -e "s/\.version = \"$OLD_VER\"/.version = \"$NEW_VER\"/" "$f"
+  sed -i '' -e "s/\.version = \"$OLD_VER\"/.version = \"$NEW_VER\"/" "$f"
 done
 
-# Update Cargo.lock to match
-cargo generate-lockfile
-
-# Verify no uncommitted changes aside from version bump
-if ! git diff --quiet -- "${VERSIONED_FILES[@]}" Cargo.lock; then
-  git add "${VERSIONED_FILES[@]}" Cargo.lock
+if ! git diff --quiet -- "${VERSIONED_FILES[@]}"; then
+  git add "${VERSIONED_FILES[@]}"
   git commit -m "chore: bump to $NEW_VER"
 fi
 

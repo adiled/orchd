@@ -10,9 +10,9 @@ the third operating mode of the `apple` rootstock:
 | 2 | `xpc` / `daemon` (default) | `orchd-apple`: drive the pinned daemon over XPC | works |
 | 3 | `osx` / `vz` | `orchd-osx`: this runtime | **works** |
 
-All three turn a container Service into the same `ExecSet` contract. The Rust
-`apple` rootstock (`src/rootstock/apple.rs`) is a thin envelope that selects one.
-Modes 2 and 3 are the same code path from Rust's side: spawn a co-process that
+All three turn a container Service into the same `ExecSet` contract. orchd's
+`apple` rootstock (`src/rootstock.zig`) is a thin envelope that selects one.
+Modes 2 and 3 are the same code path from orchd's side: spawn a co-process that
 speaks a small JSON-over-stdio protocol.
 
 ## Why this exists
@@ -119,7 +119,7 @@ The key containment boundaries:
 - **`vz.zig`** is the facade orchd-osx presents upward; `main.zig` is the
   contract with orchd. Neither leaks the layers beneath.
 
-## Protocol (the contract with the Rust envelope)
+## Protocol (the contract with orchd's envelope)
 
 ```
 orchd-osx check                 -- exit 0 if the VZ backend is usable

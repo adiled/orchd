@@ -12,12 +12,12 @@ The runtime needs to talk to `com.apple.container.apiserver` over **XPC**, a
 C/block-based macOS IPC mechanism with no Rust or Zig library. Zig's direct C
 interop lets us build the XPC client from scratch with zero glue — including
 hand-constructing the Objective-C *block* that `xpc_connection_set_event_handler`
-requires (see `src/xpc_extern.zig`). orchd (Rust) drives it over a simple
+requires (see `src/xpc_extern.zig`). orchd drives it over a simple
 JSON-on-stdin/stdout protocol.
 
 ```
-orchd (Rust) ──JSON──> orchd-apple (Zig) ──XPC──> container-apiserver
-                                          ──exec──> container CLI (image pull)
+orchd ──JSON──> orchd-apple ──XPC──> container-apiserver
+                            ──exec──> container CLI (image pull)
 ```
 
 ## Protocol
