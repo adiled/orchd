@@ -50,9 +50,9 @@ fn platformOf(arena: Allocator, name: []const u8, diag: *Diagnostic) !Platform {
     };
 }
 
-pub fn sow(arena: Allocator, io: Io, environ: *const Environ.Map, config: Config, out: *Io.Writer, log: *Io.Writer, diag: *Diagnostic) !void {
+pub fn sow(arena: Allocator, io: Io, environ: *const Environ.Map, config: Config, out: *Io.Writer, diag: *Diagnostic) !void {
     const spec = try decode(types.Spec, arena, try readStdin(arena, io), diag);
-    const stock = try rootstock.create(arena, io, environ, config, log, diag);
+    const stock = try rootstock.create(arena, io, environ, config, diag);
     var cuttings: std.ArrayList(Cutting) = .empty;
     for (spec.services) |service| {
         if (service.disabled) continue;

@@ -61,10 +61,10 @@ flags:   --rootstock {bare|apple|<name>}
 
 #### Bring your own rootstock
 
-A rootstock that is not built in is an executable named `orchd-rootstock-<name>`,
-beside orchd or on `PATH`. `bare` is one: `orchd-rootstock-bare` ships with orchd
-and is the smallest whole example of the contract. orchd calls it with one verb at
-a time:
+Every rootstock is an executable named `orchd-rootstock-<name>`, beside orchd or
+on `PATH`; none is built in. orchd ships `bare`, `apple` and `applz` this way, and
+`orchd-rootstock-bare` is the smallest whole example of the contract. orchd calls
+it with one verb at a time:
 
 ```
 orchd-rootstock-<name> contract   stdout: the contract versions it speaks, e.g. 1

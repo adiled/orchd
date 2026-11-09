@@ -1,60 +1,60 @@
-//! orchd-apple — Apple container runtime co-process for orchd.
+//! orchd-rootstock-apple: orchd's rootstock for Apple's container runtime.
 //!
-//! Commands:
-//!   orchd-apple check                -- exit 0 if apiserver reachable
-//!   orchd-apple exec-set <grove> -- stdin: Service JSON → stdout: ExecSet JSON
-//!   orchd-apple prepare  <grove> -- stdin: Service JSON, pulls image
-//!   orchd-apple cleanup  <grove> -- stdin: Service JSON, deletes container
+//! Contract 1 (orchd calls these, the envelope on stdin):
+//!   contract | check | prepare | exec-set
+//!
+//! ORCHD_APPLE_MODE picks how containers run: `xpc` (default) drives Apple's
+//! container daemon over XPC through this binary's own verbs; `cli` writes
+//! `container` command lines. Host services run as they would bare.
+//!
+//! The XPC verbs the exec set calls back into:
+//!   run <id> <image> [--spec <b64>] | wait <id> | stop <id> | delete <id> | pull <image>
+//! and, for poking at the daemon: list | kernel | images | content <digest> | resolve <ref>
 
 const std = @import("std");
-const clap = @import("clap");
 
 const client_mod = @import("client.zig");
 const exec_set_mod = @import("exec_set.zig");
 const oci_mod = @import("oci.zig");
 const prepare_mod = @import("prepare.zig");
 const types = @import("types.zig");
+const plugin = @import("plugin.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
-    const params = comptime clap.parseParamsComptime(
-        \\-h, --help  Display this help and exit.
-        \\<str>...
-        \\
-    );
-
-    var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &params, clap.parsers.default, init.minimal.args, .{
-        .diagnostic = &diag,
-        .allocator = allocator,
-    }) catch |err| {
-        try diag.reportToFile(io, .stderr(), err);
-        return err;
-    };
-    defer res.deinit();
-
-    if (res.args.help != 0)
-        return clap.helpToFile(io, .stderr(), clap.Help, &params, .{});
-
-    const positionals = res.positionals[0];
-    if (positionals.len == 0) {
-        std.debug.print("error: command required (check | exec-set | prepare | cleanup)\n", .{});
-        std.process.exit(1);
+    const argv = try init.minimal.args.toSlice(init.arena.allocator());
+    const positionals = argv[1..];
+    if (positionals.len == 0 or std.mem.eql(u8, positionals[0], "-h") or std.mem.eql(u8, positionals[0], "--help")) {
+        std.debug.print("usage: orchd-rootstock-apple contract | check | prepare | exec-set\n" ++
+            "       orchd-rootstock-apple run <id> <image> [--spec <b64>] | wait <id> | stop <id> | delete <id> | pull <image>\n" ++
+            "       orchd-rootstock-apple list | kernel | images | content <digest> | resolve <ref>\n", .{});
+        std.process.exit(if (positionals.len == 0) 1 else 0);
     }
 
     const command = positionals[0];
     const slot = if (positionals.len >= 2) positionals[1] else "orch";
 
-    if (std.mem.eql(u8, command, "check")) {
-        try cmdCheck(allocator);
-    } else if (std.mem.eql(u8, command, "exec-set")) {
-        try cmdExecSet(allocator, io, slot);
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const wanted = init.environ_map.get("ORCHD_APPLE_MODE") orelse "";
+
+    if (std.mem.eql(u8, command, "contract")) {
+        try writeOut(io, "1\n");
+    } else if (std.mem.eql(u8, command, "check")) {
+        switch (modeFrom(wanted)) {
+            .cli => if (!quiet(io, &.{ "container", "ls" })) {
+                std.debug.print("container CLI/daemon not reachable (run: container system start)\n", .{});
+                std.process.exit(1);
+            },
+            .xpc => try cmdCheck(allocator),
+        }
     } else if (std.mem.eql(u8, command, "prepare")) {
-        try cmdPrepare(allocator, io, slot);
-    } else if (std.mem.eql(u8, command, "cleanup")) {
-        try cmdCleanup(allocator, io, slot);
+        try cmdPrepare(arena, io);
+    } else if (std.mem.eql(u8, command, "exec-set")) {
+        try cmdExecSet(arena, io, modeFrom(wanted));
     } else if (std.mem.eql(u8, command, "list")) {
         try cmdList(allocator, io);
     } else if (std.mem.eql(u8, command, "stop")) {
@@ -199,7 +199,7 @@ fn cmdResolve(allocator: std.mem.Allocator, io: std.Io, reference: []const u8) !
 /// absent, behaviour matches the old hardcoded defaults so nothing regresses.
 fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const u8) !void {
     if (positionals.len < 3) {
-        std.debug.print("usage: orchd-apple run <id> <image> [--spec <base64>]\n", .{});
+        std.debug.print("usage: orchd-rootstock-apple run <id> <image> [--spec <base64>]\n", .{});
         std.process.exit(1);
     }
     const id = positionals[1];
@@ -211,7 +211,7 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const
     while (i < positionals.len) : (i += 1) {
         if (std.mem.eql(u8, positionals[i], "--spec")) {
             if (i + 1 >= positionals.len) {
-                std.debug.print("usage: orchd-apple run <id> <image> [--spec <base64>]\n", .{});
+                std.debug.print("usage: orchd-rootstock-apple run <id> <image> [--spec <base64>]\n", .{});
                 std.process.exit(1);
             }
             spec_b64 = positionals[i + 1];
@@ -275,65 +275,88 @@ fn cmdPull(io: std.Io, image: []const u8) !void {
     };
 }
 
-fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
-    const svc = readService(allocator, io) catch std.process.exit(1);
-    defer svc.deinit();
-    if (!std.mem.eql(u8, svc.value.mode, "container")) {
-        std.debug.print("error: apple runtime only handles container-mode services\n", .{});
+fn modeFrom(wanted: []const u8) plugin.Mode {
+    return switch (plugin.Mode.parse(wanted)) {
+        .mode => |m| m,
+        .unknown => blk: {
+            std.debug.print("warning: unknown ORCHD_APPLE_MODE '{s}', using 'xpc'\n", .{wanted});
+            break :blk .xpc;
+        },
+        .applz => {
+            std.debug.print("ORCHD_APPLE_MODE={s} is now applz, its own runtime (https://github.com/adiled/applz): install it and use --rootstock applz\n", .{wanted});
+            std.process.exit(1);
+        },
+    };
+}
+
+fn quiet(io: std.Io, argv: []const []const u8) bool {
+    var child = std.process.spawn(io, .{ .argv = argv, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore }) catch return false;
+    const term = child.wait(io) catch return false;
+    return term.success();
+}
+
+fn writeOut(io: std.Io, bytes: []const u8) !void {
+    try std.Io.File.stdout().writeStreamingAll(io, bytes);
+}
+
+fn readEnvelope(arena: std.mem.Allocator, io: std.Io) plugin.Envelope {
+    var buf: [4096]u8 = undefined;
+    var reader: std.Io.File.Reader = .initStreaming(.stdin(), io, &buf);
+    const bytes = reader.interface.allocRemaining(arena, .limited(1 << 20)) catch {
+        std.debug.print("unreadable envelope: stdin\n", .{});
         std.process.exit(1);
+    };
+    return plugin.parseEnvelope(arena, bytes) catch |err| {
+        if (err == error.ContractMismatch) {
+            std.debug.print("orchd-rootstock-apple speaks contract {d}\n", .{plugin.contract});
+        } else {
+            std.debug.print("unreadable envelope: {s}\n", .{@errorName(err)});
+        }
+        std.process.exit(1);
+    };
+}
+
+fn refuse(refusal: plugin.Refusal, service: types.Service) noreturn {
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    plugin.explain(refusal, service, &w) catch {};
+    std.debug.print("{s}", .{w.buffered()});
+    std.process.exit(1);
+}
+
+fn cmdExecSet(arena: std.mem.Allocator, io: std.Io, mode: plugin.Mode) !void {
+    const envelope = readEnvelope(arena, io);
+    const service = envelope.service;
+    const set = if (plugin.isHost(service))
+        plugin.hostExecSet(service) catch |r| refuse(r, service)
+    else switch (mode) {
+        .cli => plugin.cliExecSet(arena, envelope) catch |err| switch (err) {
+            error.NoImage, error.NoRunCommand => |r| refuse(r, service),
+            else => |e| return e,
+        },
+        .xpc => plugin.xpcExecSet(arena, io, envelope) catch |err| switch (err) {
+            error.NoImage => refuse(error.NoImage, service),
+            else => |e| return e,
+        },
+    };
+    try writeOut(io, try std.json.Stringify.valueAlloc(arena, set, .{}));
+    try writeOut(io, "\n");
+}
+
+fn cmdPrepare(arena: std.mem.Allocator, io: std.Io) !void {
+    const envelope = readEnvelope(arena, io);
+    const service = envelope.service;
+    if (plugin.isHost(service)) {
+        const dir = try std.fs.path.join(arena, &.{ envelope.data_dir, service.name });
+        std.Io.Dir.cwd().createDirPath(io, dir) catch |err| {
+            std.debug.print("cannot make {s}: {s}\n", .{ dir, @errorName(err) });
+            std.process.exit(1);
+        };
+        return;
     }
-    const es = exec_set_mod.build(allocator, io, svc.value, grove) catch |err| {
-        std.debug.print("error: exec-set: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer es.deinit(allocator);
-    const json = try std.json.Stringify.valueAlloc(allocator, es, .{});
-    defer allocator.free(json);
-
-    var buf: [4096]u8 = undefined;
-    var fw = std.Io.File.stdout().writer(io, &buf);
-    try fw.interface.writeAll(json);
-    try fw.interface.flush();
-}
-
-fn cmdPrepare(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
-    _ = grove;
-    const svc = readService(allocator, io) catch std.process.exit(1);
-    defer svc.deinit();
-    const image = svc.value.image orelse {
-        std.debug.print("error: service has no image\n", .{});
-        std.process.exit(1);
-    };
+    const image = service.image orelse refuse(error.NoImage, service);
     prepare_mod.pullImage(io, image) catch |err| {
-        std.debug.print("error: pull failed: {s}\n", .{@errorName(err)});
+        std.debug.print("container image pull {s} failed: {s}\n", .{ image, @errorName(err) });
         std.process.exit(1);
-    };
-}
-
-fn cmdCleanup(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
-    const svc = readService(allocator, io) catch std.process.exit(1);
-    defer svc.deinit();
-    const name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ grove, svc.value.name });
-    defer allocator.free(name);
-    const c = client_mod.Client.init();
-    defer c.deinit();
-    c.containerDelete(allocator, name, true) catch {};
-}
-
-/// Read all of stdin, then parse as Service JSON.
-fn readService(allocator: std.mem.Allocator, io: std.Io) !std.json.Parsed(types.Service) {
-    var buf: [4096]u8 = undefined;
-    var fr = std.Io.File.stdin().reader(io, &buf);
-    const data = fr.interface.allocRemaining(allocator, .unlimited) catch {
-        std.debug.print("error: failed to read stdin\n", .{});
-        return error.ReadFailed;
-    };
-    defer allocator.free(data);
-    return std.json.parseFromSlice(types.Service, allocator, data, .{
-        .ignore_unknown_fields = true,
-        .allocate = .alloc_always,
-    }) catch |err| {
-        std.debug.print("error: failed to parse service JSON: {s}\n", .{@errorName(err)});
-        return error.ParseFailed;
     };
 }

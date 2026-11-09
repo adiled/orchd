@@ -167,6 +167,10 @@ pub const Message = struct {
     }
 
     /// Check the error key. Returns XpcError.ApiError if the server sent an error payload.
+    pub fn errorText(self: Message) ?[]const u8 {
+        return self.getData(ERROR_KEY);
+    }
+
     pub fn checkError(self: Message) XpcError!void {
         if (self.getData(ERROR_KEY)) |err_data| {
             std.debug.print("xpc apiserver error: {s}\n", .{err_data});

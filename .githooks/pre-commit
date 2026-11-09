@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! zig fmt --check build.zig build.zig.zon src orchd-rootstock-bare orchd-rootstock-applz >/dev/null 2>&1; then
-  echo "error: formatting is not clean — run 'zig fmt build.zig build.zig.zon src orchd-rootstock-bare orchd-rootstock-applz', stage the changes, and retry." >&2
+if ! zig fmt --check build.zig build.zig.zon src orchd-rootstock-bare orchd-rootstock-applz orchd-rootstock-apple >/dev/null 2>&1; then
+  echo "error: formatting is not clean — run 'zig fmt build.zig build.zig.zon src orchd-rootstock-bare orchd-rootstock-applz orchd-rootstock-apple', stage the changes, and retry." >&2
   exit 1
 fi

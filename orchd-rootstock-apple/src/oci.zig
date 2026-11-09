@@ -45,15 +45,41 @@ fn str(v: ?std.json.Value) []const u8 {
 
 /// Resolve `reference` to its descriptor + initProcess fields. Allocations come
 /// from `arena` (caller owns; free the whole arena).
+pub fn normalize(arena: std.mem.Allocator, reference: []const u8) ![]const u8 {
+    const slash = std.mem.indexOfScalar(u8, reference, '/');
+    const named = if (slash) |i| blk: {
+        const first = reference[0..i];
+        const is_registry = std.mem.indexOfAny(u8, first, ".:") != null or std.mem.eql(u8, first, "localhost");
+        break :blk if (is_registry) reference else try std.fmt.allocPrint(arena, "docker.io/{s}", .{reference});
+    } else try std.fmt.allocPrint(arena, "docker.io/library/{s}", .{reference});
+    const last = named[(std.mem.lastIndexOfScalar(u8, named, '/') orelse 0)..];
+    if (std.mem.indexOfAny(u8, last, ":@") != null) return named;
+    return std.fmt.allocPrint(arena, "{s}:latest", .{named});
+}
+
+test "image references are normalized the way the daemon stores them" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("docker.io/library/alpine:3.20", try normalize(a, "alpine:3.20"));
+    try std.testing.expectEqualStrings("docker.io/library/alpine:latest", try normalize(a, "alpine"));
+    try std.testing.expectEqualStrings("docker.io/bitnami/redis:7", try normalize(a, "bitnami/redis:7"));
+    try std.testing.expectEqualStrings("ghcr.io/apple/x:1", try normalize(a, "ghcr.io/apple/x:1"));
+    try std.testing.expectEqualStrings("localhost:5000/app:latest", try normalize(a, "localhost:5000/app"));
+    try std.testing.expectEqualStrings("docker.io/library/alpine@sha256:abc", try normalize(a, "alpine@sha256:abc"));
+}
+
 pub fn resolve(arena: std.mem.Allocator, io: std.Io, reference: []const u8) !Resolved {
     // 1. imageList -> descriptor for `reference`
     const images_json = try client.imageList(arena);
     const images = try std.json.parseFromSliceLeaky(std.json.Value, arena, images_json, .{});
+    const wanted = try normalize(arena, reference);
     var index_digest: []const u8 = "";
     var img_size: i64 = 0;
     var img_media: []const u8 = "";
     for (images.array.items) |img| {
-        if (std.mem.eql(u8, str(find(img, "reference")), reference)) {
+        const stored = str(find(img, "reference"));
+        if (std.mem.eql(u8, stored, reference) or std.mem.eql(u8, stored, wanted)) {
             const desc = find(img, "descriptor").?;
             index_digest = str(find(desc, "digest"));
             img_media = str(find(desc, "mediaType"));
@@ -149,12 +175,47 @@ pub fn parseMemory(s: []const u8) !u64 {
     return n * mult;
 }
 
-/// Split a command string on ASCII spaces into argv, dropping empty fields.
-/// Allocations come from `arena`.
 fn splitArgs(arena: std.mem.Allocator, s: []const u8) ![]const []const u8 {
-    var out = std.ArrayList([]const u8).empty;
-    var it = std.mem.tokenizeScalar(u8, s, ' ');
-    while (it.next()) |tok| try out.append(arena, tok);
+    var out: std.ArrayList([]const u8) = .empty;
+    var word: std.ArrayList(u8) = .empty;
+    var in_word = false;
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        switch (s[i]) {
+            ' ', '\t', '\n' => if (in_word) {
+                try out.append(arena, try word.toOwnedSlice(arena));
+                in_word = false;
+            },
+            '\'' => {
+                in_word = true;
+                const end = std.mem.indexOfScalarPos(u8, s, i + 1, '\'') orelse return error.UnterminatedQuote;
+                try word.appendSlice(arena, s[i + 1 .. end]);
+                i = end;
+            },
+            '"' => {
+                in_word = true;
+                i += 1;
+                while (true) : (i += 1) {
+                    if (i >= s.len) return error.UnterminatedQuote;
+                    if (s[i] == '"') break;
+                    if (s[i] == '\\' and i + 1 < s.len and std.mem.indexOfScalar(u8, "\"\\$`", s[i + 1]) != null) i += 1;
+                    try word.append(arena, s[i]);
+                }
+            },
+            '\\' => {
+                in_word = true;
+                if (i + 1 < s.len) {
+                    i += 1;
+                    try word.append(arena, s[i]);
+                }
+            },
+            else => |c| {
+                in_word = true;
+                try word.append(arena, c);
+            },
+        }
+    }
+    if (in_word) try out.append(arena, try word.toOwnedSlice(arena));
     return out.items;
 }
 
@@ -246,6 +307,38 @@ const Config = struct {
 };
 
 const INIT_IMAGE = "ghcr.io/apple/containerization/vminit:0.31.0";
+const vminit = "ghcr.io/apple/containerization/vminit:";
+
+fn initImage(arena: std.mem.Allocator) ![:0]const u8 {
+    const images_json = client.imageList(arena) catch return INIT_IMAGE;
+    const images = std.json.parseFromSliceLeaky(std.json.Value, arena, images_json, .{}) catch return INIT_IMAGE;
+    if (images != .array) return INIT_IMAGE;
+    var refs: std.ArrayList([]const u8) = .empty;
+    for (images.array.items) |img| try refs.append(arena, str(find(img, "reference")));
+    return newestVminit(arena, refs.items) orelse INIT_IMAGE;
+}
+
+fn newestVminit(arena: std.mem.Allocator, refs: []const []const u8) ?[:0]const u8 {
+    var best: ?[]const u8 = null;
+    var best_version: std.SemanticVersion = undefined;
+    for (refs) |ref| {
+        if (!std.mem.startsWith(u8, ref, vminit)) continue;
+        const version = std.SemanticVersion.parse(ref[vminit.len..]) catch continue;
+        if (best == null or version.order(best_version) == .gt) {
+            best = ref;
+            best_version = version;
+        }
+    }
+    return arena.dupeSentinel(u8, best orelse return null, 0) catch null;
+}
+
+test "the init image is the newest vminit the daemon already holds" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings(vminit ++ "0.35.0", newestVminit(a, &.{ "docker.io/library/alpine:3.20", vminit ++ "0.31.0", vminit ++ "0.35.0", vminit ++ "0.9.0" }).?);
+    try std.testing.expectEqual(null, newestVminit(a, &.{"docker.io/library/alpine:3.20"}));
+}
 
 /// Create and start a container entirely over XPC: resolve OCI -> kernel ->
 /// build ContainerConfiguration -> create -> bootstrap -> start.
@@ -328,7 +421,7 @@ pub fn run(
         .id = id,
         .image = .{
             .descriptor = .{ .digest = r.image_digest, .size = r.image_size, .mediaType = r.image_media_type },
-            .reference = reference,
+            .reference = try normalize(arena, reference),
         },
         .initProcess = .{
             .executable = executable,
@@ -343,7 +436,7 @@ pub fn run(
 
     const options_json = "{\"autoRemove\":false,\"rootFsOverride\":null}";
 
-    try c.containerCreate(allocator, config_json, kernel_json, options_json, INIT_IMAGE);
+    try c.containerCreate(allocator, config_json, kernel_json, options_json, try initImage(arena));
 
     const fd = try std.posix.openatZ(std.posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR }, 0);
     defer _ = close(fd);
@@ -392,4 +485,16 @@ test "splitArgs tokenizes on spaces" {
     try std.testing.expectEqual(@as(usize, 3), argv.len);
     try std.testing.expectEqualStrings("postgres", argv[0]);
     try std.testing.expectEqualStrings("max_connections=200", argv[2]);
+}
+
+test "splitArgs reads quotes like a shell" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const argv = try splitArgs(arena, "sh -c \"echo hello from $GREETING; sleep 600\" 'a b' c\\ d");
+    try std.testing.expectEqual(@as(usize, 5), argv.len);
+    try std.testing.expectEqualStrings("echo hello from $GREETING; sleep 600", argv[2]);
+    try std.testing.expectEqualStrings("a b", argv[3]);
+    try std.testing.expectEqualStrings("c d", argv[4]);
+    try std.testing.expectError(error.UnterminatedQuote, splitArgs(arena, "sh -c 'half"));
 }

@@ -1,8 +1,8 @@
 # orchd build + packaging. Run `just` (or `just --list`) to see recipes.
 #
 # Cross-platform: everywhere it builds orchd and its bare rootstock
-# (orchd-rootstock-bare); on macOS it also builds orchd-apple and the applz
-# rootstock (orchd-rootstock-applz, for https://github.com/adiled/applz).
+# (orchd-rootstock-bare); on macOS it also builds the apple and applz
+# rootstocks (orchd-rootstock-apple, orchd-rootstock-applz).
 # Requires zig 0.17.1, and orch on PATH to bundle the parser. Install just with
 # `brew install just`.
 
@@ -16,7 +16,7 @@ target   := if os() == "linux" { "-Dtarget=" + arch() + "-linux-musl" } else { "
 default:
     @just --list
 
-# Build for this platform: orchd and bare everywhere, plus the Apple runtimes on macOS.
+# Build for this platform: orchd and bare everywhere, plus apple and applz on macOS.
 build:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -32,7 +32,7 @@ build-bare:
 
 [macos]
 build-apple:
-    cd orchd-apple && zig build -Doptimize={{opt}}
+    cd orchd-rootstock-apple && zig build -Doptimize={{opt}}
 
 [macos]
 build-applz:
@@ -46,7 +46,7 @@ dist: build
     cp zig-out/bin/orchd dist/bin/
     cp orchd-rootstock-bare/zig-out/bin/orchd-rootstock-bare dist/bin/
     if [ "{{os()}}" = "macos" ]; then
-        cp orchd-apple/zig-out/bin/orchd-apple dist/bin/
+        cp orchd-rootstock-apple/zig-out/bin/orchd-rootstock-apple dist/bin/
         cp orchd-rootstock-applz/zig-out/bin/orchd-rootstock-applz dist/bin/
     fi
     if command -v orch >/dev/null; then cp "$(command -v orch)" dist/bin/; fi
@@ -67,9 +67,9 @@ test:
     zig build test
     (cd orchd-rootstock-bare && zig build test)
     if [ "{{os()}}" = "macos" ]; then
-        (cd orchd-apple && zig build test)
+        (cd orchd-rootstock-apple && zig build test)
         (cd orchd-rootstock-applz && zig build test)
     fi
 
 clean:
-    rm -rf dist zig-out orchd-rootstock-bare/zig-out orchd-apple/zig-out orchd-rootstock-applz/zig-out
+    rm -rf dist zig-out orchd-rootstock-bare/zig-out orchd-rootstock-apple/zig-out orchd-rootstock-applz/zig-out
