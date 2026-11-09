@@ -141,11 +141,11 @@ const Runner = struct {
         } else |_| false;
         if (had_task) {
             const wait = cd.waitRequest(a, id) catch return;
-            if (conn.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(8) })) |_| {} else |_| {
+            if (conn.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(5) })) |_| {} else |_| {
                 conn.close();
                 conn = r.connect() catch return;
                 if (cd.killRequest(a, id, sigkill)) |req| _ = conn.unary(cd.method.kill_task, req, .{ .timeout = .fromSeconds(5) }) catch {} else |_| {}
-                if (conn.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(3) })) |_| {} else |_| {
+                if (conn.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(2) })) |_| {} else |_| {
                     conn.close();
                     conn = r.connect() catch return;
                 }
