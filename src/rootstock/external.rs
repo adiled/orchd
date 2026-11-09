@@ -87,9 +87,12 @@ impl ExternalRootstock {
             };
             let json = serde_json::to_vec(&envelope)
                 .map_err(|e| RootstockError::Other(format!("{} {}: {}", plugin, verb, e)))?;
-            stdin
-                .write_all(&json)
-                .map_err(|e| RootstockError::Other(format!("{} {}: {}", plugin, verb, e)))?;
+            match stdin.write_all(&json) {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+                    return Err(RootstockError::Other(format!("{} {}: {}", plugin, verb, e)));
+                }
+                _ => {}
+            }
         }
         drop(stdin);
 
