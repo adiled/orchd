@@ -9,14 +9,18 @@ uses systemd. You do not need to know how either works.
 
 ## Install
 
+From a [release](https://github.com/adiled/orchd/releases): unpack
+`orchd-<target>.tar.gz` and put its `bin/` on your `PATH`. orchd finds its
+rootstocks beside it, so keep them together.
+
+From source, with Rust, Zig 0.17.1 and [`just`](https://github.com/casey/just):
+
 ```sh
 just install
 ```
 
-Builds orchd with its rootstocks and installs them into `/usr/local/bin` (set
-`PREFIX` to install elsewhere). Needs Rust, Zig 0.17.1 and
-[`just`](https://github.com/casey/just). On a Mac it also fetches the kernel for
-Linux containers.
+That installs into `/usr/local/bin` (set `PREFIX` for elsewhere), and on a Mac
+also fetches the kernel for Linux containers.
 
 ## Write an Orchfile
 
