@@ -1,12 +1,9 @@
 name: containerd
 
 on:
-  pull_request:
-    paths:
-      - "orchd-rootstock-containerd/**"
-      - "src/**"
-      - "justfile"
-      - ".github/workflows/containerd.yml"
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
 
 jobs:
