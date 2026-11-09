@@ -64,6 +64,10 @@ pub fn generate_service_unit(
         writeln!(unit, "ExecStop=/bin/bash -c '{}'", escape_bash(stop)).unwrap();
     }
 
+    if let Some(ref reload) = exec_set.reload {
+        writeln!(unit, "ExecReload=/bin/bash -c '{}'", escape_bash(reload)).unwrap();
+    }
+
     if let Some(ref post_stop) = exec_set.post_stop {
         writeln!(
             unit,
@@ -383,6 +387,7 @@ mod tests {
             pre_start: None,
             stop: None,
             post_stop: None,
+            reload: None,
         }
     }
 
@@ -622,6 +627,7 @@ mod tests {
             pre_start: Some("nginx -t".to_string()),
             stop: Some("nginx -s quit".to_string()),
             post_stop: Some("rm /run/nginx.pid".to_string()),
+            reload: None,
         };
         let gates = HashSet::new();
 
@@ -631,6 +637,19 @@ mod tests {
         assert!(unit.contains("ExecStart=/bin/bash -c 'nginx -g '\\''daemon off;'\\'''"));
         assert!(unit.contains("ExecStop=/bin/bash -c 'nginx -s quit'"));
         assert!(unit.contains("ExecStopPost=/bin/bash -c 'rm /run/nginx.pid'"));
+        assert!(!unit.contains("ExecReload="));
+    }
+
+    #[test]
+    fn test_generate_service_unit__reload_becomes_exec_reload() {
+        let config = test_config();
+        let svc = simple_host_service("nginx", "nginx -g 'daemon off;'");
+        let mut exec = simple_exec_set("nginx -g 'daemon off;'");
+        exec.reload = Some("kill -HUP $MAINPID".to_string());
+
+        let unit = generate_service_unit(&svc, &exec, &config, &HashSet::new());
+
+        assert!(unit.contains("ExecReload=/bin/bash -c 'kill -HUP $MAINPID'"));
     }
 
     #[test]

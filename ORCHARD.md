@@ -77,8 +77,9 @@ orchd-rootstock-<name> exec-set   stdin: Envelope  stdout: ExecSet
 ```
 
 Contract 1 is that envelope and the ExecSet below: `start`, and optionally
-`pre_start`, `stop` and `post_stop`. `start` is the plain command that becomes the
-running tree; orchd runs it with `exec`, so it must not `exec` itself. A non-zero
+`pre_start`, `stop`, `post_stop` and `reload`. `start` is the plain command that
+becomes the running tree; orchd runs it with `exec`, so it must not `exec`
+itself. `reload` runs against the living tree with `MAINPID` set to it. A non-zero
 exit fails the verb, with the rootstock's stderr as the reason. What the
 ExecSet's commands do when they run is the rootstock's own business; orchd plants
 and tends them without knowing.
@@ -194,10 +195,11 @@ Convenience commands are nothing but pre-composed walks over the rows. They exis
 for the common path; they are never the only path.
 
 ```
-orchd grow    ==  orch parse $files | orchd sow | orchd plant | orchd tend
-orchd survey  ==  status of a grove (walk it, query the init system, report health)
-orchd fell    ==  cut the grove down, then clear its beds
-orchd fell t  ==  cut tree t down, then clear its bed; the rest of the grove stands
+orchd grow             ==  orch parse $files | orchd sow | orchd plant | orchd tend
+orchd grow t --reload  ==  re-plant, then run tree t's RELOAD with MAINPID set to it
+orchd survey           ==  status of a grove (walk it, query the init system, report health)
+orchd fell             ==  cut the grove down, then clear its beds
+orchd fell t           ==  cut tree t down, then clear its bed; the rest of the grove stands
 ```
 
 A grower who wants control reaches past `grow` for the individual rows. orchd never

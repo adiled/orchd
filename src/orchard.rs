@@ -330,6 +330,7 @@ mod tests {
             pre_start: None,
             stop: None,
             post_stop: None,
+            reload: None,
         }
     }
 
@@ -368,6 +369,7 @@ mod tests {
                 pre_start: Some("container image pull redis".into()),
                 stop: Some("container stop orch-cache".into()),
                 post_stop: Some("container delete --force orch-cache".into()),
+                reload: None,
             },
         )];
         let beds = beds_launchd(&svcs, &es, &cfg);

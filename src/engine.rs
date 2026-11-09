@@ -19,6 +19,12 @@ pub enum EngineError {
     ServiceSkipped(String),
     #[error("no service named {0} in {1}")]
     UnknownService(String, String),
+    #[error("{0} has no RELOAD")]
+    NoReload(String),
+    #[error("{0} is not running, so there is nothing to reload")]
+    NotRunning(String),
+    #[error("{0}: {1}")]
+    Reload(String, String),
 }
 
 /// Run the full generate pipeline:
@@ -76,6 +82,12 @@ pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), Engine
             Ok(exec_set) => {
                 if config.verbose {
                     eprintln!("  exec: {} -> {}", service.name, exec_set.start);
+                }
+                if service.reload_command.is_some() && exec_set.reload.is_none() {
+                    eprintln!(
+                        "warning: service '{}': rootstock '{}' gives no reload for RELOAD; ignoring",
+                        service.name, config.rootstock
+                    );
                 }
                 exec_sets.push((idx, exec_set));
             }
@@ -269,11 +281,83 @@ pub fn grow(
     no_start: bool,
     strict: bool,
     force: bool,
+    reload: bool,
 ) -> Result<(), EngineError> {
     if no_start {
         generate(config, force, strict)
+    } else if reload {
+        generate(config, force, strict)?;
+        reload_trees(config, services)
     } else {
         up(config, services, false, strict, force)
+    }
+}
+
+fn reload_trees(config: &Config, services: &[String]) -> Result<(), EngineError> {
+    check_services(config, services)?;
+    let orchfile = parse_orchfile(config)?;
+    let rt = rootstock::create_rootstock(&config.rootstock, config)?;
+    rt.check()?;
+
+    let mut done = Vec::new();
+    for service in orchfile
+        .services
+        .iter()
+        .filter(|s| services.is_empty() || services.contains(&s.name))
+    {
+        let exec = rt.exec_set(service)?;
+        let Some(cmd) = exec.reload.as_deref() else {
+            if services.is_empty() {
+                continue;
+            }
+            return Err(EngineError::NoReload(service.name.clone()));
+        };
+        let label = crate::orchdi::service_label(config, &service.name);
+        let not_running = || EngineError::NotRunning(service.name.clone());
+        match config.platform.as_str() {
+            "launchd" => {
+                let pid = crate::platform::launchd::lifecycle::pid_of(&label, config)
+                    .ok_or_else(not_running)?;
+                let deps = crate::orchdi::build_dep_gates(config, service, &orchfile.services);
+                if crate::orchdi::needs_keeper(&deps, &exec) {
+                    hup(pid as i32, &service.name)?;
+                } else {
+                    let workdir = service
+                        .workdir
+                        .as_deref()
+                        .map(|w| crate::orchdi::resolve_path(w, &config.project_dir));
+                    crate::orchdi::run_reload(cmd, pid, Some(&service.env), workdir.as_deref())
+                        .map_err(|e| EngineError::Reload(service.name.clone(), e))?;
+                }
+            }
+            "orchdi" => {
+                let pid = crate::platform::orchdi::lifecycle::keeper_pid(config, &label)
+                    .ok_or_else(not_running)?;
+                hup(pid, &service.name)?;
+            }
+            _ => crate::platform::systemd::lifecycle::reload(&service.name, config)?,
+        }
+        done.push(service.name.clone());
+    }
+
+    if !config.quiet {
+        if done.is_empty() {
+            eprintln!("no running tree has a RELOAD");
+        } else {
+            eprintln!("reloaded: {}", done.join(", "));
+        }
+    }
+    Ok(())
+}
+
+fn hup(pid: i32, service: &str) -> Result<(), EngineError> {
+    if unsafe { libc::kill(pid, libc::SIGHUP) } == 0 {
+        Ok(())
+    } else {
+        Err(EngineError::Reload(
+            service.to_string(),
+            std::io::Error::last_os_error().to_string(),
+        ))
     }
 }
 
@@ -388,13 +472,6 @@ fn lint_service(platform: &str, svc: &crate::types::Service) {
             svc.name,
             dropped.join(", "),
             platform
-        );
-    }
-
-    if svc.reload_command.is_some() {
-        eprintln!(
-            "warning: service '{}': RELOAD is not implemented yet; ignoring",
-            svc.name
         );
     }
 

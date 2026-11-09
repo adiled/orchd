@@ -251,6 +251,7 @@ impl AppleRootstock {
             pre_start: Some(pre_start),
             stop: Some(format!("container stop {name}")),
             post_stop: Some(format!("container delete --force {name}")),
+            reload: None,
         })
     }
 
@@ -297,6 +298,7 @@ impl AppleRootstock {
             pre_start: None,
             stop: service.stop_command.clone(),
             post_stop: None,
+            reload: None,
         })
     }
 }

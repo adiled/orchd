@@ -58,6 +58,7 @@ impl Rootstock for BareRootstock {
                     pre_start: None,
                     stop: service.stop_command.clone(),
                     post_stop: None,
+                    reload: service.reload_command.clone(),
                 })
             }
             ServiceMode::Container => Err(RootstockError::UnsupportedMode {
@@ -152,6 +153,17 @@ mod tests {
         assert!(exec.pre_start.is_none());
         assert!(exec.stop.is_none());
         assert!(exec.post_stop.is_none());
+        assert!(exec.reload.is_none());
+    }
+
+    #[test]
+    fn test_exec_set__reload_is_the_services_reload_command() {
+        let rt = BareRootstock::new(PathBuf::from("/tmp/orchd-test-data"));
+        let mut svc = host_service("nginx", "nginx -g 'daemon off;'");
+        svc.reload_command = Some("kill -HUP $MAINPID".to_string());
+
+        let exec = rt.exec_set(&svc).unwrap();
+        assert_eq!(exec.reload.as_deref(), Some("kill -HUP $MAINPID"));
     }
 
     #[test]

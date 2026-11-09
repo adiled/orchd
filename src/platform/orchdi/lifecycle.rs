@@ -60,6 +60,10 @@ fn alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
+pub fn keeper_pid(config: &Config, label: &str) -> Option<i32> {
+    read_pid(&pidfile(config, label)).filter(|pid| alive(*pid))
+}
+
 /// Stems of files with `ext` in `dir` (e.g. spec labels, pidfile labels).
 fn stems(dir: PathBuf, ext: &str) -> Vec<String> {
     let mut out = Vec::new();

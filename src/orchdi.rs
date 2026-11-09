@@ -25,6 +25,8 @@ pub struct SuperviseSpec {
     pub start: String,
     pub stop: Option<String>,
     pub post_stop: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reload: Option<String>,
     #[serde(default)]
     pub deps: Vec<DepSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -37,9 +39,54 @@ pub struct SuperviseSpec {
 }
 
 static TERM: AtomicBool = AtomicBool::new(false);
+static HUP: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_term(_sig: i32) {
     TERM.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn on_hup(_sig: i32) {
+    HUP.store(true, Ordering::SeqCst);
+}
+
+pub fn needs_keeper(deps: &[DepGate], exec_set: &ExecSet) -> bool {
+    !deps.is_empty() || exec_set.stop.is_some() || exec_set.post_stop.is_some()
+}
+
+pub fn run_reload(
+    cmd: &str,
+    main_pid: u32,
+    env: Option<&HashMap<String, String>>,
+    workdir: Option<&str>,
+) -> Result<(), String> {
+    let mut c = Command::new("/bin/sh");
+    c.arg("-c").arg(cmd);
+    if let Some(env) = env {
+        c.envs(env);
+    }
+    c.env("MAINPID", main_pid.to_string());
+    if let Some(dir) = workdir {
+        c.current_dir(dir);
+    }
+    match c.status() {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("RELOAD exited {}", s.code().unwrap_or(-1))),
+        Err(e) => Err(format!("RELOAD could not run: {e}")),
+    }
+}
+
+fn reload_child(spec: &SuperviseSpec, pid: u32) {
+    let Some(cmd) = &spec.reload else {
+        eprintln!(
+            "supervise[{}]: SIGHUP, but the service has no RELOAD",
+            spec.label
+        );
+        return;
+    };
+    match run_reload(cmd, pid, spec.env.as_ref(), spec.workdir.as_deref()) {
+        Ok(()) => eprintln!("supervise[{}]: reloaded", spec.label),
+        Err(e) => eprintln!("supervise[{}]: {e}", spec.label),
+    }
 }
 
 pub fn run(spec_path: &Path) -> i32 {
@@ -102,6 +149,9 @@ pub fn run(spec_path: &Path) -> i32 {
                 );
                 1
             };
+        }
+        if HUP.swap(false, Ordering::SeqCst) {
+            reload_child(&spec, child.id());
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -190,6 +240,7 @@ fn install_signal_handlers() {
     unsafe {
         libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t);
         libc::signal(libc::SIGINT, on_term as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGHUP, on_hup as *const () as libc::sighandler_t);
     }
 }
 
@@ -356,6 +407,7 @@ pub fn build_supervise_spec(
         start: exec_set.start.clone(),
         stop: exec_set.stop.clone(),
         post_stop: exec_set.post_stop.clone(),
+        reload: exec_set.reload.clone(),
         ready_marker,
         env,
         workdir,
@@ -519,6 +571,7 @@ mod tests {
             pre_start: None,
             stop: None,
             post_stop: None,
+            reload: None,
         };
 
         let spec = build_supervise_spec(&svc, &exec, &cfg, &[]);
@@ -543,12 +596,88 @@ mod tests {
             pre_start: None,
             stop: None,
             post_stop: None,
+            reload: None,
         };
 
         let spec = build_supervise_spec(&svc, &exec, &cfg, &[]);
 
         assert!(spec.env.is_none());
         assert!(spec.workdir.is_none());
+    }
+
+    #[test]
+    fn test_build_supervise_spec__carries_reload() {
+        let cfg = test_config();
+        let svc = simple_host_service("nginx", "nginx");
+        let exec = ExecSet {
+            start: "nginx".into(),
+            pre_start: None,
+            stop: None,
+            post_stop: None,
+            reload: Some("kill -HUP $MAINPID".into()),
+        };
+
+        let spec = build_supervise_spec(&svc, &exec, &cfg, &[]);
+
+        assert_eq!(spec.reload.as_deref(), Some("kill -HUP $MAINPID"));
+    }
+
+    #[test]
+    fn test_needs_keeper__only_for_deps_or_teardown() {
+        let plain = ExecSet {
+            start: "x".into(),
+            ..Default::default()
+        };
+        let with_stop = ExecSet {
+            stop: Some("y".into()),
+            ..plain.clone()
+        };
+        let with_post_stop = ExecSet {
+            post_stop: Some("y".into()),
+            ..plain.clone()
+        };
+        let with_reload = ExecSet {
+            reload: Some("y".into()),
+            ..plain.clone()
+        };
+        let dep = DepGate {
+            poll_cmd: "true".into(),
+            timeout_secs: 1,
+            required: true,
+        };
+
+        assert!(!needs_keeper(&[], &plain));
+        assert!(!needs_keeper(&[], &with_reload));
+        assert!(needs_keeper(&[], &with_stop));
+        assert!(needs_keeper(&[], &with_post_stop));
+        assert!(needs_keeper(&[dep], &plain));
+    }
+
+    #[test]
+    fn test_run_reload__gives_mainpid_env_and_workdir() {
+        let dir = std::env::temp_dir().join("orchd-run-reload");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let env = HashMap::from([("FOO".to_string(), "bar".to_string())]);
+
+        run_reload(
+            "echo \"$MAINPID $FOO $(basename \"$(pwd)\")\" > seen",
+            4242,
+            Some(&env),
+            Some(dir.to_str().unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("seen")).unwrap().trim(),
+            "4242 bar orchd-run-reload"
+        );
+        assert!(
+            run_reload("exit 3", 1, None, None)
+                .unwrap_err()
+                .contains("exited 3")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -561,6 +690,7 @@ mod tests {
             start: "sleep 1".into(),
             stop: Some("echo stop".into()),
             post_stop: Some("echo delete".into()),
+            reload: None,
             deps: vec![DepSpec {
                 poll_cmd: "true".into(),
                 timeout_secs: 5,

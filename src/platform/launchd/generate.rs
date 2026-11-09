@@ -32,8 +32,7 @@ pub fn generate_service_plist_with_deps(
     writeln!(p, "  <key>Label</key>").unwrap();
     writeln!(p, "  <string>{}</string>", xml_escape(&label)).unwrap();
 
-    let needs_supervisor =
-        !deps.is_empty() || exec_set.stop.is_some() || exec_set.post_stop.is_some();
+    let needs_supervisor = crate::orchdi::needs_keeper(deps, exec_set);
     writeln!(p, "  <key>ProgramArguments</key>").unwrap();
     writeln!(p, "  <array>").unwrap();
     if needs_supervisor {
@@ -309,6 +308,7 @@ mod tests {
             pre_start: None,
             stop: None,
             post_stop: None,
+            reload: None,
         }
     }
 
@@ -498,6 +498,7 @@ mod tests {
             pre_start: Some("nginx -t".to_string()),
             stop: None,
             post_stop: None,
+            reload: None,
         };
         let p = generate_service_plist(&svc, &exec, &cfg);
 
@@ -549,6 +550,7 @@ mod tests {
             pre_start: Some("container image pull pg:15".to_string()),
             stop: Some("container stop orch-postgres".to_string()),
             post_stop: Some("container delete --force orch-postgres".to_string()),
+            reload: None,
         };
         let p = generate_service_plist(&svc, &exec, &cfg);
 
@@ -579,6 +581,7 @@ mod tests {
             pre_start: None,
             stop: Some("container stop orch-pg".to_string()),
             post_stop: Some("container delete --force orch-pg".to_string()),
+            reload: None,
         };
         let p = generate_service_plist(&svc, &exec, &cfg);
 
@@ -596,6 +599,7 @@ mod tests {
             pre_start: None,
             stop: Some("container stop orch-pg".to_string()),
             post_stop: None,
+            reload: None,
         };
         let p = generate_service_plist(&svc, &exec, &cfg);
 
@@ -680,6 +684,7 @@ mod tests {
             pre_start: Some("container image pull pg:15".to_string()),
             stop: Some("container stop orch-pg".to_string()),
             post_stop: Some("container delete --force orch-pg".to_string()),
+            reload: None,
         };
         let deps = vec![DepGate {
             poll_cmd: "pg_isready".to_string(),

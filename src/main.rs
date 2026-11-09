@@ -32,7 +32,8 @@ fn main() {
             no_start,
             strict,
             force,
-        } => engine::grow(&config, services, *no_start, *strict, *force).map_err(boxed),
+            reload,
+        } => engine::grow(&config, services, *no_start, *strict, *force, *reload).map_err(boxed),
         Commands::Survey { json } => engine::status(&config, *json).map_err(boxed),
         Commands::Fell {
             services,

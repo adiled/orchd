@@ -187,6 +187,10 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
 }
 
 /// Parse `launchctl print <target>` for state + PID.
+pub fn pid_of(label: &str, config: &Config) -> Option<u32> {
+    query_status(label, config).2
+}
+
 fn query_status(label: &str, config: &Config) -> (String, String, Option<u32>) {
     let tgt = service_target(config, label);
     let out = Command::new("launchctl").args(["print", &tgt]).output();

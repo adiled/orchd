@@ -123,8 +123,7 @@ impl LaunchdPlatform {
             let deps = build_dep_gates(config, service, services);
 
             // Orchestrated services (deps or teardown) need a supervisor spec.
-            let needs_supervisor =
-                !deps.is_empty() || exec_set.stop.is_some() || exec_set.post_stop.is_some();
+            let needs_supervisor = crate::orchdi::needs_keeper(&deps, exec_set);
             if needs_supervisor {
                 std::fs::create_dir_all(&spec_dir)?;
                 let label = service_label(config, &service.name);
