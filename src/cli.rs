@@ -35,9 +35,9 @@ pub struct Cli {
     #[arg(long)]
     pub data_dir: Option<PathBuf>,
 
-    /// Namespace for isolation
+    /// Grove to plant into: the prefix on every name it generates
     #[arg(long)]
-    pub namespace: Option<String>,
+    pub grove: Option<String>,
 
     /// Use user scope (~/.config/systemd/user, ~/Library/LaunchAgents). Default.
     #[arg(long, conflicts_with = "system")]

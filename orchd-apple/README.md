@@ -25,11 +25,11 @@ orchd (Rust) ──JSON──> orchd-apple (Zig) ──XPC──> container-apis
 | Command                        | stdin          | stdout       | Action                              |
 |--------------------------------|----------------|--------------|-------------------------------------|
 | `orchd-apple check`            | —              | —            | XPC ping; exit 0 if daemon reachable |
-| `orchd-apple exec-set <ns>`    | Service JSON   | ExecSet JSON | Translate service → container commands |
-| `orchd-apple prepare <ns>`     | Service JSON   | —            | `container image pull`              |
-| `orchd-apple cleanup <ns>`     | Service JSON   | —            | Delete container via XPC            |
+| `orchd-apple exec-set <grove>`    | Service JSON   | ExecSet JSON | Translate service → container commands |
+| `orchd-apple prepare <grove>`     | Service JSON   | —            | `container image pull`              |
+| `orchd-apple cleanup <grove>`     | Service JSON   | —            | Delete container via XPC            |
 
-Container naming: `<namespace>-<service.name>` (e.g. `orch-postgres`).
+Container naming: `<grove>-<service.name>` (e.g. `orch-postgres`).
 
 ## ExecSet mapping
 
@@ -38,9 +38,9 @@ A container-mode service becomes:
 | Field        | Command                                       |
 |--------------|-----------------------------------------------|
 | `pre_start`  | `container image pull <image>`                |
-| `start`      | `container run --name <ns>-<svc> --init ...`  |
-| `stop`       | `container stop <ns>-<svc>`                    |
-| `post_stop`  | `container delete --force <ns>-<svc>`         |
+| `start`      | `container run --name <grove>-<svc> --init ...`  |
+| `stop`       | `container stop <grove>-<svc>`                    |
+| `post_stop`  | `container delete --force <grove>-<svc>`         |
 
 `start` runs in the foreground (no `-d`) so the platform supervisor (launchd)
 tracks the PID directly. `--init` is always added so signals are forwarded into

@@ -335,7 +335,7 @@ pub fn clean(config: &Config, keep_data: bool) -> Result<(), EngineError> {
     }
 
     // The stamp describes artifacts that no longer exist, and its config hash
-    // includes the namespace, so keeping it would let the next `grow` skip
+    // includes the grove, so keeping it would let the next `grow` skip
     // generate and install nothing.
     let _ = std::fs::remove_file(stamp_path(config));
 
@@ -465,7 +465,7 @@ fn config_hash_for(config: &Config, orchd_version: &str) -> u64 {
     orchd_version.hash(&mut h);
     config.runtime.hash(&mut h);
     config.platform.hash(&mut h);
-    config.namespace.hash(&mut h);
+    config.grove.hash(&mut h);
     format!("{:?}", config.scope).hash(&mut h);
     config.state_dir.hash(&mut h);
     config.project_dir.hash(&mut h);
@@ -686,7 +686,7 @@ mod tests {
             state_dir: root.join(".orch"),
             project_dir: proj,
             data_dir: root.join(".orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: vec![],
             verbose: false,
             quiet: true,
@@ -782,11 +782,11 @@ mod tests {
     }
 
     #[test]
-    fn test_is_up_to_date__changed_namespace_invalidates() {
+    fn test_is_up_to_date__changed_grove_invalidates() {
         let (mut cfg, root, _guard) = cache_fixture("ns", "plist");
         write_stamp(&cfg, &[]);
         assert!(is_up_to_date(&cfg));
-        cfg.namespace = "staging".to_string();
+        cfg.grove = "staging".to_string();
         assert!(!is_up_to_date(&cfg));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -925,7 +925,7 @@ mod tests {
             state_dir: root.join(".orch"),
             project_dir: root.clone(),
             data_dir: root.join(".orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: vec![],
             verbose: false,
             quiet: true,
@@ -957,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clean__scopes_to_namespace_prefix() {
+    fn test_clean__scopes_to_grove_prefix() {
         use crate::platform::Platform;
         use crate::platform::launchd::LaunchdPlatform;
 
@@ -986,7 +986,7 @@ mod tests {
             state_dir: root.join(".orch"),
             project_dir: root.clone(),
             data_dir: root.join(".orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: vec![],
             verbose: false,
             quiet: true,
@@ -996,11 +996,11 @@ mod tests {
 
         assert!(
             !agents.join("orch.web.plist").exists(),
-            "own namespace should be unlinked from LaunchAgents"
+            "own grove should be unlinked from LaunchAgents"
         );
         assert!(
             agents.join("staging.api.plist").exists(),
-            "a sibling namespace must survive fell"
+            "a sibling grove must survive fell"
         );
         assert!(
             units.join("notes.txt").exists(),
@@ -1056,7 +1056,7 @@ mod tests {
             state_dir: root.join(".orch"),
             project_dir: root.clone(),
             data_dir: root.join(".orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: vec![],
             verbose: false,
             quiet: true,
@@ -1070,11 +1070,11 @@ mod tests {
         );
         assert!(
             !sysd.join("orch.target").exists(),
-            "the grove target must be removed with its namespace"
+            "the grove target must be removed with the grove"
         );
         assert!(
             sysd.join("staging-web.service").exists(),
-            "a sibling namespace's unit must survive"
+            "a sibling grove's unit must survive"
         );
         assert!(sysd.join("staging.target").exists());
 
@@ -1105,7 +1105,7 @@ mod tests {
             state_dir: root.join(".orch"),
             project_dir: root.clone(),
             data_dir: root.join(".orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: vec![],
             verbose: false,
             quiet: true,
@@ -1264,7 +1264,7 @@ mod tests {
             state_dir: Some(std::path::PathBuf::from("/tmp/orchd-test-state")),
             project_dir: Some(std::path::PathBuf::from("/srv/project")),
             data_dir: Some(std::path::PathBuf::from("/srv/data")),
-            namespace: None,
+            grove: None,
             user: false,
             system: false,
             args: vec![],
@@ -1315,7 +1315,7 @@ mod tests {
             state_dir: Some(state_dir.clone()),
             project_dir: Some(tmp.clone()),
             data_dir: Some(data_dir.clone()),
-            namespace: Some("integ".to_string()),
+            grove: Some("integ".to_string()),
             user: false,
             system: false,
             args: vec![],

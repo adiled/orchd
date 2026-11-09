@@ -59,7 +59,7 @@ pub struct Bed {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Beds {
     pub platform: String,
-    pub namespace: String,
+    pub grove: String,
     pub scope: String,
     pub beds: Vec<Bed>,
 }
@@ -143,7 +143,7 @@ pub fn plant(config: &Config) -> Result<(), OrchardError> {
 
     let out = Beds {
         platform: config.platform.clone(),
-        namespace: config.namespace.clone(),
+        grove: config.grove.clone(),
         scope: if config.scope.is_user() {
             "user"
         } else {
@@ -213,7 +213,7 @@ fn beds_systemd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
             content: generate_service_unit(svc, exec, config, &gates),
         }];
         if gates.contains(&svc.name) {
-            let name = format!("{}-{}-ready.service", config.namespace, svc.name);
+            let name = format!("{}-{}-ready.service", config.grove, svc.name);
             arts.push(Artifact {
                 kind: "ready-gate".into(),
                 path: units_dir.join(&name).display().to_string(),
@@ -227,7 +227,7 @@ fn beds_systemd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
         });
     }
 
-    // The grove handle: its own bed (one target for the whole namespace).
+    // The grove handle: its own bed (one target for the whole grove).
     beds.push(Bed {
         label: config.target_name(),
         name: None,
@@ -302,7 +302,7 @@ mod tests {
             state_dir: PathBuf::from("/t/.orch"),
             project_dir: PathBuf::from("/t"),
             data_dir: PathBuf::from("/t/.orch/data"),
-            namespace: "orch".into(),
+            grove: "orch".into(),
             args: vec![],
             verbose: false,
             quiet: true,
@@ -429,7 +429,7 @@ mod tests {
 
         let beds = Beds {
             platform: "launchd".into(),
-            namespace: "orch".into(),
+            grove: "orch".into(),
             scope: "user".into(),
             beds: vec![Bed {
                 label: "orch.a".into(),

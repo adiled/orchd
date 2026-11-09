@@ -257,7 +257,7 @@ fn build_dependencies(
         binds_to.push(config.unit_name(dep));
 
         if ready_gates.contains(dep) {
-            after.push(format!("{}-{}-ready.service", config.namespace, dep));
+            after.push(format!("{}-{}-ready.service", config.grove, dep));
         } else {
             after.push(config.unit_name(dep));
         }
@@ -265,7 +265,7 @@ fn build_dependencies(
 
     for dep in &service.after {
         if ready_gates.contains(dep) {
-            after.push(format!("{}-{}-ready.service", config.namespace, dep));
+            after.push(format!("{}-{}-ready.service", config.grove, dep));
         } else {
             after.push(config.unit_name(dep));
         }
@@ -337,7 +337,7 @@ mod tests {
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: Vec::new(),
             verbose: false,
             quiet: false,

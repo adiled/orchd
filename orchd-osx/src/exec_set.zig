@@ -1,6 +1,6 @@
 //! ExecSet generation: translates a Service into `orchd-osx` subcommands.
 //!
-//! Naming:  <namespace>-<service.name>  e.g. "orch-postgres"
+//! Naming:  <grove>-<service.name>  e.g. "orch-postgres"
 //!
 //! Each stage re-invokes this very binary, which drives the container on
 //! Virtualization.framework (no daemon, no CLI):
@@ -26,12 +26,12 @@ pub fn build(
     allocator: std.mem.Allocator,
     io: std.Io,
     svc: types.Service,
-    namespace: []const u8,
+    grove: []const u8,
 ) Error!types.ExecSet {
     if (svc.image == null) return Error.MissingImage;
     const image = svc.image.?;
 
-    const name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ namespace, svc.name });
+    const name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ grove, svc.name });
     defer allocator.free(name);
 
     // The ExecSet invokes this very binary's subcommands, so the launchd
@@ -90,7 +90,7 @@ test "minimal container service drives orchd-osx" {
     try std.testing.expect(std.mem.indexOf(u8, es.start, "container ") == null);
 }
 
-test "namespace prefixes the container name" {
+test "grove prefixes the container name" {
     const allocator = std.testing.allocator;
     const io = std.Io.Threaded.global_single_threaded.io();
     const svc = types.Service{ .name = "api", .mode = "container", .image = "myapp:latest" };

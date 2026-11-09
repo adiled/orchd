@@ -8,9 +8,9 @@
 //! Commands (mirror orchd-apple's contract so the Rust `apple` envelope treats
 //! the two co-processes interchangeably):
 //!   check                 -- exit 0 if the VZ backend is usable
-//!   exec-set <namespace>  -- stdin: Service JSON -> stdout: ExecSet JSON
-//!   prepare  <namespace>  -- stdin: Service JSON, fetch/prepare image rootfs
-//!   cleanup  <namespace>  -- stdin: Service JSON, tear down
+//!   exec-set <grove>  -- stdin: Service JSON -> stdout: ExecSet JSON
+//!   prepare  <grove>  -- stdin: Service JSON, fetch/prepare image rootfs
+//!   cleanup  <grove>  -- stdin: Service JSON, tear down
 //!   pull   <image>        -- fetch an image
 //!   run    <name> <image> -- boot a VM and run the container (blocks until exit)
 //!   wait   <name>         -- no-op (run is the foreground process)
@@ -44,7 +44,7 @@ pub fn main(init: std.process.Init) !void {
         );
         std.process.exit(2);
     };
-    // Second positional: namespace for exec-set/prepare/cleanup, otherwise the
+    // Second positional: grove for exec-set/prepare/cleanup, otherwise the
     // container id / image, matching orchd-apple's slot convention.
     const slot = it.next() orelse "orch";
 
@@ -181,14 +181,14 @@ fn csleep(seconds: c_uint) c_uint {
     return sleep(seconds);
 }
 
-fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
+fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
     const svc = readService(allocator, io) catch std.process.exit(1);
     defer svc.deinit();
     if (!std.mem.eql(u8, svc.value.mode, "container")) {
         std.debug.print("error: apple runtime only handles container-mode services\n", .{});
         std.process.exit(1);
     }
-    const es = exec_set_mod.build(allocator, io, svc.value, namespace) catch |err| {
+    const es = exec_set_mod.build(allocator, io, svc.value, grove) catch |err| {
         std.debug.print("error: exec-set: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -213,10 +213,10 @@ fn cmdPrepare(allocator: std.mem.Allocator, io: std.Io) !void {
     std.debug.print("orchd-osx prepare: image '{s}' (rootfs prep is a scaffold no-op)\n", .{image});
 }
 
-fn cmdCleanup(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
+fn cmdCleanup(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
     const svc = readService(allocator, io) catch std.process.exit(1);
     defer svc.deinit();
-    const name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ namespace, svc.value.name });
+    const name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ grove, svc.value.name });
     defer allocator.free(name);
     vz.delete(allocator, name) catch {};
 }

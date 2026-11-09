@@ -265,7 +265,7 @@ mod tests {
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: Vec::new(),
             verbose: false,
             quiet: false,

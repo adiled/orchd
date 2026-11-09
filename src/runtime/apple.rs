@@ -80,8 +80,8 @@ pub struct AppleRuntime {
     mode: AppleMode,
     /// Co-process binary path (None in ContainerCli mode).
     bin: Option<PathBuf>,
-    /// Namespace prefix for container names (e.g. "orch" -> "orch-postgres").
-    namespace: String,
+    /// Grove prefix for container names (e.g. "orch" -> "orch-postgres").
+    grove: String,
     /// Data directory (for host-mode services that share the bare prepare step).
     data_dir: PathBuf,
     project_dir: PathBuf,
@@ -97,17 +97,17 @@ impl AppleRuntime {
         AppleRuntime {
             mode,
             bin,
-            namespace: config.namespace.clone(),
+            grove: config.grove.clone(),
             data_dir: config.data_dir.clone(),
             project_dir: config.project_dir.clone(),
         }
     }
 
     fn container_name(&self, service: &Service) -> String {
-        format!("{}-{}", self.namespace, service.name)
+        format!("{}-{}", self.grove, service.name)
     }
 
-    /// Spawn the co-process `<bin> <subcommand> [namespace]` with `input` on
+    /// Spawn the co-process `<bin> <subcommand> [grove]` with `input` on
     /// stdin. Returns stdout on success. Used by OrchdApple / OrchdOsx modes.
     fn call(&self, subcommand: &str, input: Option<&[u8]>) -> Result<String, RuntimeError> {
         let bin = self
@@ -116,7 +116,7 @@ impl AppleRuntime {
             .expect("call() is only used in binary-backed modes");
 
         let mut cmd = Command::new(bin);
-        cmd.arg(subcommand).arg(&self.namespace);
+        cmd.arg(subcommand).arg(&self.grove);
 
         if input.is_some() {
             cmd.stdin(Stdio::piped());
@@ -370,7 +370,7 @@ mod tests {
         AppleRuntime {
             mode,
             bin,
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             data_dir: std::env::temp_dir().join("orchd-apple-test-data"),
             project_dir: PathBuf::from("/proj"),
         }

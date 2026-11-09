@@ -2,9 +2,9 @@
 //!
 //! Commands:
 //!   orchd-apple check                -- exit 0 if apiserver reachable
-//!   orchd-apple exec-set <namespace> -- stdin: Service JSON → stdout: ExecSet JSON
-//!   orchd-apple prepare  <namespace> -- stdin: Service JSON, pulls image
-//!   orchd-apple cleanup  <namespace> -- stdin: Service JSON, deletes container
+//!   orchd-apple exec-set <grove> -- stdin: Service JSON → stdout: ExecSet JSON
+//!   orchd-apple prepare  <grove> -- stdin: Service JSON, pulls image
+//!   orchd-apple cleanup  <grove> -- stdin: Service JSON, deletes container
 
 const std = @import("std");
 const clap = @import("clap");
@@ -45,36 +45,36 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const command = positionals[0];
-    const namespace = if (positionals.len >= 2) positionals[1] else "orch";
+    const slot = if (positionals.len >= 2) positionals[1] else "orch";
 
     if (std.mem.eql(u8, command, "check")) {
         try cmdCheck(allocator);
     } else if (std.mem.eql(u8, command, "exec-set")) {
-        try cmdExecSet(allocator, io, namespace);
+        try cmdExecSet(allocator, io, slot);
     } else if (std.mem.eql(u8, command, "prepare")) {
-        try cmdPrepare(allocator, io, namespace);
+        try cmdPrepare(allocator, io, slot);
     } else if (std.mem.eql(u8, command, "cleanup")) {
-        try cmdCleanup(allocator, io, namespace);
+        try cmdCleanup(allocator, io, slot);
     } else if (std.mem.eql(u8, command, "list")) {
         try cmdList(allocator, io);
     } else if (std.mem.eql(u8, command, "stop")) {
-        try cmdStop(allocator, namespace); // namespace slot carries the container id
+        try cmdStop(allocator, slot); // the slot carries the container id
     } else if (std.mem.eql(u8, command, "delete")) {
-        try cmdDelete(allocator, namespace);
+        try cmdDelete(allocator, slot);
     } else if (std.mem.eql(u8, command, "kernel")) {
         try cmdKernel(allocator, io);
     } else if (std.mem.eql(u8, command, "images")) {
         try cmdImages(allocator, io);
     } else if (std.mem.eql(u8, command, "content")) {
-        try cmdContent(allocator, io, namespace); // namespace slot carries the digest
+        try cmdContent(allocator, io, slot); // the slot carries the digest
     } else if (std.mem.eql(u8, command, "resolve")) {
-        try cmdResolve(allocator, io, namespace); // namespace slot carries the image ref
+        try cmdResolve(allocator, io, slot); // the slot carries the image ref
     } else if (std.mem.eql(u8, command, "run")) {
         try cmdRun(allocator, io, positionals);
     } else if (std.mem.eql(u8, command, "wait")) {
-        try cmdWait(allocator, namespace); // namespace slot carries the container id
+        try cmdWait(allocator, slot); // the slot carries the container id
     } else if (std.mem.eql(u8, command, "pull")) {
-        try cmdPull(io, namespace); // namespace slot carries the image ref
+        try cmdPull(io, slot); // the slot carries the image ref
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         std.process.exit(1);
@@ -275,14 +275,14 @@ fn cmdPull(io: std.Io, image: []const u8) !void {
     };
 }
 
-fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
+fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
     const svc = readService(allocator, io) catch std.process.exit(1);
     defer svc.deinit();
     if (!std.mem.eql(u8, svc.value.mode, "container")) {
         std.debug.print("error: apple runtime only handles container-mode services\n", .{});
         std.process.exit(1);
     }
-    const es = exec_set_mod.build(allocator, io, svc.value, namespace) catch |err| {
+    const es = exec_set_mod.build(allocator, io, svc.value, grove) catch |err| {
         std.debug.print("error: exec-set: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -296,8 +296,8 @@ fn cmdExecSet(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !
     try fw.interface.flush();
 }
 
-fn cmdPrepare(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
-    _ = namespace;
+fn cmdPrepare(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
+    _ = grove;
     const svc = readService(allocator, io) catch std.process.exit(1);
     defer svc.deinit();
     const image = svc.value.image orelse {
@@ -310,10 +310,10 @@ fn cmdPrepare(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !
     };
 }
 
-fn cmdCleanup(allocator: std.mem.Allocator, io: std.Io, namespace: []const u8) !void {
+fn cmdCleanup(allocator: std.mem.Allocator, io: std.Io, grove: []const u8) !void {
     const svc = readService(allocator, io) catch std.process.exit(1);
     defer svc.deinit();
-    const name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ namespace, svc.value.name });
+    const name = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ grove, svc.value.name });
     defer allocator.free(name);
     const c = client_mod.Client.init();
     defer c.deinit();

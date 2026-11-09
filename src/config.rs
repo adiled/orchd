@@ -38,8 +38,8 @@ pub struct Config {
     pub project_dir: PathBuf,
     /// Data directory for service storage.
     pub data_dir: PathBuf,
-    /// Namespace for isolation (used as unit prefix).
-    pub namespace: String,
+    /// The grove: the prefix on every generated name.
+    pub grove: String,
     /// Pass-through args to orch parse (key=value).
     pub args: Vec<String>,
     /// Verbose output.
@@ -52,7 +52,7 @@ impl Config {
     /// Build config by merging CLI args > environment > .orchrc > defaults.
     ///
     /// `.orchrc` is a KEY=VALUE file searched in project_dir then HOME.
-    /// Supported keys: `runtime`, `platform`, `namespace`, `state_dir`,
+    /// Supported keys: `runtime`, `platform`, `grove`, `state_dir`,
     /// `data_dir`, `orchfile`.
     pub fn load(cli: &crate::cli::Cli) -> Self {
         // project_dir is resolved first (it locates .orchrc), so it gets
@@ -81,8 +81,11 @@ impl Config {
             "state_dir",
             || dirs_or_home().join(".orch"),
         );
+        let grove = str_setting(cli.grove.as_ref(), "ORCH_GROVE", &rc, "grove", || {
+            "orch".to_string()
+        });
         let data_dir = path_setting(cli.data_dir.as_ref(), "ORCH_DATA", &rc, "data_dir", || {
-            state_dir.join("data")
+            state_dir.join("data").join(&grove)
         });
         let runtime = str_setting(cli.runtime.as_ref(), "ORCH_RUNTIME", &rc, "runtime", || {
             "bare".to_string()
@@ -93,13 +96,6 @@ impl Config {
             &rc,
             "platform",
             detect_platform,
-        );
-        let namespace = str_setting(
-            cli.namespace.as_ref(),
-            "ORCH_NAMESPACE",
-            &rc,
-            "namespace",
-            || "orch".to_string(),
         );
 
         let scope = if cli.user {
@@ -123,7 +119,7 @@ impl Config {
             state_dir,
             project_dir,
             data_dir,
-            namespace,
+            grove,
             args: cli.args.clone(),
             verbose: cli.verbose,
             quiet: cli.quiet,
@@ -137,12 +133,12 @@ impl Config {
 
     /// Returns the systemd unit name for a service.
     pub fn unit_name(&self, service_name: &str) -> String {
-        format!("{}-{}.service", self.namespace, service_name)
+        format!("{}-{}.service", self.grove, service_name)
     }
 
     /// Returns the systemd target name.
     pub fn target_name(&self) -> String {
-        format!("{}.target", self.namespace)
+        format!("{}.target", self.grove)
     }
 }
 
@@ -256,7 +252,7 @@ mod tests {
             state_dir: None,
             project_dir: None,
             data_dir: None,
-            namespace: None,
+            grove: None,
             user: false,
             system: false,
             args: vec![],
@@ -275,11 +271,11 @@ mod tests {
     }
 
     #[test]
-    fn test_load__defaults_namespace_to_orch() {
+    fn test_load__defaults_grove_to_orch() {
         let cli = stub_cli();
-        unsafe { std::env::remove_var("ORCH_NAMESPACE") };
+        unsafe { std::env::remove_var("ORCH_GROVE") };
         let config = Config::load(&cli);
-        assert_eq!(config.namespace, "orch");
+        assert_eq!(config.grove, "orch");
     }
 
     #[test]
@@ -291,11 +287,11 @@ mod tests {
     }
 
     #[test]
-    fn test_load__cli_namespace_overrides_default() {
+    fn test_load__cli_grove_overrides_default() {
         let mut cli = stub_cli();
-        cli.namespace = Some("myproject".to_string());
+        cli.grove = Some("myproject".to_string());
         let config = Config::load(&cli);
-        assert_eq!(config.namespace, "myproject");
+        assert_eq!(config.grove, "myproject");
     }
 
     #[test]
@@ -307,11 +303,23 @@ mod tests {
     }
 
     #[test]
-    fn test_load__data_dir_defaults_to_state_dir_data() {
+    fn test_load__data_dir_defaults_to_the_groves_own() {
         let mut cli = stub_cli();
         cli.state_dir = Some(PathBuf::from("/tmp/test-state"));
+        cli.grove = Some("myapp".to_string());
         let config = Config::load(&cli);
-        assert_eq!(config.data_dir, PathBuf::from("/tmp/test-state/data"));
+        assert_eq!(config.data_dir, PathBuf::from("/tmp/test-state/data/myapp"));
+    }
+
+    #[test]
+    fn test_load__groves_sharing_a_state_dir_keep_their_data_apart() {
+        let mut a = stub_cli();
+        a.state_dir = Some(PathBuf::from("/tmp/test-state"));
+        a.grove = Some("a".to_string());
+        let mut b = stub_cli();
+        b.state_dir = Some(PathBuf::from("/tmp/test-state"));
+        b.grove = Some("b".to_string());
+        assert_ne!(Config::load(&a).data_dir, Config::load(&b).data_dir);
     }
 
     #[test]
@@ -354,15 +362,15 @@ mod tests {
     #[test]
     fn test_unit_name__formats_correctly() {
         let mut cli = stub_cli();
-        cli.namespace = Some("orch".to_string());
+        cli.grove = Some("orch".to_string());
         let config = Config::load(&cli);
         assert_eq!(config.unit_name("postgres"), "orch-postgres.service");
     }
 
     #[test]
-    fn test_unit_name__custom_namespace() {
+    fn test_unit_name__custom_grove() {
         let mut cli = stub_cli();
-        cli.namespace = Some("myapp".to_string());
+        cli.grove = Some("myapp".to_string());
         let config = Config::load(&cli);
         assert_eq!(config.unit_name("redis"), "myapp-redis.service");
     }
@@ -370,7 +378,7 @@ mod tests {
     #[test]
     fn test_target_name__formats_correctly() {
         let mut cli = stub_cli();
-        cli.namespace = Some("orch".to_string());
+        cli.grove = Some("orch".to_string());
         let config = Config::load(&cli);
         assert_eq!(config.target_name(), "orch.target");
     }
@@ -399,10 +407,10 @@ mod tests {
 
     #[test]
     fn test_parse_orchrc__basic_key_value() {
-        let content = "runtime=bare\nnamespace=myapp\n";
+        let content = "runtime=bare\ngrove=myapp\n";
         let rc = parse_orchrc(content);
         assert_eq!(rc.get("runtime").unwrap(), "bare");
-        assert_eq!(rc.get("namespace").unwrap(), "myapp");
+        assert_eq!(rc.get("grove").unwrap(), "myapp");
     }
 
     #[test]
@@ -415,9 +423,9 @@ mod tests {
 
     #[test]
     fn test_parse_orchrc__value_with_equals() {
-        let content = "namespace=a=b\n";
+        let content = "grove=a=b\n";
         let rc = parse_orchrc(content);
-        assert_eq!(rc.get("namespace").unwrap(), "a=b");
+        assert_eq!(rc.get("grove").unwrap(), "a=b");
     }
 
     #[test]
@@ -434,18 +442,18 @@ mod tests {
     }
 
     #[test]
-    fn test_load__orchrc_sets_namespace() {
+    fn test_load__orchrc_sets_grove() {
         let tmp = std::env::temp_dir().join("orchd-test-orchrc");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        std::fs::write(tmp.join(".orchrc"), "namespace=from-rc\n").unwrap();
+        std::fs::write(tmp.join(".orchrc"), "grove=from-rc\n").unwrap();
 
         let mut cli = stub_cli();
         cli.project_dir = Some(tmp.clone());
-        cli.namespace = None;
-        unsafe { std::env::remove_var("ORCH_NAMESPACE") };
+        cli.grove = None;
+        unsafe { std::env::remove_var("ORCH_GROVE") };
         let config = Config::load(&cli);
-        assert_eq!(config.namespace, "from-rc");
+        assert_eq!(config.grove, "from-rc");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -455,13 +463,13 @@ mod tests {
         let tmp = std::env::temp_dir().join("orchd-test-orchrc-override");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        std::fs::write(tmp.join(".orchrc"), "namespace=from-rc\n").unwrap();
+        std::fs::write(tmp.join(".orchrc"), "grove=from-rc\n").unwrap();
 
         let mut cli = stub_cli();
         cli.project_dir = Some(tmp.clone());
-        cli.namespace = Some("from-cli".to_string());
+        cli.grove = Some("from-cli".to_string());
         let config = Config::load(&cli);
-        assert_eq!(config.namespace, "from-cli");
+        assert_eq!(config.grove, "from-cli");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

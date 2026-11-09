@@ -126,7 +126,7 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
         ))
     })?;
 
-    let ns_prefix = format!("{}.", config.namespace);
+    let grove_prefix = format!("{}.", config.grove);
     let mut statuses: Vec<ServiceStatus> = Vec::new();
 
     for entry in entries.flatten() {
@@ -134,7 +134,7 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
         if !filename.ends_with(".plist") {
             continue;
         }
-        if !filename.starts_with(&ns_prefix) {
+        if !filename.starts_with(&grove_prefix) {
             continue;
         }
 
@@ -142,7 +142,10 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
             .strip_suffix(".plist")
             .unwrap_or(&filename)
             .to_string();
-        let svc_name = label.strip_prefix(&ns_prefix).unwrap_or(&label).to_string();
+        let svc_name = label
+            .strip_prefix(&grove_prefix)
+            .unwrap_or(&label)
+            .to_string();
 
         let (state, sub, pid) = query_status(&label, config);
         statuses.push(ServiceStatus {
@@ -280,11 +283,11 @@ fn labels_for(services: &[String], config: &Config) -> Result<Vec<String>, Platf
 
     let install = install_dir(config);
     let mut labels = Vec::new();
-    let ns_prefix = format!("{}.", config.namespace);
+    let grove_prefix = format!("{}.", config.grove);
     if let Ok(entries) = std::fs::read_dir(&install) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.ends_with(".plist") && name.starts_with(&ns_prefix) {
+            if name.ends_with(".plist") && name.starts_with(&grove_prefix) {
                 labels.push(name.trim_end_matches(".plist").to_string());
             }
         }
