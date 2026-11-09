@@ -10,16 +10,13 @@ uses systemd. You do not need to know how either works.
 ## Install
 
 ```sh
-cargo install orchd
-```
-
-Installs the `orchd` binary from crates.io.
-
-For containers on a Mac (requires [`just`](https://github.com/casey/just) and Zig):
-
-```sh
 just install
 ```
+
+Builds orchd with its rootstocks and installs them into `/usr/local/bin` (set
+`PREFIX` to install elsewhere). Needs Rust, Zig 0.17.1 and
+[`just`](https://github.com/casey/just). On a Mac it also fetches the kernel for
+Linux containers.
 
 ## Write an Orchfile
 
@@ -92,8 +89,9 @@ Every step is plain JSON in, JSON out, so you can pipe anything between them:
 orchd has no opinion about how you compose; that part is yours. Full reference:
 [`ORCHARD.md`](ORCHARD.md).
 
-A rootstock is what runs each service: `bare` (a plain process) and `apple` are
-built in, and any `orchd-rootstock-<name>` on your `PATH` is one more. Bring your
+A rootstock is what runs each service: `bare` (a plain process) ships beside
+orchd as `orchd-rootstock-bare`, `apple` is built in, and any
+`orchd-rootstock-<name>` beside orchd or on your `PATH` is one more. Bring your
 own: the contract is a few verbs and some JSON, in
 [`ORCHARD.md`](ORCHARD.md#bring-your-own-rootstock).
 

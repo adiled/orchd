@@ -1307,10 +1307,7 @@ mod tests {
 
     #[test]
     fn test_engine_error_from_rootstock_error() {
-        let inner = crate::rootstock::RootstockError::UnsupportedMode {
-            service: "web".to_string(),
-            mode: "container".to_string(),
-        };
+        let inner = crate::rootstock::RootstockError::Other("no RUN for web".to_string());
         let err: EngineError = inner.into();
         assert!(matches!(err, EngineError::Rootstock(_)));
     }
@@ -1356,7 +1353,7 @@ mod tests {
     /// Full pipeline integration test: parse fixture Orchfile via real `orch` binary,
     /// run through bare rootstock + systemd generator, assert unit file contents.
     ///
-    /// Requires: `orch` binary in PATH, systemd available.
+    /// Requires: `orch` and `orchd-rootstock-bare` (`just build-bare`) on PATH, systemd running.
     /// Run with: `cargo test -- --ignored`
     #[test]
     #[ignore]

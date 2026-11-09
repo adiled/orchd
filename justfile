@@ -1,9 +1,10 @@
 # orchd build + packaging. Run `just` (or `just --list`) to see recipes.
 #
-# Cross-platform: on macOS it also builds the Apple container runtimes (orchd-apple,
-# orchd-osx) and fetches the kernel; on Linux it builds just orchd (the systemd +
-# podman/containerd path needs no extra binaries). Requires rust (cargo); macOS
-# also needs zig 0.17.1 + zstd/curl for the kernel. Install just with `brew install just`.
+# Cross-platform: everywhere it builds orchd and its bare rootstock
+# (orchd-rootstock-bare); on macOS it also builds the Apple container runtimes
+# (orchd-apple, orchd-osx) and fetches the kernel. Requires rust (cargo) and
+# zig 0.17.1; macOS also needs zstd/curl for the kernel. Install just with
+# `brew install just`.
 
 set shell := ["bash", "-uc"]
 
@@ -16,15 +17,19 @@ opt      := "ReleaseSafe"
 default:
     @just --list
 
-# Build for this platform: orchd everywhere, plus the Apple runtimes on macOS.
+# Build for this platform: orchd and bare everywhere, plus the Apple runtimes on macOS.
 build:
     #!/usr/bin/env bash
     set -euo pipefail
     just build-orchd
+    just build-bare
     if [ "{{os()}}" = "macos" ]; then just build-apple && just build-osx; fi
 
 build-orchd:
     cargo build --release
+
+build-bare:
+    cd orchd-rootstock-bare && zig build -Doptimize={{opt}}
 
 [macos]
 build-apple:
@@ -59,6 +64,7 @@ dist: build
     root="$PWD"
     rm -rf dist && mkdir -p dist/bin
     cp target/release/orchd dist/bin/
+    cp orchd-rootstock-bare/zig-out/bin/orchd-rootstock-bare dist/bin/
     if [ "{{os()}}" = "macos" ]; then
         cp orchd-apple/zig-out/bin/orchd-apple  dist/bin/
         cp orchd-osx/zig-out/bin/orchd-osx       dist/bin/
@@ -82,6 +88,7 @@ test:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo test
+    (cd orchd-rootstock-bare && zig build test)
     if [ "{{os()}}" = "macos" ]; then
         (cd orchd-apple && zig build test)
         (cd orchd-osx && ORCHD_OCI_SKIP_NET=1 zig build test)
@@ -89,4 +96,4 @@ test:
 
 clean:
     cargo clean
-    rm -rf dist orchd-apple/zig-out orchd-osx/zig-out
+    rm -rf dist orchd-rootstock-bare/zig-out orchd-apple/zig-out orchd-osx/zig-out
