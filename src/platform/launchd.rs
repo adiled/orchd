@@ -1,7 +1,7 @@
 pub mod generate;
 pub mod lifecycle;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::exec::ExecSet;
@@ -101,24 +101,27 @@ impl Platform for LaunchdPlatform {
                     if !name.starts_with(&ns_prefix) {
                         continue;
                     }
-                    let dest = dest_dir.join(name.as_ref());
-                    if dest.exists() {
-                        let dom = if config.scope.is_user() {
-                            format!("gui/{}", current_uid())
-                        } else {
-                            "system".to_string()
-                        };
-                        let _ = std::process::Command::new("launchctl")
-                            .args(["bootout", &dom, dest.to_str().unwrap_or("")])
-                            .status();
-                        let _ = std::fs::remove_file(&dest);
-                    }
+                    let label = name.trim_end_matches(".plist");
+                    lifecycle::bootout_label(config, label);
+                    let _ = std::fs::remove_file(dest_dir.join(name.as_ref()));
                     let _ = std::fs::remove_file(&path);
                 }
             }
         }
 
         let _ = std::fs::create_dir_all(&units_dir);
+        Ok(())
+    }
+
+    fn remove(&self, config: &Config, services: &[String]) -> Result<(), PlatformError> {
+        let units_dir = config.units_dir();
+        let dest_dir = install_dir(config);
+        for service in services {
+            let label = service_label(config, service);
+            lifecycle::bootout_label(config, &label);
+            remove_beds(&units_dir, &dest_dir, &label);
+            let _ = std::fs::remove_file(supervise_spec_path(config, &label));
+        }
         Ok(())
     }
 }
@@ -162,12 +165,10 @@ impl LaunchdPlatform {
     }
 }
 
-fn current_uid() -> String {
-    let out = std::process::Command::new("id").arg("-u").output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => "0".to_string(),
-    }
+fn remove_beds(units_dir: &Path, install_dir: &Path, label: &str) {
+    let name = format!("{}.plist", label);
+    let _ = std::fs::remove_file(install_dir.join(&name));
+    let _ = std::fs::remove_file(units_dir.join(&name));
 }
 
 #[cfg(test)]
@@ -223,5 +224,27 @@ mod tests {
             p,
             PathBuf::from("/Users/test/Library/LaunchAgents/orch.web.plist")
         );
+    }
+
+    #[test]
+    fn test_remove_beds__takes_only_the_named_label() {
+        let root = std::env::temp_dir().join("orchd-remove-beds");
+        let _ = std::fs::remove_dir_all(&root);
+        let units = root.join("units");
+        let installed = root.join("LaunchAgents");
+        for dir in [&units, &installed] {
+            std::fs::create_dir_all(dir).unwrap();
+            for label in ["orch.web", "orch.db"] {
+                std::fs::write(dir.join(format!("{}.plist", label)), "x").unwrap();
+            }
+        }
+
+        remove_beds(&units, &installed, "orch.web");
+
+        for dir in [&units, &installed] {
+            assert!(!dir.join("orch.web.plist").exists());
+            assert!(dir.join("orch.db.plist").exists());
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

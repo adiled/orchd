@@ -17,6 +17,8 @@ pub enum EngineError {
     Platform(#[from] crate::platform::PlatformError),
     #[error("service(s) skipped:\n{0}")]
     ServiceSkipped(String),
+    #[error("no service named {0} in {1}")]
+    UnknownService(String, String),
 }
 
 /// Run the full generate pipeline:
@@ -186,6 +188,7 @@ pub fn up(
     if !no_generate {
         generate(config, force, strict)?;
     }
+    check_services(config, services)?;
 
     if !config.quiet {
         if services.is_empty() {
@@ -209,8 +212,60 @@ pub fn up(
 }
 
 /// Tear the grove down: stop everything and remove its beds.
-pub fn fell(config: &Config, keep_data: bool) -> Result<(), EngineError> {
-    clean(config, keep_data)
+pub fn fell(config: &Config, services: &[String], keep_data: bool) -> Result<(), EngineError> {
+    if services.is_empty() {
+        return clean(config, keep_data);
+    }
+    check_services(config, services)?;
+    let _ = stop_services(config, services);
+    match config.platform.as_str() {
+        "launchd" => crate::platform::launchd::LaunchdPlatform::new().remove(config, services)?,
+        "orchdi" => crate::platform::orchdi::OrchdiPlatform::new().remove(config, services)?,
+        _ => crate::platform::systemd::SystemdPlatform::new().remove(config, services)?,
+    }
+    let _ = std::fs::remove_file(stamp_path(config));
+    if !keep_data {
+        for service in services {
+            let _ = std::fs::remove_dir_all(config.data_dir.join(service));
+        }
+    }
+    if !config.quiet {
+        eprintln!("felled: {}", services.join(", "));
+    }
+    Ok(())
+}
+
+fn stop_services(config: &Config, services: &[String]) -> Result<(), EngineError> {
+    match config.platform.as_str() {
+        "launchd" => crate::platform::launchd::lifecycle::stop(services, config)?,
+        "orchdi" => crate::platform::orchdi::lifecycle::stop(services, config)?,
+        _ => crate::platform::systemd::lifecycle::stop(services, config)?,
+    }
+    Ok(())
+}
+
+fn check_services(config: &Config, services: &[String]) -> Result<(), EngineError> {
+    if services.is_empty() {
+        return Ok(());
+    }
+    let orchfile = parse_orchfile(config)?;
+    let unknown = unknown_services(&orchfile, services);
+    if unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(EngineError::UnknownService(
+            unknown.join(", "),
+            config.orchfile.display().to_string(),
+        ))
+    }
+}
+
+fn unknown_services(orchfile: &OrchFile, services: &[String]) -> Vec<String> {
+    services
+        .iter()
+        .filter(|name| !orchfile.services.iter().any(|s| &s.name == *name))
+        .cloned()
+        .collect()
 }
 
 /// Bring the grove up: generate artifacts, then start (unless `no_start`).
@@ -656,6 +711,33 @@ mod tests {
     fn test_is_up_to_date__no_stamp_means_regenerate() {
         let (cfg, root, _guard) = cache_fixture("nostamp", "plist");
         assert!(!is_up_to_date(&cfg), "no stamp file means not up to date");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_check_services__names_only_the_unknown() {
+        let (cfg, root, _guard) = cache_fixture("check-services", "plist");
+        assert!(check_services(&cfg, &[]).is_ok());
+        assert!(check_services(&cfg, &["web".to_string()]).is_ok());
+        match check_services(&cfg, &["web".to_string(), "db".to_string()]) {
+            Err(EngineError::UnknownService(names, _)) => assert_eq!(names, "db"),
+            other => panic!("expected UnknownService, got {:?}", other),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_fell__unknown_service_touches_nothing() {
+        let (cfg, root, _guard) = cache_fixture("fell-unknown", "plist");
+        write_stamp(&cfg, &[]);
+        let bed = cfg.units_dir().join("orch.web.plist");
+
+        assert!(matches!(
+            fell(&cfg, &["db".to_string()], false),
+            Err(EngineError::UnknownService(..))
+        ));
+        assert!(bed.exists());
+        assert!(stamp_path(&cfg).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

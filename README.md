@@ -60,6 +60,7 @@ use `podman` or `containerd` instead.)
 orchd grow      # start everything
 orchd survey    # see what is running
 orchd logs web  # watch one service
+orchd fell web  # stop one service and clean it up
 orchd fell      # stop everything and clean up
 ```
 

@@ -37,4 +37,6 @@ pub trait Platform {
 
     /// Remove all generated artifacts and unlink from system dirs.
     fn clean(&self, config: &Config) -> Result<(), PlatformError>;
+
+    fn remove(&self, config: &Config, services: &[String]) -> Result<(), PlatformError>;
 }

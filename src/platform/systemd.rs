@@ -120,6 +120,27 @@ impl Platform for SystemdPlatform {
         let _ = cmd.arg("daemon-reload").status();
         Ok(())
     }
+
+    fn remove(&self, config: &Config, services: &[String]) -> Result<(), PlatformError> {
+        let units_dir = config.units_dir();
+        let systemd_dir = self.systemd_dir(config);
+        for service in services {
+            for unit in [
+                config.unit_name(service),
+                format!("{}-{}-ready.service", config.namespace, service),
+            ] {
+                let _ = std::fs::remove_file(systemd_dir.join(&unit));
+                let _ = std::fs::remove_file(units_dir.join(&unit));
+            }
+        }
+
+        let mut cmd = std::process::Command::new("systemctl");
+        if config.scope.is_user() {
+            cmd.arg("--user");
+        }
+        let _ = cmd.arg("daemon-reload").status();
+        Ok(())
+    }
 }
 
 impl SystemdPlatform {
