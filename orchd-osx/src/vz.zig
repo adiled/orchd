@@ -136,8 +136,8 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, id: []const u8, image: []co
     var mounts: std.ArrayList(proto.Mount) = .empty;
     for (ov.volumes, 0..) |vol, i| {
         const tag_s = std.fmt.allocPrint(arena, "vol{d}", .{i}) catch continue;
-        const tag = arena.dupeZ(u8, tag_s) catch continue;
-        const host = arena.dupeZ(u8, vol.source) catch continue;
+        const tag = arena.dupeSentinel(u8, tag_s, 0) catch continue;
+        const host = arena.dupeSentinel(u8, vol.source, 0) catch continue;
         shares.append(arena, .{ .tag = tag, .host_path = host }) catch continue;
         mounts.append(arena, .{ .tag = tag, .dest = vol.destination }) catch continue;
     }
@@ -235,7 +235,7 @@ pub fn runRootfs(
     // interface: run holds the container, stop ends it.
     const pidfile = std.fmt.allocPrint(allocator, "{s}/pid", .{work}) catch null;
     if (pidfile) |pf| {
-        const pfz = allocator.dupeZ(u8, pf) catch null;
+        const pfz = allocator.dupeSentinel(u8, pf, 0) catch null;
         allocator.free(pf);
         if (pfz) |z| {
             g_pidfile = z;
@@ -265,9 +265,9 @@ pub fn runRootfs(
     // 2. Boot the VM (kernel + initramfs; no block-device root).
     const kpath = kernel.kernelPath(allocator) catch return Error.BootFailed;
     defer allocator.free(kpath);
-    const kpath_z = try allocator.dupeZ(u8, kpath);
+    const kpath_z = try allocator.dupeSentinel(u8, kpath, 0);
     defer allocator.free(kpath_z);
-    const cpio_z = try allocator.dupeZ(u8, cpio_path);
+    const cpio_z = try allocator.dupeSentinel(u8, cpio_path, 0);
     defer allocator.free(cpio_z);
 
     var machine = vm.boot(.{

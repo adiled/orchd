@@ -52,7 +52,7 @@ pub const Client = struct {
         id: []const u8,
         timeout_secs: i32,
     ) xpc.XpcError!void {
-        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        const id_z = allocator.dupeSentinel(u8, id, 0) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(id_z);
 
         // ContainerStopOptions @ 0.12.3 { timeoutInSeconds: Int32, signal: Int32 }
@@ -82,7 +82,7 @@ pub const Client = struct {
         id: []const u8,
         force: bool,
     ) xpc.XpcError!void {
-        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        const id_z = allocator.dupeSentinel(u8, id, 0) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(id_z);
 
         const req = xpc.Message.init(xpc.Route.container_delete);
@@ -145,7 +145,7 @@ pub const Client = struct {
         options_json: []const u8,
         init_image: []const u8,
     ) xpc.XpcError!void {
-        const init_z = allocator.dupeZ(u8, init_image) catch return xpc.XpcError.ConnectionFailed;
+        const init_z = allocator.dupeSentinel(u8, init_image, 0) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(init_z);
 
         const req = xpc.Message.init(xpc.Route.container_create);
@@ -163,7 +163,7 @@ pub const Client = struct {
     /// containerBootstrap: create the container's init process, wiring stdio.
     /// `stdio_fd` is used for stdin/stdout/stderr (e.g. an open /dev/null fd).
     pub fn containerBootstrap(self: Client, allocator: std.mem.Allocator, id: []const u8, stdio_fd: c_int) xpc.XpcError!void {
-        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        const id_z = allocator.dupeSentinel(u8, id, 0) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(id_z);
 
         const req = xpc.Message.init(xpc.Route.container_bootstrap);
@@ -181,7 +181,7 @@ pub const Client = struct {
 
     /// containerStartProcess: start the init process (processIdentifier == id).
     pub fn containerStartProcess(self: Client, allocator: std.mem.Allocator, id: []const u8) xpc.XpcError!void {
-        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        const id_z = allocator.dupeSentinel(u8, id, 0) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(id_z);
 
         const req = xpc.Message.init(xpc.Route.container_start_process);
@@ -197,7 +197,7 @@ pub const Client = struct {
     /// containerWait: block until the container's init process exits; returns its
     /// exit code. This is the foreground process the supervisor tracks.
     pub fn containerWait(self: Client, allocator: std.mem.Allocator, id: []const u8) xpc.XpcError!i64 {
-        const id_z = allocator.dupeZ(u8, id) catch return xpc.XpcError.ConnectionFailed;
+        const id_z = allocator.dupeSentinel(u8, id, 0) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(id_z);
 
         const req = xpc.Message.init(xpc.Route.container_wait);
@@ -219,7 +219,7 @@ pub fn contentGet(allocator: std.mem.Allocator, io: std.Io, digest: []const u8) 
     const conn = xpc.Connection.initService(xpc.IMAGES_SERVICE);
     defer conn.close();
 
-    const dig_z = allocator.dupeZ(u8, digest) catch return xpc.XpcError.ConnectionFailed;
+    const dig_z = allocator.dupeSentinel(u8, digest, 0) catch return xpc.XpcError.ConnectionFailed;
     defer allocator.free(dig_z);
 
     const req = xpc.Message.init(xpc.Route.content_get);

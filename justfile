@@ -3,7 +3,7 @@
 # Cross-platform: on macOS it also builds the Apple container runtimes (orchd-apple,
 # orchd-osx) and fetches the kernel; on Linux it builds just orchd (the systemd +
 # podman/containerd path needs no extra binaries). Requires rust (cargo); macOS
-# also needs zig 0.16 + zstd/curl for the kernel. Install just with `brew install just`.
+# also needs zig 0.17.1 + zstd/curl for the kernel. Install just with `brew install just`.
 
 set shell := ["bash", "-uc"]
 

@@ -134,7 +134,7 @@ fn reportIp(conn: fd_t) void {
     defer _ = linux.close(sock);
 
     // struct ifreq: char ifr_name[16]; union { sockaddr ifr_addr; ... } (16 B).
-    var req: [40]u8 = [_]u8{0} ** 40;
+    var req: [40]u8 = @splat(0);
     const name = "eth0";
     @memcpy(req[0..name.len], name);
 
@@ -415,7 +415,7 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
             var pit = std.mem.tokenizeScalar(u8, path_env, ':');
             var pbuf: [4096]u8 = undefined;
             while (pit.next()) |dir| {
-                const full = std.fmt.bufPrintZ(&pbuf, "{s}/{s}", .{ dir, cmd0 }) catch continue;
+                const full = std.fmt.bufPrintSentinel(&pbuf, "{s}/{s}", .{ dir, cmd0 }, 0) catch continue;
                 _ = linux.execve(full.ptr, argv.ptr, envp.ptr);
             }
         }
@@ -430,9 +430,9 @@ fn runChild(a: std.mem.Allocator, conn: fd_t, spec: proto.ExecSpec) !u8 {
     _ = linux.close(out_pipe[0]);
     _ = linux.close(err_pipe[0]);
 
-    var status: u32 = 0;
+    var status: i32 = 0;
     if (linux.errno(linux.wait4(pid, &status, 0, null)) != .SUCCESS) return error.WaitFailed;
-    return exitCode(status);
+    return exitCode(@bitCast(status));
 }
 
 /// Drain both pipes concurrently via poll(), forwarding each chunk as a Stdout

@@ -819,7 +819,7 @@ fn fetchToken(allocator: std.mem.Allocator, io: std.Io, registry: []const u8, re
     defer allocator.free(headers);
 
     const chal = findHeader(headers, "www-authenticate") orelse return null; // 200 -> anonymous
-    if (std.ascii.indexOfIgnoreCase(chal, "bearer") == null) return null;
+    if (std.ascii.findIgnoreCase(chal, "bearer") == null) return null;
     const realm = extractAuthParam(allocator, chal, "realm") orelse return Error.AuthFailed;
 
     // realm?scope=repository:<repo>:pull[&service=<service>]
@@ -866,7 +866,7 @@ fn findHeader(headers: []const u8, name: []const u8) ?[]const u8 {
 fn extractAuthParam(allocator: std.mem.Allocator, chal: []const u8, key: []const u8) ?[]const u8 {
     const needle = std.fmt.allocPrint(allocator, "{s}=\"", .{key}) catch return null;
     defer allocator.free(needle);
-    const start = std.ascii.indexOfIgnoreCase(chal, needle) orelse return null;
+    const start = std.ascii.findIgnoreCase(chal, needle) orelse return null;
     const vstart = start + needle.len;
     const end = std.mem.indexOfScalarPos(u8, chal, vstart, '"') orelse return null;
     return chal[vstart..end];
@@ -948,7 +948,7 @@ test "parseConfig: empty config defaults cwd to /" {
 
 // Build a minimal ustar header+data block for one regular file.
 fn tarAppendFile(buf: *std.ArrayList(u8), a: std.mem.Allocator, name: []const u8, content: []const u8) !void {
-    var hdr = [_]u8{0} ** 512;
+    var hdr: [512]u8 = @splat(0);
     @memcpy(hdr[0..name.len], name);
     // mode (octal, 8 bytes incl NUL): 0000644
     _ = std.fmt.bufPrint(hdr[100..108], "0000644\x00", .{}) catch unreachable;

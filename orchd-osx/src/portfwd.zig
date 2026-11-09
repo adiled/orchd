@@ -33,7 +33,7 @@ const sockaddr_in = extern struct {
     family: u8 = AF_INET,
     port: u16, // network byte order
     addr: u32, // network byte order
-    zero: [8]u8 = .{0} ** 8,
+    zero: [8]u8 = @splat(0),
 };
 
 // Well-known, ABI-stable Darwin constants.
