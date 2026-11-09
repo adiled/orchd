@@ -44,9 +44,17 @@ impl OrchdiPlatform {
             let spec = build_supervise_spec(service, exec_set, config, &deps);
             let json = serde_json::to_string_pretty(&spec)
                 .map_err(|e| PlatformError::GenerationFailed(e.to_string()))?;
-            let spec_path = supervise_spec_path(config, &label);
+            let enabled_path = std::path::PathBuf::from(supervise_spec_path(config, &label));
+            let disabled_path = lifecycle::disabled_spec_path(config, &label);
+            let (spec_path, other) = if service.disabled {
+                std::fs::create_dir_all(spec_dir.join("disabled"))?;
+                (disabled_path, enabled_path)
+            } else {
+                (enabled_path, disabled_path)
+            };
+            let _ = std::fs::remove_file(&other);
             std::fs::write(&spec_path, json)?;
-            generated.push(spec_path);
+            generated.push(spec_path.display().to_string());
         }
         Ok(generated)
     }
@@ -74,8 +82,9 @@ impl Platform for OrchdiPlatform {
     fn remove(&self, config: &Config, services: &[String]) -> Result<(), PlatformError> {
         let _ = lifecycle::stop(services, config);
         for service in services {
-            let _ =
-                std::fs::remove_file(supervise_spec_path(config, &service_label(config, service)));
+            let label = service_label(config, service);
+            let _ = std::fs::remove_file(supervise_spec_path(config, &label));
+            let _ = std::fs::remove_file(lifecycle::disabled_spec_path(config, &label));
         }
         Ok(())
     }

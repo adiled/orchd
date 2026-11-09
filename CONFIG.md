@@ -32,8 +32,9 @@ project dir.
   as you, no root. `system` installs to `/Library/LaunchDaemons` or
   `/etc/systemd/system`, runs at boot, needs root.
 - **State dir**: orchd's working folder. It writes generated files to
-  `<state>/units`, `<state>/supervise`, and `<state>/data/<grove>`, then installs them
-  into the scope's directory.
+  `<state>/units`, `<state>/supervise`, and `<state>/data/<grove>`, then installs
+  them into the scope's directory. launchd services log to `<state>/logs` unless
+  the Orchfile sets `STDOUT`/`STDERR`.
 
 ## `.orchrc`
 

@@ -60,18 +60,9 @@ pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), Engine
 
     // 4. Process each enabled service
     let mut exec_sets: Vec<(usize, ExecSet)> = Vec::new();
-    let mut skipped = 0;
     let mut errors = Vec::new();
 
     for (idx, service) in orchfile.services.iter().enumerate() {
-        if service.disabled {
-            skipped += 1;
-            if config.verbose {
-                eprintln!("  skip: {} (disabled)", service.name);
-            }
-            continue;
-        }
-
         lint_service(&config.platform, service);
 
         // Prepare (create data dirs, etc.)
@@ -110,7 +101,10 @@ pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), Engine
         eprintln!(
             "generating {} units ({} disabled)",
             exec_sets.len(),
-            skipped
+            exec_sets
+                .iter()
+                .filter(|(idx, _)| orchfile.services[*idx].disabled)
+                .count()
         );
     }
 

@@ -180,7 +180,8 @@ impl SystemdPlatform {
         }
 
         // Generate target
-        let target_content = generate_target(config);
+        let planted: Vec<&Service> = exec_sets.iter().map(|(idx, _)| &services[*idx]).collect();
+        let target_content = generate_target(config, &planted);
         let target_path = units_dir.join(config.target_name());
         std::fs::write(&target_path, &target_content)?;
         generated.push(target_path.display().to_string());

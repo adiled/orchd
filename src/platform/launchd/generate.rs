@@ -20,9 +20,7 @@ pub fn generate_service_plist_with_deps(
     deps: &[DepGate],
 ) -> String {
     let label = service_label(config, &service.name);
-    let log_dir = log_dir(config);
-    let stdout_path = format!("{}/{}.out.log", log_dir, label);
-    let stderr_path = format!("{}/{}.err.log", log_dir, label);
+    let (stdout_path, stderr_path) = default_log_paths(config, &service.name);
 
     let mut p = String::with_capacity(1024);
 
@@ -213,13 +211,16 @@ pub fn plist_filename(config: &Config, service_name: &str) -> String {
     format!("{}.plist", service_label(config, service_name))
 }
 
-fn log_dir(config: &Config) -> String {
-    if config.scope.is_user() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        format!("{}/Library/Logs", home)
-    } else {
-        "/Library/Logs".to_string()
-    }
+pub fn default_log_paths(config: &Config, service_name: &str) -> (String, String) {
+    let dir = config.state_dir.join("logs");
+    (
+        dir.join(format!("{}.log", service_name))
+            .display()
+            .to_string(),
+        dir.join(format!("{}.err", service_name))
+            .display()
+            .to_string(),
+    )
 }
 
 fn resolve_path(path: &str, project_dir: &std::path::Path) -> String {
@@ -424,16 +425,43 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_service_plist__default_log_paths_user_scope() {
+    fn test_generate_all__disabled_beds_are_planted_apart() {
+        let root = std::env::temp_dir().join("orchd-disabled-beds");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut cfg = test_config();
+        cfg.state_dir = root.clone();
+        let mut db = simple_host_service("db", "x");
+        db.disabled = true;
+        let mut services = vec![simple_host_service("web", "x"), db];
+        let exec_sets = vec![(0, simple_exec_set("x")), (1, simple_exec_set("x"))];
+        let platform = crate::platform::launchd::LaunchdPlatform::new();
+        let units = cfg.units_dir();
+
+        platform.generate_all(&services, &exec_sets, &cfg).unwrap();
+        assert!(units.join("orch.web.plist").exists());
+        assert!(units.join("disabled/orch.db.plist").exists());
+        assert!(!units.join("orch.db.plist").exists());
+        assert!(root.join("logs").is_dir());
+
+        services[0].disabled = true;
+        services[1].disabled = false;
+        platform.generate_all(&services, &exec_sets, &cfg).unwrap();
+        assert!(units.join("disabled/orch.web.plist").exists());
+        assert!(!units.join("orch.web.plist").exists());
+        assert!(units.join("orch.db.plist").exists());
+        assert!(!units.join("disabled/orch.db.plist").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_generate_service_plist__default_log_paths_follow_the_spec() {
         let cfg = test_config();
         let svc = simple_host_service("web", "x");
         let exec = simple_exec_set("x");
         let p = generate_service_plist(&svc, &exec, &cfg);
 
-        assert!(p.contains("<key>StandardOutPath</key>"));
-        assert!(p.contains("orch.web.out.log"));
-        assert!(p.contains("orch.web.err.log"));
-        assert!(p.contains("/Library/Logs/"));
+        assert!(p.contains("<string>/test/.orch/logs/web.log</string>"));
+        assert!(p.contains("<string>/test/.orch/logs/web.err</string>"));
     }
 
     #[test]
@@ -444,8 +472,8 @@ mod tests {
         let exec = simple_exec_set("x");
         let p = generate_service_plist(&svc, &exec, &cfg);
 
-        assert!(p.contains("<string>/Library/Logs/orch.web.out.log</string>"));
-        assert!(p.contains("<string>/Library/Logs/orch.web.err.log</string>"));
+        assert!(p.contains("<string>/test/.orch/logs/web.log</string>"));
+        assert!(p.contains("<string>/test/.orch/logs/web.err</string>"));
     }
 
     #[test]
