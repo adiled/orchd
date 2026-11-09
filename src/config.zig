@@ -24,6 +24,7 @@ pub const Config = struct {
     data_dir: []const u8,
     grove: []const u8 = "orch",
     home: []const u8 = "/root",
+    xdg_config_home: ?[]const u8 = null,
     args: []const []const u8 = &.{},
     verbose: bool = false,
     quiet: bool = false,

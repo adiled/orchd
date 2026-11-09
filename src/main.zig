@@ -58,4 +58,5 @@ test {
     _ = @import("rootstock.zig");
     _ = @import("platform/orchdi.zig");
     _ = @import("platform/launchd.zig");
+    _ = @import("platform/systemd.zig");
 }

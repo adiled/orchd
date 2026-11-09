@@ -53,6 +53,7 @@ pub fn load(arena: Allocator, io: Io, environ: *const Environ.Map, global: Globa
             try std.fs.path.join(arena, &.{ state_dir, "data", grove }),
         .grove = grove,
         .home = home,
+        .xdg_config_home = environ.get("XDG_CONFIG_HOME"),
         .args = global.arg,
         .verbose = global.verbose,
         .quiet = global.quiet,
