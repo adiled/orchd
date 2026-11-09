@@ -5,7 +5,7 @@ mod exec;
 mod orchard;
 mod orchdi;
 mod platform;
-mod runtime;
+mod rootstock;
 mod types;
 
 use clap::Parser;

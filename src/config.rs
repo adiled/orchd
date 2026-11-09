@@ -26,8 +26,8 @@ pub struct Config {
     pub orchfile: PathBuf,
     /// Overlay files applied on top of the Orchfile.
     pub overlays: Vec<PathBuf>,
-    /// Runtime name: bare, containerd, podman, apple.
-    pub runtime: String,
+    /// Rootstock name: bare, apple, or any orchd-rootstock-<name> on PATH.
+    pub rootstock: String,
     /// Platform name: systemd, launchd.
     pub platform: String,
     /// Scope: System (default, /etc/systemd/system) or User (~/.config/systemd/user, launchd LaunchAgents).
@@ -52,7 +52,7 @@ impl Config {
     /// Build config by merging CLI args > environment > .orchrc > defaults.
     ///
     /// `.orchrc` is a KEY=VALUE file searched in project_dir then HOME.
-    /// Supported keys: `runtime`, `platform`, `grove`, `state_dir`,
+    /// Supported keys: `rootstock`, `platform`, `grove`, `state_dir`,
     /// `data_dir`, `orchfile`.
     pub fn load(cli: &crate::cli::Cli) -> Self {
         // project_dir is resolved first (it locates .orchrc), so it gets
@@ -87,9 +87,13 @@ impl Config {
         let data_dir = path_setting(cli.data_dir.as_ref(), "ORCH_DATA", &rc, "data_dir", || {
             state_dir.join("data").join(&grove)
         });
-        let runtime = str_setting(cli.runtime.as_ref(), "ORCH_RUNTIME", &rc, "runtime", || {
-            "bare".to_string()
-        });
+        let rootstock = str_setting(
+            cli.rootstock.as_ref(),
+            "ORCH_ROOTSTOCK",
+            &rc,
+            "rootstock",
+            || "bare".to_string(),
+        );
         let platform = str_setting(
             cli.platform.as_ref(),
             "ORCH_PLATFORM",
@@ -113,7 +117,7 @@ impl Config {
         Config {
             orchfile,
             overlays: cli.overlay.clone(),
-            runtime,
+            rootstock,
             platform,
             scope,
             state_dir,
@@ -247,7 +251,7 @@ mod tests {
             command: Commands::Survey { json: false },
             orchfile: None,
             overlay: vec![],
-            runtime: None,
+            rootstock: None,
             platform: None,
             state_dir: None,
             project_dir: None,
@@ -262,12 +266,12 @@ mod tests {
     }
 
     #[test]
-    fn test_load__defaults_runtime_to_bare() {
+    fn test_load__defaults_rootstock_to_bare() {
         let cli = stub_cli();
         // Clear env to ensure defaults
-        unsafe { std::env::remove_var("ORCH_RUNTIME") };
+        unsafe { std::env::remove_var("ORCH_ROOTSTOCK") };
         let config = Config::load(&cli);
-        assert_eq!(config.runtime, "bare");
+        assert_eq!(config.rootstock, "bare");
     }
 
     #[test]
@@ -279,11 +283,11 @@ mod tests {
     }
 
     #[test]
-    fn test_load__cli_runtime_overrides_default() {
+    fn test_load__cli_rootstock_overrides_default() {
         let mut cli = stub_cli();
-        cli.runtime = Some("containerd".to_string());
+        cli.rootstock = Some("containerd".to_string());
         let config = Config::load(&cli);
-        assert_eq!(config.runtime, "containerd");
+        assert_eq!(config.rootstock, "containerd");
     }
 
     #[test]
@@ -407,18 +411,18 @@ mod tests {
 
     #[test]
     fn test_parse_orchrc__basic_key_value() {
-        let content = "runtime=bare\ngrove=myapp\n";
+        let content = "rootstock=bare\ngrove=myapp\n";
         let rc = parse_orchrc(content);
-        assert_eq!(rc.get("runtime").unwrap(), "bare");
+        assert_eq!(rc.get("rootstock").unwrap(), "bare");
         assert_eq!(rc.get("grove").unwrap(), "myapp");
     }
 
     #[test]
     fn test_parse_orchrc__comments_and_blanks_ignored() {
-        let content = "# comment\n\nruntime=bare\n  # another comment\n";
+        let content = "# comment\n\nrootstock=bare\n  # another comment\n";
         let rc = parse_orchrc(content);
         assert_eq!(rc.len(), 1);
-        assert_eq!(rc.get("runtime").unwrap(), "bare");
+        assert_eq!(rc.get("rootstock").unwrap(), "bare");
     }
 
     #[test]
@@ -430,9 +434,9 @@ mod tests {
 
     #[test]
     fn test_parse_orchrc__whitespace_trimmed() {
-        let content = "  runtime = bare  \n";
+        let content = "  rootstock = bare  \n";
         let rc = parse_orchrc(content);
-        assert_eq!(rc.get("runtime").unwrap(), "bare");
+        assert_eq!(rc.get("rootstock").unwrap(), "bare");
     }
 
     #[test]

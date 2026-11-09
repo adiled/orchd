@@ -18,13 +18,13 @@ without forking orchd. If they can, orchd fits any orchard anyone designs.
 
 ```
 Orchfiles --graft--> spec --sow--> cuttings --plant--> beds --tend--> trees (in a grove)
-         (compose)        (runtime)         (platform)         (init system)
+         (compose)        (rootstock)       (platform)         (init system)
 ```
 
 | Stage | Verb | Transform | Owner |
 |-------|------|-----------|-------|
 | compose overlays | **graft** | base + overlays + args into one merged spec | `orch` (the parser) |
-| runtime | **sow** | spec into a cutting per service (service + its ExecSet) | `orchd sow` |
+| rootstock | **sow** | spec into a cutting per service (service + its ExecSet) | `orchd sow` |
 | platform | **plant** | cuttings into beds (each service's native files) | `orchd plant` |
 | activate + supervise | **tend** | install + start; keep alive | `orchd tend` |
 
@@ -32,7 +32,10 @@ Why the words earn their place:
 - **graft**: joining plant tissues, exactly what overlay merge is (the spec's
   "systemd drop-in inspired" model).
 - **sow**: choose the growing method and prepare each thing to be planted; the
-  runtime deciding bare-soil vs container.
+  rootstock deciding bare-soil vs container.
+- **rootstock**: the root system a tree is grafted onto, which is what actually
+  runs it. The same service runs as a bare process, in a container or in a VM
+  depending on its rootstock, and is the same service on each.
 - **plant**: put it in ground the OS understands, a systemd unit or launchd plist.
 - **tend**: keep it alive. `orchd tend <service>` *is* the supervisor leaf.
 
@@ -44,17 +47,41 @@ don't map to a real transform. `logs` stays `logs`.
 Each row reads JSON on stdin, writes JSON on stdout, takes only its own stage's
 flags, and is stateless. Only `tend` has side effects.
 
-### `orchd sow --runtime <name>`
+### `orchd sow --rootstock <name>`
 
-Runtime transform. Takes a cutting of each service: the service plus the
-execution commands for the chosen runtime. Pure: no image pulls, no I/O. (Pulls
+Rootstock transform. Takes a cutting of each service: the service plus the
+execution commands for the chosen rootstock. Pure: no image pulls, no I/O. (Pulls
 become a `pre_start` command, run later at tend time.)
 
 ```
 stdin:   Spec        (the `orch parse` JSON)
 stdout:  Cuttings
-flags:   --runtime {bare|apple|containerd|podman}
+flags:   --rootstock {bare|apple|<name>}
 ```
+
+#### Bring your own rootstock
+
+A rootstock that is not built in is an executable named `orchd-rootstock-<name>`
+on `PATH`. orchd calls it with one verb at a time:
+
+```
+orchd-rootstock-<name> contract   stdout: the contract versions it speaks, e.g. 1
+orchd-rootstock-<name> check      exit 0 if it can run on this machine
+orchd-rootstock-<name> prepare    stdin: Envelope  (pull an image, make a dir, ...)
+orchd-rootstock-<name> exec-set   stdin: Envelope  stdout: ExecSet
+```
+
+```json
+{ "contract": 1, "grove": "orch", "project_dir": "...", "data_dir": "...",
+  "state_dir": "...", "service": { "name": "web", "...": "one service of the Spec" } }
+```
+
+Contract 1 is that envelope and the ExecSet below: `start`, and optionally
+`pre_start`, `stop` and `post_stop`. `start` is the plain command that becomes the
+running tree; orchd runs it with `exec`, so it must not `exec` itself. A non-zero
+exit fails the verb, with the rootstock's stderr as the reason. What the
+ExecSet's commands do when they run is the rootstock's own business; orchd plants
+and tends them without knowing.
 
 ### `orchd plant --platform <name> --grove <grove>`
 
@@ -110,14 +137,14 @@ The merged Orchfile, emitted by `orch parse`. Abbreviated:
 
 ### Cuttings (sow to plant)
 
-A cutting per service: the service paired to its ExecSet. The runtime's knowledge
+A cutting per service: the service paired to its ExecSet. The rootstock's knowledge
 is now fully captured in command strings; `plant` never needs to know which
-runtime ran.
+rootstock ran.
 
 ```json
 {
   "version": "0.2.1",
-  "runtime": "apple",
+  "rootstock": "apple",
   "cuttings": [
     {
       "service": { "...": "the full Service object from the spec" },
@@ -132,7 +159,7 @@ runtime ran.
 }
 ```
 
-`exec` is the orthogonality contract: every runtime writes it, every platform reads
+`exec` is the orthogonality contract: every rootstock writes it, every platform reads
 it, neither knows the other. (This is why `ExecSet` is serde-serializable.)
 
 ### Beds (plant to tend)
@@ -194,7 +221,7 @@ A consuming project inserts its own intelligence between any two rows:
 
 ```sh
 orch parse base.orch staging.orch --arg env=staging \
-  | orchd sow --runtime apple \
+  | orchd sow --rootstock apple \
   | jq '.cuttings |= map(select(.service.disabled | not))' \   # their policy, not orchd's
   | my-secret-injector \                                       # their step
   | orchd plant --platform launchd --grove staging \
@@ -213,7 +240,7 @@ unchanged and remains the common path.
 
 | Concern | Implementation | Row |
 |---------|----------------|-----|
-| runtime transform | `runtime::exec_set` | `orchd sow` (pure pipe, shipped) |
+| rootstock transform | `rootstock::exec_set` | `orchd sow` (pure pipe, shipped) |
 | platform transform | `platform` generators | `orchd plant` (pure pipe, shipped) |
 | activation | write + `install` + `start` | `orchd tend` (shipped) |
 | image pull | `pre_start` command run at tend | (no eager prepare in the rows) |
@@ -224,14 +251,14 @@ Worked end to end on a real Mac:
 
 ```sh
 orch parse Orchfile \
-  | orchd --runtime bare  sow \
+  | orchd --rootstock bare  sow \
   | jq '.cuttings |= map(select(.service.name != "worker"))' \   # a grower's own step
   | orchd --platform launchd --grove orch --user plant \
   | orchd --platform launchd --grove orch --user tend     # service running under launchd
 ```
 
 Two contracts to remember when piping by hand:
-- `sow` is the only stage that takes `--runtime`; `plant`/`tend` take `--platform`.
+- `sow` is the only stage that takes `--rootstock`; `plant`/`tend` take `--platform`.
 - `plant` bakes absolute paths into each artifact from its config, so `plant` and
   `tend` must be given the same `--grove` / `--scope` / `--state-dir`. The
   porcelain and any single flag set do this for you.

@@ -334,7 +334,7 @@ mod tests {
         Config {
             orchfile: PathBuf::from("/test/Orchfile"),
             overlays: Vec::new(),
-            runtime: "bare".to_string(),
+            rootstock: "bare".to_string(),
             platform: "systemd".to_string(),
             scope: crate::config::Scope::System,
             state_dir: PathBuf::from("/test/.orch"),

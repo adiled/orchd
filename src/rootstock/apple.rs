@@ -1,6 +1,6 @@
-//! Apple container runtime — a thin envelope over three operating modes.
+//! Apple container rootstock — a thin envelope over three operating modes.
 //!
-//! The `apple` runtime is one Rust shell with three interchangeable backends.
+//! The `apple` rootstock is one Rust shell with three interchangeable backends.
 //! All three turn a container Service into the same `ExecSet` contract; they
 //! differ only in HOW the container is actually run:
 //!
@@ -8,7 +8,7 @@
 //!                       in Rust as plain `container run/stop/delete` strings.
 //!   2. OrchdApple    — co-process `orchd-apple`, driving the pinned daemon
 //!                       directly over XPC (no CLI). Current default.
-//!   3. OrchdOsx      — co-process `orchd-osx`, a from-scratch runtime built on
+//!   3. OrchdOsx      — co-process `orchd-osx`, a from-scratch rootstock built on
 //!                       Virtualization.framework (no daemon, no Swift linked).
 //!
 //! Modes 2 and 3 are the same code path from Rust's side: spawn a co-process
@@ -29,17 +29,17 @@ use std::process::{Command, Stdio};
 
 use crate::config::Config;
 use crate::exec::ExecSet;
-use crate::runtime::{Runtime, RuntimeError};
+use crate::rootstock::{Rootstock, RootstockError};
 use crate::types::Service;
 
-/// Which backend actually runs containers for the `apple` runtime.
+/// Which backend actually runs containers for the `apple` rootstock.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AppleMode {
     /// Shell out to Apple's `container` CLI.
     ContainerCli,
     /// Co-process `orchd-apple`: drive the pinned daemon over XPC.
     OrchdApple,
-    /// Co-process `orchd-osx`: from-scratch Virtualization.framework runtime.
+    /// Co-process `orchd-osx`: from-scratch Virtualization.framework rootstock.
     OrchdOsx,
 }
 
@@ -75,7 +75,7 @@ impl AppleMode {
     }
 }
 
-pub struct AppleRuntime {
+pub struct AppleRootstock {
     /// Selected backend.
     mode: AppleMode,
     /// Co-process binary path (None in ContainerCli mode).
@@ -87,14 +87,14 @@ pub struct AppleRuntime {
     project_dir: PathBuf,
 }
 
-impl AppleRuntime {
+impl AppleRootstock {
     pub fn new(config: &Config) -> Self {
         let mode = AppleMode::from_env();
         let bin = mode
             .binary()
             .map(|(name, env_var)| resolve_bin(name, env_var));
 
-        AppleRuntime {
+        AppleRootstock {
             mode,
             bin,
             grove: config.grove.clone(),
@@ -109,7 +109,7 @@ impl AppleRuntime {
 
     /// Spawn the co-process `<bin> <subcommand> [grove]` with `input` on
     /// stdin. Returns stdout on success. Used by OrchdApple / OrchdOsx modes.
-    fn call(&self, subcommand: &str, input: Option<&[u8]>) -> Result<String, RuntimeError> {
+    fn call(&self, subcommand: &str, input: Option<&[u8]>) -> Result<String, RootstockError> {
         let bin = self
             .bin
             .as_ref()
@@ -125,23 +125,23 @@ impl AppleRuntime {
         // stderr is inherited so orchd's terminal shows pull progress, etc.
 
         let mut child = cmd.spawn().map_err(|e| {
-            RuntimeError::BinaryNotFound(format!("could not spawn '{}': {e}", bin.display()))
+            RootstockError::BinaryNotFound(format!("could not spawn '{}': {e}", bin.display()))
         })?;
 
         if let Some(bytes) = input {
             let stdin = child.stdin.as_mut().expect("stdin piped");
             stdin.write_all(bytes).map_err(|e| {
-                RuntimeError::Other(format!("failed to write to co-process stdin: {e}"))
+                RootstockError::Other(format!("failed to write to co-process stdin: {e}"))
             })?;
         }
 
         let output = child
             .wait_with_output()
-            .map_err(|e| RuntimeError::Other(format!("co-process wait failed: {e}")))?;
+            .map_err(|e| RootstockError::Other(format!("co-process wait failed: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(RuntimeError::Other(format!(
+            return Err(RootstockError::Other(format!(
                 "{} {subcommand} failed (exit {}): {}",
                 bin.display(),
                 output.status.code().unwrap_or(-1),
@@ -150,49 +150,49 @@ impl AppleRuntime {
         }
 
         String::from_utf8(output.stdout)
-            .map_err(|e| RuntimeError::Other(format!("co-process stdout is invalid UTF-8: {e}")))
+            .map_err(|e| RootstockError::Other(format!("co-process stdout is invalid UTF-8: {e}")))
     }
 
     // ── Mode 1: container CLI ──────────────────────────────────────────────
 
     /// Liveness via the `container` CLI: `container ls` requires a live daemon.
-    fn cli_check(&self) -> Result<(), RuntimeError> {
+    fn cli_check(&self) -> Result<(), RootstockError> {
         let status = Command::new("container")
             .arg("ls")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .map_err(|e| {
-                RuntimeError::BinaryNotFound(format!("could not spawn 'container': {e}"))
+                RootstockError::BinaryNotFound(format!("could not spawn 'container': {e}"))
             })?;
         if status.success() {
             Ok(())
         } else {
-            Err(RuntimeError::Other(
+            Err(RootstockError::Other(
                 "container CLI/daemon not reachable (run: container system start)".to_string(),
             ))
         }
     }
 
-    fn cli_prepare(&self, service: &Service) -> Result<(), RuntimeError> {
+    fn cli_prepare(&self, service: &Service) -> Result<(), RootstockError> {
         let image = self.require_image(service)?;
         let status = Command::new("container")
             .args(["image", "pull", image])
             .status()
             .map_err(|e| {
-                RuntimeError::BinaryNotFound(format!("could not spawn 'container': {e}"))
+                RootstockError::BinaryNotFound(format!("could not spawn 'container': {e}"))
             })?;
         if status.success() {
             Ok(())
         } else {
-            Err(RuntimeError::Other(format!(
+            Err(RootstockError::Other(format!(
                 "container image pull {image} failed"
             )))
         }
     }
 
     /// Generate the `container` CLI ExecSet (the historical mode-1 path).
-    fn cli_exec_set(&self, service: &Service) -> Result<ExecSet, RuntimeError> {
+    fn cli_exec_set(&self, service: &Service) -> Result<ExecSet, RootstockError> {
         let image = self.require_image(service)?;
         let name = self.container_name(service);
 
@@ -256,9 +256,9 @@ impl AppleRuntime {
 
     // ── Shared helpers ─────────────────────────────────────────────────────
 
-    fn require_image<'a>(&self, service: &'a Service) -> Result<&'a str, RuntimeError> {
+    fn require_image<'a>(&self, service: &'a Service) -> Result<&'a str, RootstockError> {
         service.image.as_deref().ok_or_else(|| {
-            RuntimeError::Other(format!(
+            RootstockError::Other(format!(
                 "service '{}' is container-mode but has no FROM image",
                 service.name
             ))
@@ -274,20 +274,20 @@ impl AppleRuntime {
     }
 
     /// Host-mode services are handled identically across all three modes:
-    /// they pass through as a plain process, same as the bare runtime.
-    fn host_prepare(&self, service: &Service) -> Result<(), RuntimeError> {
+    /// they pass through as a plain process, same as the bare rootstock.
+    fn host_prepare(&self, service: &Service) -> Result<(), RootstockError> {
         let service_data = self.data_dir.join(&service.name);
         std::fs::create_dir_all(&service_data).map_err(|e| {
-            RuntimeError::Other(format!(
+            RootstockError::Other(format!(
                 "failed to create data directory '{}': {e}",
                 service_data.display()
             ))
         })
     }
 
-    fn host_exec_set(&self, service: &Service) -> Result<ExecSet, RuntimeError> {
+    fn host_exec_set(&self, service: &Service) -> Result<ExecSet, RootstockError> {
         let start = service.run_command.clone().ok_or_else(|| {
-            RuntimeError::Other(format!(
+            RootstockError::Other(format!(
                 "service '{}' is host-mode but has no RUN command",
                 service.name
             ))
@@ -301,44 +301,44 @@ impl AppleRuntime {
     }
 }
 
-impl Runtime for AppleRuntime {
+impl Rootstock for AppleRootstock {
     fn name(&self) -> &str {
         "apple"
     }
 
-    fn check(&self) -> Result<(), RuntimeError> {
+    fn check(&self) -> Result<(), RootstockError> {
         match self.mode {
             AppleMode::ContainerCli => self.cli_check(),
             AppleMode::OrchdApple | AppleMode::OrchdOsx => self.call("check", None).map(|_| ()),
         }
     }
 
-    fn prepare(&self, service: &Service) -> Result<(), RuntimeError> {
+    fn prepare(&self, service: &Service) -> Result<(), RootstockError> {
         if service.is_host() {
             return self.host_prepare(service);
         }
         match self.mode {
             AppleMode::ContainerCli => self.cli_prepare(service),
             AppleMode::OrchdApple | AppleMode::OrchdOsx => {
-                let service_json =
-                    serde_json::to_vec(service).map_err(|e| RuntimeError::Other(e.to_string()))?;
+                let service_json = serde_json::to_vec(service)
+                    .map_err(|e| RootstockError::Other(e.to_string()))?;
                 self.call("prepare", Some(&service_json)).map(|_| ())
             }
         }
     }
 
-    fn exec_set(&self, service: &Service) -> Result<ExecSet, RuntimeError> {
+    fn exec_set(&self, service: &Service) -> Result<ExecSet, RootstockError> {
         if service.is_host() {
             return self.host_exec_set(service);
         }
         match self.mode {
             AppleMode::ContainerCli => self.cli_exec_set(service),
             AppleMode::OrchdApple | AppleMode::OrchdOsx => {
-                let service_json =
-                    serde_json::to_vec(service).map_err(|e| RuntimeError::Other(e.to_string()))?;
+                let service_json = serde_json::to_vec(service)
+                    .map_err(|e| RootstockError::Other(e.to_string()))?;
                 let stdout = self.call("exec-set", Some(&service_json))?;
                 serde_json::from_str::<ExecSet>(&stdout).map_err(|e| {
-                    RuntimeError::Other(format!(
+                    RootstockError::Other(format!(
                         "failed to deserialize ExecSet from co-process: {e}\nraw: {stdout}"
                     ))
                 })
@@ -366,8 +366,8 @@ fn resolve_bin(binary: &str, env_var: &str) -> PathBuf {
 mod tests {
     use super::*;
 
-    fn runtime(mode: AppleMode, bin: Option<PathBuf>) -> AppleRuntime {
-        AppleRuntime {
+    fn rootstock(mode: AppleMode, bin: Option<PathBuf>) -> AppleRootstock {
+        AppleRootstock {
             mode,
             bin,
             grove: "orch".to_string(),
@@ -412,7 +412,7 @@ mod tests {
     /// Mode 1 generates the container CLI ExecSet purely in Rust (no co-process).
     #[test]
     fn test_cli_exec_set__generates_container_commands() {
-        let rt = runtime(AppleMode::ContainerCli, None);
+        let rt = rootstock(AppleMode::ContainerCli, None);
         let mut svc: Service = serde_json::from_str(STUB_CONTAINER).unwrap();
         svc.name = "postgres".into();
         svc.image = Some("postgres:15".into());
@@ -455,7 +455,7 @@ mod tests {
             eprintln!("skipping: orchd-apple binary not built");
             return;
         };
-        let rt = runtime(AppleMode::OrchdApple, Some(bin));
+        let rt = rootstock(AppleMode::OrchdApple, Some(bin));
 
         let mut svc: Service = serde_json::from_str(STUB_CONTAINER).unwrap();
         svc.name = "postgres".into();
@@ -488,7 +488,7 @@ mod tests {
     /// Host-mode services pass through unchanged in every mode.
     #[test]
     fn test_host_mode__passthrough() {
-        let rt = runtime(AppleMode::ContainerCli, None);
+        let rt = rootstock(AppleMode::ContainerCli, None);
         let mut svc: Service = serde_json::from_str(STUB_HOST).unwrap();
         svc.run_command = Some("/usr/bin/nginx".into());
 
@@ -507,14 +507,14 @@ mod tests {
 
     #[test]
     fn test_volume_source__relative_host_path_anchors_to_project_dir() {
-        let rt = runtime(AppleMode::ContainerCli, None);
+        let rt = rootstock(AppleMode::ContainerCli, None);
         assert_eq!(rt.volume_source(&volume("./data", false)), "/proj/./data");
         assert_eq!(rt.volume_source(&volume("../up", false)), "/proj/../up");
     }
 
     #[test]
     fn test_volume_source__absolute_host_path_untouched() {
-        let rt = runtime(AppleMode::ContainerCli, None);
+        let rt = rootstock(AppleMode::ContainerCli, None);
         assert_eq!(
             rt.volume_source(&volume("/var/lib/pg", false)),
             "/var/lib/pg"
@@ -523,13 +523,13 @@ mod tests {
 
     #[test]
     fn test_volume_source__named_volume_untouched() {
-        let rt = runtime(AppleMode::ContainerCli, None);
+        let rt = rootstock(AppleMode::ContainerCli, None);
         assert_eq!(rt.volume_source(&volume("pgdata", true)), "pgdata");
     }
 
     #[test]
     fn test_cli_exec_set__resolves_relative_volume_source() {
-        let rt = runtime(AppleMode::ContainerCli, None);
+        let rt = rootstock(AppleMode::ContainerCli, None);
         let mut svc: Service = serde_json::from_str(STUB_CONTAINER).unwrap();
         svc.image = Some("postgres:15".into());
         svc.volumes = vec![volume("./pgdata", false), volume("named-vol", true)];

@@ -14,7 +14,7 @@ CLI flag   >   env var   >   .orchrc   >   default
 | Orchfile | `--orchfile` | `ORCH_ORCHFILE` | `orchfile` | `<project>/Orchfile` |
 | State dir | `--state-dir` | `ORCH_STATE_DIR` | `state_dir` | `~/.orch` |
 | Data dir | `--data-dir` | `ORCH_DATA` | `data_dir` | `<state>/data/<grove>` |
-| Runtime | `--runtime` | `ORCH_RUNTIME` | `runtime` | `bare` |
+| Rootstock | `--rootstock` | `ORCH_ROOTSTOCK` | `rootstock` | `bare` |
 | Platform | `--platform` | `ORCH_PLATFORM` | `platform` | auto (launchd on macOS, else systemd) |
 | Grove | `--grove` | `ORCH_GROVE` | `grove` | `orch` |
 | Scope | `--user` / `--system` | `ORCH_SCOPE` | `scope` | `system` |
@@ -42,7 +42,7 @@ A plain `KEY=value` file, one per line, `#` for comments. Searched in the projec
 dir first, then `$HOME`. The first file found wins (no merging between files).
 
 ```
-runtime=apple
+rootstock=apple
 grove=myapp
 state_dir=/var/lib/myapp
 ```
