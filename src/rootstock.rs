@@ -1,5 +1,4 @@
 pub mod apple;
-pub mod bare;
 pub mod external;
 
 use crate::config::Config;
@@ -9,9 +8,6 @@ use crate::types::Service;
 /// Errors from rootstock operations.
 #[derive(Debug, thiserror::Error)]
 pub enum RootstockError {
-    /// A container-mode service was passed to a host-only rootstock.
-    #[error("service '{service}' has mode '{mode}' which is not supported by this rootstock")]
-    UnsupportedMode { service: String, mode: String },
     /// A required binary or tool is not found.
     #[error("binary not found: {0}")]
     BinaryNotFound(String),
@@ -44,16 +40,19 @@ pub trait Rootstock {
 /// Create a rootstock by name, using the given config for rootstock-specific settings.
 pub fn create_rootstock(name: &str, config: &Config) -> Result<Box<dyn Rootstock>, RootstockError> {
     match name {
-        "bare" => Ok(Box::new(bare::BareRootstock::new(config.data_dir.clone()))),
         "apple" => Ok(Box::new(apple::AppleRootstock::new(config))),
         _ => {
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
             let path_var = std::env::var("PATH").unwrap_or_default();
-            let bin = external::find_on_path(name, &path_var).ok_or_else(|| {
-                RootstockError::BinaryNotFound(format!(
-                    "{} on PATH (built in: bare, apple)",
-                    external::plugin_name(name)
-                ))
-            })?;
+            let bin =
+                external::find_plugin(name, exe_dir.as_deref(), &path_var).ok_or_else(|| {
+                    RootstockError::BinaryNotFound(format!(
+                        "{} beside orchd or on PATH (built in: apple)",
+                        external::plugin_name(name)
+                    ))
+                })?;
             Ok(Box::new(external::ExternalRootstock::new(
                 name, bin, config,
             )))

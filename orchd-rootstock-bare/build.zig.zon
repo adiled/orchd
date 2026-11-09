@@ -1,0 +1,12 @@
+.{
+    .name = .orchd_rootstock_bare,
+    .version = "0.4.0",
+    .fingerprint = 0xea6d026260b4394d,
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

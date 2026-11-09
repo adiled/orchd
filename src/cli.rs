@@ -15,7 +15,7 @@ pub struct Cli {
     #[arg(long, action = clap::ArgAction::Append)]
     pub overlay: Vec<PathBuf>,
 
-    /// Rootstock: what runs each tree. bare, apple, or any orchd-rootstock-<name> on PATH
+    /// Rootstock: what runs each tree. bare, apple, or any orchd-rootstock-<name> beside orchd or on PATH
     #[arg(long)]
     pub rootstock: Option<String>,
 

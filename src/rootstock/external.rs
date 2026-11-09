@@ -15,9 +15,12 @@ pub fn plugin_name(name: &str) -> String {
     format!("orchd-rootstock-{}", name)
 }
 
-pub fn find_on_path(name: &str, path_var: &str) -> Option<PathBuf> {
+pub fn find_plugin(name: &str, exe_dir: Option<&Path>, path_var: &str) -> Option<PathBuf> {
     let file = plugin_name(name);
-    std::env::split_paths(path_var)
+    exe_dir
+        .map(Path::to_path_buf)
+        .into_iter()
+        .chain(std::env::split_paths(path_var))
         .map(|dir| dir.join(&file))
         .find(|p| is_executable(p))
 }
@@ -210,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_on_path__takes_the_first_executable_plugin() {
+    fn test_find_plugin__beside_orchd_first_then_path() {
         let dir = scratch("path");
         let (a, b) = (dir.join("a"), dir.join("b"));
         std::fs::create_dir_all(&a).unwrap();
@@ -219,8 +222,13 @@ mod tests {
         let want = plugin(&b, "fake", "exit 0");
         let path_var = format!("{}:{}", a.display(), b.display());
 
-        assert_eq!(find_on_path("fake", &path_var), Some(want));
-        assert_eq!(find_on_path("absent", &path_var), None);
+        assert_eq!(find_plugin("fake", None, &path_var), Some(want));
+        assert_eq!(find_plugin("absent", None, &path_var), None);
+
+        let beside = dir.join("beside");
+        std::fs::create_dir_all(&beside).unwrap();
+        let own = plugin(&beside, "fake", "exit 0");
+        assert_eq!(find_plugin("fake", Some(&beside), &path_var), Some(own));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
