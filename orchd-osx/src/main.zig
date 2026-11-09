@@ -109,7 +109,7 @@ fn cmdSelftest(allocator: std.mem.Allocator) !void {
         std.process.exit(1);
     };
     defer allocator.free(kpath);
-    const kpath_z = try allocator.dupeZ(u8, kpath);
+    const kpath_z = try allocator.dupeSentinel(u8, kpath, 0);
     defer allocator.free(kpath_z);
 
     std.debug.print("vz-selftest: booting {s} (no rootfs)\n", .{kpath_z});

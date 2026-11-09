@@ -67,7 +67,7 @@ zig build           # → zig-out/bin/orchd-apple
 zig build test      # unit tests
 ```
 
-Requires Zig 0.16+ and macOS 26+ (for the `container` runtime at execution time).
+Requires Zig 0.17.1+ and macOS 26+ (for the `container` runtime at execution time).
 
 ## Dependencies
 

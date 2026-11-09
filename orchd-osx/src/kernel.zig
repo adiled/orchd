@@ -36,7 +36,7 @@ pub fn kernelPath(allocator: std.mem.Allocator) Error![]u8 {
     const path = std.fmt.allocPrint(allocator, "{s}/.orch/osx/kernel/vmlinux", .{home}) catch
         return Error.OutOfMemory;
 
-    const path_z = allocator.dupeZ(u8, path) catch return Error.OutOfMemory;
+    const path_z = allocator.dupeSentinel(u8, path, 0) catch return Error.OutOfMemory;
     defer allocator.free(path_z);
     if (access(path_z, 0) != 0) { // F_OK
         std.debug.print(

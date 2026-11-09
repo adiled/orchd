@@ -48,35 +48,35 @@ pub fn sel(name: [*:0]const u8) Sel {
 ///   const s = msgSend(Id, NSString, sel("stringWithUTF8String:"), .{ptr});
 ///   const n = msgSend(usize, s, sel("length"), .{});
 pub fn msgSend(comptime Ret: type, receiver: ?Id, selector: Sel, args: anytype) Ret {
-    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-    return switch (fields.len) {
+    const types = @typeInfo(@TypeOf(args)).@"struct".field_types;
+    return switch (types.len) {
         0 => blk: {
             const f: *const fn (?Id, Sel) callconv(.c) Ret = @ptrCast(&objc_msgSend);
             break :blk f(receiver, selector);
         },
         1 => blk: {
-            const A0 = fields[0].type;
+            const A0 = types[0];
             const f: *const fn (?Id, Sel, A0) callconv(.c) Ret = @ptrCast(&objc_msgSend);
             break :blk f(receiver, selector, args[0]);
         },
         2 => blk: {
-            const A0 = fields[0].type;
-            const A1 = fields[1].type;
+            const A0 = types[0];
+            const A1 = types[1];
             const f: *const fn (?Id, Sel, A0, A1) callconv(.c) Ret = @ptrCast(&objc_msgSend);
             break :blk f(receiver, selector, args[0], args[1]);
         },
         3 => blk: {
-            const A0 = fields[0].type;
-            const A1 = fields[1].type;
-            const A2 = fields[2].type;
+            const A0 = types[0];
+            const A1 = types[1];
+            const A2 = types[2];
             const f: *const fn (?Id, Sel, A0, A1, A2) callconv(.c) Ret = @ptrCast(&objc_msgSend);
             break :blk f(receiver, selector, args[0], args[1], args[2]);
         },
         4 => blk: {
-            const A0 = fields[0].type;
-            const A1 = fields[1].type;
-            const A2 = fields[2].type;
-            const A3 = fields[3].type;
+            const A0 = types[0];
+            const A1 = types[1];
+            const A2 = types[2];
+            const A3 = types[3];
             const f: *const fn (?Id, Sel, A0, A1, A2, A3) callconv(.c) Ret = @ptrCast(&objc_msgSend);
             break :blk f(receiver, selector, args[0], args[1], args[2], args[3]);
         },
