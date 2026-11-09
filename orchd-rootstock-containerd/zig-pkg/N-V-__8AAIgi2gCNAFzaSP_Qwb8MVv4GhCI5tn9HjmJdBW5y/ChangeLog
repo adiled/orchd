@@ -1,0 +1,1168 @@
+commit 80dcb8140af050fac91a7e6af4fc6dd013404bd1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-02
+
+    Update bash_completion
+
+commit 737f499c76c59577d5ed03e89de116039a225b91
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-02
+
+    Update manual pages
+
+commit a411c606f89d098de03180eb7f5c8943c6e12a9e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-02
+
+    Bump package and library versions
+
+commit bc80a23dc365efb6db3fdbd4c3a49f06f8647be5
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-02
+
+    Update AUTHORS
+
+commit cfd66b4ca8052c0d8bd5a63abaab0dfff023522a
+Merge: 1a1d3018 5332bfc1
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-11-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-11-02
+
+    Merge pull request #2950 from nghttp2/bump-ngtcp2
+    
+    Bump ngtcp2 and nghttp3
+
+commit 5332bfc1135069baa73c2bd44227a6c47e965657
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-02
+
+    Bump ngtcp2 and nghttp3
+
+commit 1a1d3018df301d3802d31022b4fbc38b713392ce
+Merge: a3cebaf2 3a4aaf5d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-11-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-11-02
+
+    Merge pull request #2949 from nghttp2/gha-remove-macos-15
+    
+    GHA: Remove macos-15
+
+commit 3a4aaf5d9d9feff5421ce1b94dcf462ab2dbbe2c
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-02
+
+    GHA: Remove macos-15
+
+commit a3cebaf27b8fd372adb9d53a0ff0ae3c45119c24
+Merge: 240ace7d 653ac97d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-11-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-11-01
+
+    Merge pull request #2946 from nghttp2/remove-public-server-text
+    
+    Remove public server text
+
+commit 653ac97d7dd2516e7a8b4772ea15716273e6bcc2
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Remove public server text
+    
+    The public server has switched to nghttp2-v2.  v1 is no longer
+    deployed.
+
+commit 240ace7d936785825626c1dbf697bccfce58cb97
+Merge: 57e1918d d8114a32
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-11-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-11-01
+
+    Merge pull request #2945 from nghttp2/update-window-upfront
+    
+    Update window upfront
+
+commit d8114a32dfc1e9269e26c4b6bf33b939b3ed923f
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Update remote window upfront when DATA is sent
+
+commit 59d60407508ecfe6774f77640e400a7c272d610f
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Increase recv window when DATA frame header is received
+
+commit 57e1918db28c42e337ef375a66b91a36080482ec
+Merge: 36a7febc 894484d4
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-11-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-11-01
+
+    Merge pull request #2944 from nghttp2/bump-deps
+    
+    Bump deps
+
+commit 894484d4aaf77910ed3fcbb17a3ad86021bf6652
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Fix docker build
+
+commit 35772dd6c4c24a243c63a40ab4481a52a10e6362
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Bump wolfssl to v5.9.4-stable
+
+commit 4d8e8c7556e95840ba79d41ae50ee7658770ec1a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Bump aws-lc to v5.12.0
+
+commit 6340e2d6325ba3f3e09affac309fc6c811f8d3e0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Bump boringssl
+
+commit 5aa7423f68adfdabb2fa8e463ca8f11e00fedb32
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-11-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-11-01
+
+    Bump libbpf to v1.8.0
+
+commit 36a7febc8ebef4edd06dfeddbd14d7c865436c4b
+Merge: 0055e8ec 9ac70269
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-31
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-31
+
+    Merge pull request #2942 from nghttp2/simplify-map-insertion
+    
+    Simplify map insertion
+
+commit 0055e8ec206621e7a5ed4953a53f22c70a64dd7b
+Merge: 73ec7186 c366766a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-31
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-31
+
+    Merge pull request #2943 from nghttp2/fix-priority-update
+    
+    Fix priority update
+
+commit c366766a2fe59a1384f0de52644d85f7487f8d70
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-31
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-31
+
+    Fix priority update
+    
+    Reported by v4ltonn
+
+commit 9ac702694eaf191e9174bc39e88e27ae9ec12852
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-31
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-31
+
+    Simplify map insertion
+
+commit 73ec71862e862da95e7fc74d869c7a6f0d8a9c56
+Merge: c34ff60f 5120d318
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-29
+
+    Merge pull request #2937 from nghttp2/dependabot/go_modules/github.com/quic-go/quic-go-0.64.1
+    
+    build(deps): bump github.com/quic-go/quic-go from 0.64.0 to 0.64.1
+
+commit c34ff60fe7d4f3377e18d8a4941ea325a45d0b91
+Merge: cf0ebe35 5f48d7ee
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-29
+
+    Merge pull request #2941 from nghttp2/remove-license-file
+    
+    Remove LICENSE file
+
+commit 5f48d7ee9f33f21510571d0f67ebfc97ab41b535
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-29
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-29
+
+    Remove LICENSE file
+    
+    See COPYING
+
+commit cf0ebe35edc836e4cb9fe3d9df5007d73dab270a
+Merge: e93691b6 da9ded0f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-29
+
+    Merge pull request #2940 from nghttp2/oss-scanner
+    
+    Add oss-scanner files
+
+commit da9ded0fd9948eef2d22c23e33a1be37f4bc188d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-29
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-29
+
+    Add oss-scanner files
+
+commit e93691b67a422db1045527c004915e403c50dc7b
+Merge: 3baf9561 915c2af0
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-28
+
+    Merge pull request #2938 from nghttp2/map-hasher
+    
+    Better map hasher
+
+commit 915c2af0f51f4debe0162ca23053bb7dbd4c9029
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-28
+
+    Better map hasher
+
+commit 5120d318cd8d1d7b56edb1fc71f302bac8d4b19a
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-10-26
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-26
+
+    build(deps): bump github.com/quic-go/quic-go from 0.64.0 to 0.64.1
+    
+    Bumps [github.com/quic-go/quic-go](https://github.com/quic-go/quic-go) from 0.64.0 to 0.64.1.
+    - [Release notes](https://github.com/quic-go/quic-go/releases)
+    - [Commits](https://github.com/quic-go/quic-go/compare/v0.64.0...v0.64.1)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: github.com/quic-go/quic-go
+      dependency-version: 0.64.1
+      dependency-type: direct:production
+      update-type: version-update:semver-patch
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 3baf9561e09f7ac8b0dce6e84132ce3909309ef0
+Merge: 26550ce6 fe2a1df3
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-23
+
+    Merge pull request #2934 from nghttp2/check-nv-copy-size-overflow
+    
+    nghttp2_nv_array_copy: Detect size_t overflow
+
+commit fe2a1df34b3ef1312a07778d3237e5d1abdae18e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-23
+
+    nghttp2_nv_array_copy: Detect size_t overflow
+
+commit 26550ce6707b48b7332f3f9592fb79e82de2dc9f
+Merge: ccfc7bcf 2bf5a964
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-23
+
+    Merge pull request #2932 from nghttp2/update-doc
+    
+    Update doc
+
+commit 2bf5a964d325ee0d40c463e5a4240c4acf64444f
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-23
+
+    Update doc
+
+commit ccfc7bcfcd6df0879496b30e02e75de238f6496d
+Merge: 9c6a1c85 f05a55ec
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-23
+
+    Merge pull request #2931 from nghttp2/fix-get-stream-local-window-size-overflow
+    
+    Fix signed integer overflow in nghttp2_session_get_stream_local_window_size
+
+commit f05a55ec47b7eb3f2428603a94475673e6413508
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-22
+
+    Fix signed integer overflow in nghttp2_session_get_stream_local_window_size
+    
+    The fix is not ideal, but due to the convoluted nghttp2 window
+    management APIs, I do not want to spent more time on this.  If you are
+    looking for the better alternative, check nghttp2-v2.
+
+commit 9c6a1c85cb71d6ebfda826f7208d0ae436fc208b
+Merge: f1a4ea39 f790273f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-20
+
+    Merge pull request #2926 from nghttp2/fix-consume
+    
+    Deal with too large window size when consuming data
+
+commit f790273f9bb64f0c497c4ffe3a97a857b3875208
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-20
+
+    Deal with too large window size when consuming data
+
+commit f1a4ea393808d8b5d49965ced54393321bd5b9c9
+Merge: 87669144 d63eb8c8
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-20
+
+    Merge pull request #2924 from nghttp2/dependabot/go_modules/github.com/quic-go/quic-go-0.64.0
+    
+    build(deps): bump github.com/quic-go/quic-go from 0.63.0 to 0.64.0
+
+commit d63eb8c8b9bcf7e0315444c47f899fd0c80ddf02
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-10-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-20
+
+    build(deps): bump github.com/quic-go/quic-go from 0.63.0 to 0.64.0
+    
+    Bumps [github.com/quic-go/quic-go](https://github.com/quic-go/quic-go) from 0.63.0 to 0.64.0.
+    - [Release notes](https://github.com/quic-go/quic-go/releases)
+    - [Commits](https://github.com/quic-go/quic-go/compare/v0.63.0...v0.64.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: github.com/quic-go/quic-go
+      dependency-version: 0.64.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 876691441b8cc3f445cfb7f7a988d224213a35bd
+Merge: 7e10fcf3 6ec82c38
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-20
+
+    Merge pull request #2925 from nghttp2/gha-macos-aws-lc
+    
+    GHA: Use aws-lc instead of openssl for macos build
+
+commit 6ec82c3813588d4c6c2aff79f558941e7548c172
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-20
+
+    GHA: Use aws-lc instead of openssl for macos build
+
+commit 7e10fcf3c58e692902939bab8f898bdd9ec9cff7
+Merge: 23f8efbd a613b204
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-14
+
+    Merge pull request #2918 from nghttp2/dependabot/go_modules/golang.org/x/net-0.61.0
+    
+    build(deps): bump golang.org/x/net from 0.59.0 to 0.61.0
+
+commit a613b2044493380e82f55dbe69ddae75787af688
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-10-13
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-13
+
+    build(deps): bump golang.org/x/net from 0.59.0 to 0.61.0
+    
+    Bumps [golang.org/x/net](https://github.com/golang/net) from 0.59.0 to 0.61.0.
+    - [Commits](https://github.com/golang/net/compare/v0.59.0...v0.61.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: golang.org/x/net
+      dependency-version: 0.61.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 23f8efbdd3ad17c2e33982484a06b2edcba053fd
+Merge: 4e77ee4d 06a93c51
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-12
+
+    Merge pull request #2917 from nghttp2/update-doc
+    
+    Update doc
+
+commit 06a93c51082860eb095db7a5a2c7a4c8a2464240
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-12
+
+    Update doc
+
+commit 4e77ee4dbf20e0cbeace05608a56e5dc909c2dab
+Merge: 3583813a 042a01a5
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-12
+
+    Merge pull request #2916 from nghttp2/bpf-verifier-instruction-limits
+    
+    bpf: Avoid verifier instruction limits
+
+commit 042a01a5fcb39379e336b261c99a04db1d761b98
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-12
+
+    bpf: Avoid verifier instruction limits
+
+commit 3583813a81008bc16e31305a0b5c5ad145beb3fc
+Merge: 7a6d122a a1d36d8b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-12
+
+    Merge pull request #2915 from nghttp2/nghttpx-enable-quic-gso
+    
+    nghttpx: Fix the bug that GSO on QUIC connection is disabled
+
+commit a1d36d8b0b51999ba009021bfd4d976a74788ef8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-10-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-10-12
+
+    nghttpx: Fix the bug that GSO on QUIC connection is disabled
+
+commit 7a6d122aac527b65434314c2a115f07281e08dbf
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-10-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-10-03
+
+    Update GitHub funding configuration
+
+commit 19d06e62185d93d2398d85241cdbb460349bfe44
+Merge: ea02d8bc 31276f2f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-29
+
+    Merge pull request #2911 from nghttp2/dependabot/go_modules/github.com/quic-go/quic-go-0.63.0
+    
+    build(deps): bump github.com/quic-go/quic-go from 0.62.0 to 0.63.0
+
+commit 31276f2f74f0955030e9b5e43c8a9eff9885f9b0
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-09-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-28
+
+    build(deps): bump github.com/quic-go/quic-go from 0.62.0 to 0.63.0
+    
+    Bumps [github.com/quic-go/quic-go](https://github.com/quic-go/quic-go) from 0.62.0 to 0.63.0.
+    - [Release notes](https://github.com/quic-go/quic-go/releases)
+    - [Commits](https://github.com/quic-go/quic-go/compare/v0.62.0...v0.63.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: github.com/quic-go/quic-go
+      dependency-version: 0.63.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit ea02d8bc7d15f4b899ebf32c52e5934c246127da
+Merge: 140157a8 d9d676da
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-25
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-25
+
+    Merge pull request #2881 from nghttp2/dependabot/go_modules/golang.org/x/net-0.59.0
+    
+    build(deps): bump golang.org/x/net from 0.58.0 to 0.59.0
+
+commit d9d676da4856fb60348ad649756216d6ca395bc5
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-09-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-14
+
+    build(deps): bump golang.org/x/net from 0.58.0 to 0.59.0
+    
+    Bumps [golang.org/x/net](https://github.com/golang/net) from 0.58.0 to 0.59.0.
+    - [Commits](https://github.com/golang/net/compare/v0.58.0...v0.59.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: golang.org/x/net
+      dependency-version: 0.59.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 140157a8d751e9e8b0cc15bf9bc0e2ee0c1ed987
+Merge: f149f415 611c254d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-13
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-13
+
+    Merge pull request #2880 from nghttp2/gha-reduce-cmake-macos-jobs
+    
+    GHA: Reduce cmake and macos jobs
+
+commit 611c254d132d02ab2876d91ac8ca97d07fbda089
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-13
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-13
+
+    GHA: Reduce cmake and macos jobs
+
+commit f149f415d381d74b89e20c72bf6b4ec3d693af91
+Merge: 094d056b a632ff2f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-13
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-13
+
+    Merge pull request #2864 from nghttp2/gha-remove-cygwin-build
+    
+    GHA: Remove cygwin build because it stopped functioning
+
+commit a632ff2f2da86e0755681994ce497ba8f8c37845
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-13
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-13
+
+    GHA: Remove cygwin build because it stopped functioning
+
+commit 094d056b93083bf018c024c21c24ea4d3995ad99
+Merge: 768653bd d7edc1d0
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-12
+
+    Merge pull request #2863 from nghttp2/gha-reduce-openssl1-jobs
+    
+    GHA: Reduce openssl1 jobs
+
+commit d7edc1d03a6336677f3e694110047703c854e41f
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-12
+
+    GHA: Reduce openssl1 jobs
+
+commit 768653bd44e0616c2cf7c49532870c1c29ac4b37
+Merge: b6d6e803 a85220d6
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-12
+
+    Merge pull request #2862 from nghttp2/use-packaged-ossl
+    
+    GHA: Use packaged OpenSSL
+
+commit a85220d6c723e2436de7b5658b6dd93ed515c9c1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-12
+
+    GHA: Use packaged OpenSSL
+
+commit b6d6e803123aeafed7cd88723711304c68a0c3a8
+Merge: 4540fc05 f64b5e21
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-12
+
+    Merge pull request #2861 from nghttp2/bump-ubuntu
+    
+    Bump ubuntu
+
+commit f64b5e21c3d78880354ba6dc8c5d3cc097142988
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-12
+
+    Bump ubuntu to 26.04 for android Dockerfile
+
+commit 70ca26c2decfd28270b9ef0864008bed6ccb3969
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-12
+
+    GHA: Bump ubuntu to 26.04
+
+commit 4540fc054d0515cc0a32ada1494db06fed3c7426
+Merge: a49ccc72 d1d79b91
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-12
+
+    Merge pull request #2860 from nghttp2/bump-clang
+    
+    GHA: Bump clang to 21
+
+commit d1d79b9193f7d69ec1a0829e739da1288341581a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-11
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-12
+
+    GHA: Bump clang to 21
+
+commit a49ccc728863e7d8e5da369552e889e95399bd37
+Merge: a9a49593 de210bc9
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-12
+
+    Merge pull request #2859 from nghttp2/bump-neverbleed
+    
+    Bump neverbleed
+
+commit de210bc9f4da4ece9790e9ef4c1ddd5d9d42f6b5
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-11
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-11
+
+    Bump neverbleed
+
+commit a9a495931cd74d13cbd0845652d8712c58358dca
+Merge: 28f7a0a9 7cbd4f51
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-10
+
+    Merge pull request #2858 from nghttp2/nghttpx-remove-server-push
+    
+    nghttpx: Remove server push
+
+commit 7cbd4f510adcdc20d813ed55ba37c13c2057183a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-10
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-10
+
+    nghttpx: Remove server push
+    
+    This change removes the server push from nghttpx.  The server push in
+    HTTP/2 is particularly hard to use in practice.  No major browsers
+    support it.  In tooling world, curl plans to remove it in the early
+    next year.
+    
+    https://datatracker.ietf.org/doc/html/rfc9113#section-8.4 describes
+    the difficulties to use server push effectively.
+    
+    In implementation wise, it adds tremendous amount of complexities, yet
+    delivers virtually no benefit at all.  It has become a maintenance
+    burden.  It is a good time to remove it once and for all.  As a
+    replacement, consider to use RFC 8297 "Early Hints".
+
+commit 28f7a0a9261349f7f19c1fb00677a11a854583e8
+Merge: d9bd0eb6 69500e12
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-10
+
+    Merge pull request #2857 from nghttp2/bump-clang-format
+    
+    Bump clang-format to 21
+
+commit 69500e12d3664159bdee7e190229e563962167c4
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-10
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-10
+
+    Bump clang-format to 21
+
+commit d9bd0eb624d28a57d3020f66d6b3adc31def3ae4
+Merge: e4a2c989 135c73c4
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-10
+
+    Merge pull request #2856 from nghttp2/disallow-headers-in-connect-stream
+    
+    lib: Disallow HEADERS and PUSH_PROMISE in CONNECT stream
+
+commit 135c73c4780d1d5a6f2abf1489ff1dc7118a1a8b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-10
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-10
+
+    lib: Disallow HEADERS and PUSH_PROMISE in CONNECT stream
+
+commit e4a2c989b39a9285791a8c0bbb9eb90fcb328659
+Merge: f08d8902 661f59e7
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-09
+
+    Merge pull request #2855 from nghttp2/nghttpx-rewrite-certlookuptree
+    
+    nghttpx: Rewrite CertLookupTree based on RFC 9525 rules
+
+commit 661f59e7b18e2ae989da6f3d10dafa3fd14120b1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-09
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-09
+
+    nghttpx: Rewrite CertLookupTree based on RFC 9525 rules
+
+commit f08d8902ea65b5a499ff40071d4adc1a4ed102b5
+Merge: 305dbdbe b8d05795
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-09
+
+    Merge pull request #2854 from nghttp2/nghttpx-client-tls-verify
+    
+    nghttpx: Client TLS certificate validation based on RFC 9525
+
+commit b8d057952f3efd26e19c29b011d49644dcee8bc2
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-09
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-09
+
+    nghttpx: Client TLS certificate validation based on RFC 9525
+
+commit 305dbdbe721957ffe6e03e0043d139b3b8ea5224
+Merge: 86c37561 f14dba77
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-09
+
+    Merge pull request #2848 from nghttp2/nghttpx-refactor-router
+    
+    nghttpx: Refactor Router
+
+commit f14dba770a689d021c59c31961c28ec1244e444a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-08
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-09
+
+    nghttpx: Refactor Router
+
+commit 86c3756175718eae40bd63e45cfd3eb072ef2764
+Merge: 450e88a1 e62aa7f1
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-09
+
+    Merge pull request #2835 from nghttp2/dependabot/go_modules/github.com/quic-go/quic-go-0.62.0
+    
+    build(deps): bump github.com/quic-go/quic-go from 0.61.0 to 0.62.0
+
+commit e62aa7f1171974a7e26b07de743e4c8ae827e479
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-09-08
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-08
+
+    build(deps): bump github.com/quic-go/quic-go from 0.61.0 to 0.62.0
+    
+    Bumps [github.com/quic-go/quic-go](https://github.com/quic-go/quic-go) from 0.61.0 to 0.62.0.
+    - [Release notes](https://github.com/quic-go/quic-go/releases)
+    - [Commits](https://github.com/quic-go/quic-go/compare/v0.61.0...v0.62.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: github.com/quic-go/quic-go
+      dependency-version: 0.62.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 450e88a16b3d53c80e413914662892a497dd2956
+Merge: 35192bbb a66e9bcf
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-08
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-08
+
+    Merge pull request #2837 from nghttp2/bump-go
+    
+    Bump go to 1.26
+
+commit a66e9bcfeed873c1ad48a92fc5cabb7d206d1a50
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-08
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-08
+
+    Bump go to 1.26
+
+commit 35192bbb781829cf8dff4c497eb8dfa37a450141
+Merge: 52186428 a80a7472
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-07
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-07
+
+    Merge pull request #2834 from nghttp2/munit-cxx-assertions
+    
+    Munit cxx assertions
+
+commit a80a747200fe700945201cd5d439ca16625d0ec9
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-06
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-07
+
+    src: Use munit C++ assertions
+
+commit eead74e7d4dadd21b607e5c295513f072b725965
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-06
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-07
+
+    tests: Bump munit
+
+commit c761fd668aed0052a4b200886fd0a8b3b752ea58
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-06
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-07
+
+    GHA: Use g++-15
+
+commit 52186428d9952422590426e20698ffeeb799f0cc
+Merge: b6729c46 c0b010cc
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-09-07
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-09-07
+
+    Merge pull request #2833 from nghttp2/gha-bump-ubuntu
+    
+    Gha bump ubuntu
+
+commit c0b010cc8546d42ee8772c4150dd723d5b0049f7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-06
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-07
+
+    GHA: Disable examples with aws-lc as well
+
+commit fa0edbf61f31c8d8cc2076d21e84ce94edb85089
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-09-06
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-09-06
+
+    GHA: Bump ubuntu to 26.04
+
+commit b6729c46cf134a59940a20de534b7f44fdb0e877
+Merge: a0bebf51 aa7088cd
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-18
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-18
+
+    Merge pull request #2831 from nghttp2/dependabot/go_modules/golang.org/x/net-0.58.0
+    
+    build(deps): bump golang.org/x/net from 0.57.0 to 0.58.0
+
+commit aa7088cd3c8eb01765240ef3268e97653640f627
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-08-17
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-17
+
+    build(deps): bump golang.org/x/net from 0.57.0 to 0.58.0
+    
+    Bumps [golang.org/x/net](https://github.com/golang/net) from 0.57.0 to 0.58.0.
+    - [Commits](https://github.com/golang/net/compare/v0.57.0...v0.58.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: golang.org/x/net
+      dependency-version: 0.58.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit a0bebf513785f84ea4fa62d47c52f47d5fcc46ad
+Merge: 9711d0b7 9c7156d2
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-15
+
+    Merge pull request #2830 from nghttp2/nghttpx-check-quic-version
+    
+    nghttpx: Check QUIC version
+
+commit 9c7156d292afea8e693e82f8ddd8c64fd9ea4ef8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-08-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-08-15
+
+    nghttpx: Check QUIC version
+
+commit 9711d0b7b0619e06b00b0ca934e11c268ade4c5d
+Merge: fe17ea5b bb371825
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-15
+
+    Merge pull request #2829 from nghttp2/add-length-check-for-continuation
+    
+    Add length check for CONTINUATION
+
+commit bb37182517c32886502d84d0a6c0d00ee04d1bdb
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-08-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-08-15
+
+    Add length check for CONTINUATION
+
+commit fe17ea5b33f50a2ce781188b21496577f5207552
+Merge: 692c8d8f 54a65714
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-11
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-11
+
+    Merge pull request #2828 from thesamesam/gcc17
+    
+    util: add <fstream> include
+
+commit 54a657140d19f3ba2309d7ca26caf43c4a85202b
+Author:     Sam James <sam@gentoo.org>
+AuthorDate: 2026-08-09
+Commit:     Sam James <sam@gentoo.org>
+CommitDate: 2026-08-09
+
+    util: add <fstream> include
+    
+    This shows up with GCC 17 where some transitive internal includes changed:
+    it worked by chance before.
+
+commit 692c8d8fce4f31ba2a9449b903877543043b0e3f
+Merge: ea442e7a ae6bd327
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-06
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-06
+
+    Merge pull request #2824 from nghttp2/dependabot/github_actions/actions/stale-11
+    
+    build(deps): bump actions/stale from 10 to 11
+
+commit ea442e7a8f8eb84899d9c68ace8b1a8cbec33cbc
+Merge: 378dbe53 500edc92
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-06
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-06
+
+    Merge pull request #2827 from nghttp2/revert-2825-count-idle-streams
+    
+    Revert "Take into account idle streams"
+
+commit 500edc92d8a985cead70b5aa257f7598a24df1a8
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-06
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-06
+
+    Revert "Take into account idle streams"
+
+commit 378dbe539faf31d2c6e53cfdad3b3b22223ad208
+Merge: 9aeb46dd 5694e391
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-06
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-06
+
+    Merge pull request #2826 from nghttp2/limit-outbound-queue-size
+    
+    Add option to limit the maximum outbound queue size
+
+commit 5694e39141468c0a9265737deb6e945d455b4da9
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-08-05
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-08-05
+
+    Add option to limit the maximum outbound queue size
+
+commit 9aeb46dd5602dcddb86c5e6e32c25e1b23b92001
+Merge: 0fad0fda 68538aec
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-08-05
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-05
+
+    Merge pull request #2825 from nghttp2/count-idle-streams
+    
+    Take into account idle streams
+
+commit 68538aecf7562fb2df0d9387970d0b6a6b1cab0c
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-08-05
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-08-05
+
+    Take into account idle streams
+
+commit ae6bd3275c1899efb56b6318efaf1d8f6039873b
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-08-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-08-03
+
+    build(deps): bump actions/stale from 10 to 11
+    
+    Bumps [actions/stale](https://github.com/actions/stale) from 10 to 11.
+    - [Release notes](https://github.com/actions/stale/releases)
+    - [Changelog](https://github.com/actions/stale/blob/main/CHANGELOG.md)
+    - [Commits](https://github.com/actions/stale/compare/v10...v11)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: actions/stale
+      dependency-version: '11'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 0fad0fda52a0681d33552920a157b4342bcc5d35
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-07-29
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-07-29
+
+    Bump package version

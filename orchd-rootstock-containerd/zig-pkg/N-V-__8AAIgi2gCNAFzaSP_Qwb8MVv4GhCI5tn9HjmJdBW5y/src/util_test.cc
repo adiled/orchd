@@ -1,0 +1,1163 @@
+/*
+ * nghttp2 - HTTP/2 C Library
+ *
+ * Copyright (c) 2013 Tatsuhiro Tsujikawa
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+#include "util_test.h"
+
+#include <sys/types.h>
+#ifdef HAVE_SYS_SOCKET_H
+#  include <sys/socket.h>
+#endif // defined(HAVE_SYS_SOCKET_H)
+#ifdef HAVE_NETDB_H
+#  include <netdb.h>
+#endif // defined(HAVE_NETDB_H)
+
+#include <cstring>
+#include <random>
+
+#include <nghttp2/nghttp2.h>
+
+#include "util.h"
+#include "template.h"
+
+using namespace nghttp2;
+using namespace std::literals;
+
+namespace shrpx {
+
+namespace {
+const MunitTest tests[]{
+  munit_void_test(test_util_streq),
+  munit_void_test(test_util_strieq),
+  munit_void_test(test_util_tolower),
+  munit_void_test(test_util_to_base64),
+  munit_void_test(test_util_to_token68),
+  munit_void_test(test_util_percent_encode_token),
+  munit_void_test(test_util_percent_decode),
+  munit_void_test(test_util_quote_string),
+  munit_void_test(test_util_utox),
+  munit_void_test(test_util_http_date),
+  munit_void_test(test_util_select_h2),
+  munit_void_test(test_util_ipv6_numeric_addr),
+  munit_void_test(test_util_contains),
+  munit_void_test(test_util_utos),
+  munit_void_test(test_util_make_string_ref_uint),
+  munit_void_test(test_util_utos_unit),
+  munit_void_test(test_util_utos_funit),
+  munit_void_test(test_util_parse_uint_with_unit),
+  munit_void_test(test_util_parse_uint),
+  munit_void_test(test_util_parse_duration_with_unit),
+  munit_void_test(test_util_duration_str),
+  munit_void_test(test_util_format_duration),
+  munit_void_test(test_util_starts_with),
+  munit_void_test(test_util_ends_with),
+  munit_void_test(test_util_parse_http_date),
+  munit_void_test(test_util_localtime_date),
+  munit_void_test(test_util_get_uint64),
+  munit_void_test(test_util_parse_config_str_list),
+  munit_void_test(test_util_make_http_hostport),
+  munit_void_test(test_util_make_hostport),
+  munit_void_test(test_util_random_alpha_digit),
+  munit_void_test(test_util_format_hex),
+  munit_void_test(test_util_format_upper_hex_uint8),
+  munit_void_test(test_util_is_hex_string),
+  munit_void_test(test_util_decode_hex),
+  munit_void_test(test_util_extract_host),
+  munit_void_test(test_util_split_hostport),
+  munit_void_test(test_util_split_str),
+  munit_void_test(test_util_rstrip),
+  munit_void_test(test_util_contains),
+  munit_void_test(test_util_hex_to_uint),
+  munit_void_test(test_util_is_alpha),
+  munit_void_test(test_util_is_digit),
+  munit_void_test(test_util_is_hex_digit),
+  munit_void_test(test_util_in_rfc3986_unreserved_chars),
+  munit_void_test(test_util_in_rfc3986_sub_delims),
+  munit_void_test(test_util_in_token),
+  munit_void_test(test_util_in_attr_char),
+  munit_void_test(test_util_upcase),
+  munit_void_test(test_util_lowcase),
+  munit_void_test(test_util_to_numeric_addr),
+  munit_void_test(test_util_fieldeq),
+  munit_void_test(test_util_sha256),
+  munit_void_test(test_util_sha1),
+  munit_test_end(),
+};
+} // namespace
+
+const MunitSuite util_suite{
+  .prefix = "/util",
+  .tests = tests,
+};
+
+void test_util_streq(void) {
+  assert_true(util::streq("alpha"sv, "alpha"sv));
+  assert_false(util::streq("alphabravo"sv, "alpha"sv));
+  assert_false(util::streq("alpha"sv, "alphA"sv));
+  assert_false(util::streq(""sv, "a"sv));
+  assert_true(util::streq(""sv, ""sv));
+  assert_false(util::streq("alpha"sv, ""sv));
+}
+
+void test_util_strieq(void) {
+  assert_true(util::strieq("alpha"sv, "alpha"sv));
+  assert_true(util::strieq("alpha"sv, "AlPhA"sv));
+  assert_true(util::strieq(""sv, ""sv));
+  assert_false(util::strieq("alpha"sv, "AlPhA "sv));
+  assert_false(util::strieq(""sv, "AlPhA "sv));
+
+  assert_true(util::strieq("alpha"sv, "alpha"sv));
+  assert_true(util::strieq("alpha"sv, "AlPhA"sv));
+  assert_true(util::strieq(""sv, ""sv));
+  assert_false(util::strieq("alpha"sv, "AlPhA "sv));
+  assert_false(util::strieq(""sv, "AlPhA "sv));
+}
+
+void test_util_tolower(void) {
+  std::array<char, 16> buf;
+
+  assert_eq("alpha"sv,
+            as_string_view(std::ranges::begin(buf),
+                           util::tolower("alPha"sv, std::ranges::begin(buf))));
+
+  {
+    static const auto s = "alPha"sv;
+
+    assert_eq(
+      "alpha"sv,
+      as_string_view(std::ranges::begin(buf),
+                     util::tolower(std::ranges::begin(s), std::ranges::end(s),
+                                   std::ranges::begin(buf))));
+  }
+
+  assert_eq(""sv, as_string_view(std::ranges::begin(buf),
+                                 util::tolower(""sv, std::ranges::begin(buf))));
+
+  {
+    auto s = "AlpHA\x00BraVO"s;
+
+    util::tolower(s, std::ranges::begin(s));
+
+    assert_eq("alpha\x00bravo"s, s);
+  }
+
+  {
+    auto s = "\xbe\xef"s;
+
+    util::tolower(s, std::ranges::begin(s));
+
+    assert_eq("\xbe\xef"s, s);
+  }
+}
+
+void test_util_to_base64(void) {
+  BlockAllocator balloc(4096, 4096);
+
+  assert_eq("AAA++B/="sv, util::to_base64(balloc, "AAA--B_"sv));
+  assert_eq("AAA++B/B"sv, util::to_base64(balloc, "AAA--B_B"sv));
+}
+
+void test_util_to_token68(void) {
+  auto x = "AAA++B/="s;
+  util::to_token68(x);
+  assert_eq("AAA--B_", x);
+
+  x = "AAA++B/B";
+  util::to_token68(x);
+  assert_eq("AAA--B_B", x);
+}
+
+void test_util_percent_encode_token(void) {
+  std::array<char, 64> buf;
+
+  assert_eq("h2"sv, as_string_view(std::ranges::begin(buf),
+                                   util::percent_encode_token(
+                                     "h2"sv, std::ranges::begin(buf))));
+
+  assert_eq("h2"sv.size(), util::percent_encode_tokenlen("h2"sv));
+
+  assert_eq("h3~"sv, as_string_view(std::ranges::begin(buf),
+                                    util::percent_encode_token(
+                                      "h3~"sv, std::ranges::begin(buf))));
+
+  assert_eq("h3~"sv.size(), util::percent_encode_tokenlen("h3~"sv));
+
+  assert_eq("100%25"sv, as_string_view(std::ranges::begin(buf),
+                                       util::percent_encode_token(
+                                         "100%"sv, std::ranges::begin(buf))));
+  assert_eq("100%25"sv.size(), util::percent_encode_tokenlen("100%"sv));
+
+  assert_eq("http%202"sv,
+            as_string_view(
+              std::ranges::begin(buf),
+              util::percent_encode_token("http 2"sv, std::ranges::begin(buf))));
+
+  assert_eq("http%202"sv.size(), util::percent_encode_tokenlen("http 2"sv));
+}
+
+void test_util_percent_decode(void) {
+  {
+    static const auto s = "%66%6F%6f%62%61%72"s;
+    assert_eq("foobar",
+              util::percent_decode(std::ranges::begin(s), std::ranges::end(s)));
+  }
+  {
+    static const auto s = "%66%6"s;
+    assert_eq("f%6", util::percent_decode(s));
+  }
+  {
+    static const auto s = "%66%"s;
+    assert_eq("f%",
+              util::percent_decode(std::ranges::begin(s), std::ranges::end(s)));
+  }
+  BlockAllocator balloc(1024, 1024);
+
+  assert_eq("foobar"sv, util::percent_decode(balloc, "%66%6F%6f%62%61%72"sv));
+
+  assert_eq("f%6"sv, util::percent_decode(balloc, "%66%6"sv));
+
+  assert_eq("f%"sv, util::percent_decode(balloc, "%66%"sv));
+}
+
+void test_util_quote_string(void) {
+  BlockAllocator balloc(4096, 4096);
+  assert_eq("alpha"sv, util::quote_string(balloc, "alpha"sv));
+  assert_eq(""sv, util::quote_string(balloc, ""sv));
+  assert_eq("\\\"alpha\\\""sv, util::quote_string(balloc, "\"alpha\""sv));
+
+  assert_eq("\\\"alpha\\\""sv.size(), util::quote_stringlen("\"alpha\""sv));
+  assert_eq(0, util::quote_stringlen(""sv));
+}
+
+void test_util_utox(void) {
+  std::array<char, 16> buf;
+
+  assert_eq("0"sv, as_string_view(std::ranges::begin(buf),
+                                  util::utox(0, std::ranges::begin(buf))));
+  assert_eq("1"sv, as_string_view(std::ranges::begin(buf),
+                                  util::utox(1, std::ranges::begin(buf))));
+  assert_eq("F"sv, as_string_view(std::ranges::begin(buf),
+                                  util::utox(15, std::ranges::begin(buf))));
+  assert_eq("10"sv, as_string_view(std::ranges::begin(buf),
+                                   util::utox(16, std::ranges::begin(buf))));
+  assert_eq("3B9ACA07"sv,
+            as_string_view(std::ranges::begin(buf),
+                           util::utox(1000000007, std::ranges::begin(buf))));
+  assert_eq(
+    "B5EA98F3663B14A"sv,
+    as_string_view(std::ranges::begin(buf),
+                   util::utox(819278614785929546, std::ranges::begin(buf))));
+  assert_eq("100000000"sv,
+            as_string_view(std::ranges::begin(buf),
+                           util::utox(1LL << 32, std::ranges::begin(buf))));
+}
+
+void test_util_http_date(void) {
+  assert_eq("Thu, 01 Jan 1970 00:00:00 GMT"s,
+            util::format_http_date(std::chrono::system_clock::time_point()));
+  assert_eq(
+    "Wed, 29 Feb 2012 09:15:16 GMT"s,
+    util::format_http_date(std::chrono::system_clock::from_time_t(1330506916)));
+
+  std::array<char, 30> http_buf;
+
+  assert_eq("Thu, 01 Jan 1970 00:00:00 GMT"sv,
+            util::format_http_date(http_buf.data(),
+                                   std::chrono::system_clock::time_point()));
+  assert_eq(
+    "Wed, 29 Feb 2012 09:15:16 GMT"sv,
+    util::format_http_date(http_buf.data(),
+                           std::chrono::system_clock::from_time_t(1330506916)));
+}
+
+void test_util_select_h2(void) {
+  const unsigned char *out = nullptr;
+  unsigned char outlen = 0;
+
+  // Check single entry and select it.
+  const unsigned char t1[] = "\x2h2";
+  assert_true(util::select_h2(&out, &outlen, t1, sizeof(t1) - 1));
+  assert_memn_equal(NGHTTP2_PROTO_VERSION_ID, NGHTTP2_PROTO_VERSION_ID_LEN, out,
+                    outlen);
+
+  out = nullptr;
+  outlen = 0;
+
+  // Check the case where id is correct but length is invalid and too
+  // long.
+  const unsigned char t2[] = "\x3h2";
+  assert_false(util::select_h2(&out, &outlen, t2, sizeof(t2) - 1));
+
+  // Check the case where h2 is located after bogus ID.
+  const unsigned char t3[] = "\x2h3\x2h2";
+  assert_true(util::select_h2(&out, &outlen, t3, sizeof(t3) - 1));
+  assert_memn_equal(NGHTTP2_PROTO_VERSION_ID, NGHTTP2_PROTO_VERSION_ID_LEN, out,
+                    outlen);
+
+  out = nullptr;
+  outlen = 0;
+
+  // Check the case that last entry's length is invalid and too long.
+  const unsigned char t4[] = "\x2h3\x6h2";
+  assert_false(util::select_h2(&out, &outlen, t4, sizeof(t4) - 1));
+
+  // Check the case that all entries are not supported.
+  const unsigned char t5[] = "\x2h3\x2h4";
+  assert_false(util::select_h2(&out, &outlen, t5, sizeof(t5) - 1));
+}
+
+void test_util_ipv6_numeric_addr(void) {
+  assert_true(util::ipv6_numeric_addr("::1"));
+  assert_true(
+    util::ipv6_numeric_addr("2001:0db8:85a3:0042:1000:8a2e:0370:7334"));
+  // IPv4
+  assert_false(util::ipv6_numeric_addr("127.0.0.1"));
+  // not numeric address
+  assert_false(util::ipv6_numeric_addr("localhost"));
+}
+
+void test_util_count_digit(void) {
+  assert_eq(1, util::count_digit(0u));
+  assert_eq(1, util::count_digit(1u));
+  assert_eq(1, util::count_digit(9u));
+  assert_eq(2, util::count_digit(10u));
+  assert_eq(2, util::count_digit(99u));
+  assert_eq(3, util::count_digit(100u));
+  assert_eq(3, util::count_digit(999u));
+  assert_eq(4, util::count_digit(1'000u));
+  assert_eq(4, util::count_digit(9'999u));
+  assert_eq(5, util::count_digit(10'000u));
+  assert_eq(5, util::count_digit(99'999u));
+  assert_eq(6, util::count_digit(100'000u));
+  assert_eq(6, util::count_digit(999'999u));
+  assert_eq(7, util::count_digit(1'000'000u));
+  assert_eq(7, util::count_digit(9'999'999u));
+  assert_eq(8, util::count_digit(10'000'000u));
+  assert_eq(8, util::count_digit(99'999'999u));
+  assert_eq(9, util::count_digit(100'000'000u));
+  assert_eq(9, util::count_digit(999'999'999u));
+  assert_eq(10, util::count_digit(1'000'000'000u));
+  assert_eq(10, util::count_digit(9'999'999'999u));
+  assert_eq(11, util::count_digit(10'000'000'000u));
+  assert_eq(11, util::count_digit(99'999'999'999u));
+  assert_eq(12, util::count_digit(100'000'000'000u));
+  assert_eq(12, util::count_digit(999'999'999'999u));
+  assert_eq(13, util::count_digit(1'000'000'000'000u));
+  assert_eq(13, util::count_digit(9'999'999'999'999u));
+  assert_eq(14, util::count_digit(10'000'000'000'000u));
+  assert_eq(14, util::count_digit(99'999'999'999'999u));
+  assert_eq(15, util::count_digit(100'000'000'000'000u));
+  assert_eq(15, util::count_digit(999'999'999'999'999u));
+  assert_eq(16, util::count_digit(1'000'000'000'000'000u));
+  assert_eq(16, util::count_digit(9'999'999'999'999'999u));
+  assert_eq(17, util::count_digit(10'000'000'000'000'000u));
+  assert_eq(17, util::count_digit(99'999'999'999'999'999u));
+  assert_eq(18, util::count_digit(100'000'000'000'000'000u));
+  assert_eq(18, util::count_digit(999'999'999'999'999'999u));
+  assert_eq(19, util::count_digit(1'000'000'000'000'000'000u));
+  assert_eq(19, util::count_digit(9'999'999'999'999'999'999u));
+  assert_eq(20, util::count_digit(10'000'000'000'000'000'000u));
+  assert_eq(20, util::count_digit(std::numeric_limits<uint64_t>::max()));
+}
+
+void test_util_utos(void) {
+  char buf[32];
+
+  assert_eq("123"s, as_string_view(buf, util::utos(123u, buf)));
+
+  assert_eq("0"s, util::utos(0u));
+  assert_eq("123"s, util::utos(123u));
+  assert_eq("123"s, util::utos(static_cast<uint8_t>(123)));
+  assert_eq("123"s, util::utos(static_cast<uint16_t>(123)));
+  assert_eq("18446744073709551615"s, util::utos(18'446'744'073'709'551'615u));
+
+  assert_eq("0"sv, as_string_view(buf, util::utos(0u, buf)));
+  assert_eq("1"sv, as_string_view(buf, util::utos(1u, buf)));
+  assert_eq("9"sv, as_string_view(buf, util::utos(9u, buf)));
+  assert_eq("10"sv, as_string_view(buf, util::utos(10u, buf)));
+  assert_eq("99"sv, as_string_view(buf, util::utos(99u, buf)));
+  assert_eq("100"sv, as_string_view(buf, util::utos(100u, buf)));
+  assert_eq("999"sv, as_string_view(buf, util::utos(999u, buf)));
+  assert_eq("1000"sv, as_string_view(buf, util::utos(1'000u, buf)));
+  assert_eq("9999"sv, as_string_view(buf, util::utos(9'999u, buf)));
+  assert_eq("10000"sv, as_string_view(buf, util::utos(10'000u, buf)));
+  assert_eq("99999"sv, as_string_view(buf, util::utos(99'999u, buf)));
+  assert_eq("100000"sv, as_string_view(buf, util::utos(100'000u, buf)));
+  assert_eq("999999"sv, as_string_view(buf, util::utos(999'999u, buf)));
+  assert_eq("1000000"sv, as_string_view(buf, util::utos(1'000'000u, buf)));
+  assert_eq("9999999"sv, as_string_view(buf, util::utos(9'999'999u, buf)));
+  assert_eq("10000000"sv, as_string_view(buf, util::utos(10'000'000u, buf)));
+  assert_eq("99999999"sv, as_string_view(buf, util::utos(99'999'999u, buf)));
+  assert_eq("100000000"sv, as_string_view(buf, util::utos(100'000'000u, buf)));
+  assert_eq("999999999"sv, as_string_view(buf, util::utos(999'999'999u, buf)));
+  assert_eq("1000000000"sv,
+            as_string_view(buf, util::utos(1'000'000'000u, buf)));
+  assert_eq("9999999999"sv,
+            as_string_view(buf, util::utos(9'999'999'999u, buf)));
+  assert_eq("10000000000"sv,
+            as_string_view(buf, util::utos(10'000'000'000u, buf)));
+  assert_eq("99999999999"sv,
+            as_string_view(buf, util::utos(99'999'999'999u, buf)));
+  assert_eq("100000000000"sv,
+            as_string_view(buf, util::utos(100'000'000'000u, buf)));
+  assert_eq("999999999999"sv,
+            as_string_view(buf, util::utos(999'999'999'999u, buf)));
+  assert_eq("1000000000000"sv,
+            as_string_view(buf, util::utos(1'000'000'000'000u, buf)));
+  assert_eq("9999999999999"sv,
+            as_string_view(buf, util::utos(9'999'999'999'999u, buf)));
+  assert_eq("10000000000000"sv,
+            as_string_view(buf, util::utos(10'000'000'000'000u, buf)));
+  assert_eq("99999999999999"sv,
+            as_string_view(buf, util::utos(99'999'999'999'999u, buf)));
+  assert_eq("100000000000000"sv,
+            as_string_view(buf, util::utos(100'000'000'000'000u, buf)));
+  assert_eq("999999999999999"sv,
+            as_string_view(buf, util::utos(999'999'999'999'999u, buf)));
+  assert_eq("1000000000000000"sv,
+            as_string_view(buf, util::utos(1'000'000'000'000'000u, buf)));
+  assert_eq("9999999999999999"sv,
+            as_string_view(buf, util::utos(9'999'999'999'999'999u, buf)));
+  assert_eq("10000000000000000"sv,
+            as_string_view(buf, util::utos(10'000'000'000'000'000u, buf)));
+  assert_eq("99999999999999999"sv,
+            as_string_view(buf, util::utos(99'999'999'999'999'999u, buf)));
+  assert_eq("100000000000000000"sv,
+            as_string_view(buf, util::utos(100'000'000'000'000'000u, buf)));
+  assert_eq("999999999999999999"sv,
+            as_string_view(buf, util::utos(999'999'999'999'999'999u, buf)));
+  assert_eq("1000000000000000000"sv,
+            as_string_view(buf, util::utos(1'000'000'000'000'000'000u, buf)));
+  assert_eq("9999999999999999999"sv,
+            as_string_view(buf, util::utos(9'999'999'999'999'999'999u, buf)));
+  assert_eq("10000000000000000000"sv,
+            as_string_view(buf, util::utos(10'000'000'000'000'000'000u, buf)));
+  assert_eq(
+    "18446744073709551615"sv,
+    as_string_view(buf, util::utos(std::numeric_limits<uint64_t>::max(), buf)));
+}
+
+void test_util_make_string_ref_uint(void) {
+  BlockAllocator balloc(1024, 1024);
+
+  assert_eq("0"sv, util::make_string_ref_uint(balloc, 0u));
+  assert_eq("123"sv, util::make_string_ref_uint(balloc, 123u));
+  assert_eq("18446744073709551615"sv,
+            util::make_string_ref_uint(balloc, 18446744073709551615ULL));
+}
+
+void test_util_utos_unit(void) {
+  assert_eq("0", util::utos_unit(0u));
+  assert_eq("1023", util::utos_unit(1023u));
+  assert_eq("1K", util::utos_unit(1024u));
+  assert_eq("1K", util::utos_unit(1025u));
+  assert_eq("1M", util::utos_unit(1u << 20));
+  assert_eq("1G", util::utos_unit(1u << 30));
+  assert_eq("1024G", util::utos_unit(1ULL << 40));
+}
+
+void test_util_utos_funit(void) {
+  assert_eq("0", util::utos_funit(0u));
+  assert_eq("1023", util::utos_funit(1023u));
+  assert_eq("1.00K", util::utos_funit(1024u));
+  assert_eq("1.00K", util::utos_funit(1025u));
+  assert_eq("1.09K", util::utos_funit(1119u));
+  assert_eq("1.27K", util::utos_funit(1300u));
+  assert_eq("1.00M", util::utos_funit(1u << 20));
+  assert_eq("1.18M", util::utos_funit(1234567u));
+  assert_eq("1.00G", util::utos_funit(1u << 30));
+  assert_eq("4492450797.23G", util::utos_funit(4823732313248234343ULL));
+  assert_eq("1024.00G", util::utos_funit(1ULL << 40));
+}
+
+void test_util_parse_uint_with_unit(void) {
+  assert_ok_eq(0, util::parse_uint_with_unit("0"));
+  assert_ok_eq(1023, util::parse_uint_with_unit("1023"));
+  assert_ok_eq(1024, util::parse_uint_with_unit("1k"));
+  assert_ok_eq(2048, util::parse_uint_with_unit("2K"));
+  assert_ok_eq(1 << 20, util::parse_uint_with_unit("1m"));
+  assert_ok_eq(1 << 21, util::parse_uint_with_unit("2M"));
+  assert_ok_eq(1 << 30, util::parse_uint_with_unit("1g"));
+  assert_ok_eq(1LL << 31, util::parse_uint_with_unit("2G"));
+  assert_ok_eq(9223372036854775807LL,
+               util::parse_uint_with_unit("9223372036854775807"));
+
+  // check overflow case
+  assert_err(Error::INTEGER_OVERFLOW,
+             util::parse_uint_with_unit("9223372036854775808"));
+  assert_err(Error::INTEGER_OVERFLOW,
+             util::parse_uint_with_unit("10000000000000000000"));
+  assert_err(Error::INTEGER_OVERFLOW,
+             util::parse_uint_with_unit("9223372036854775807G"));
+
+  // bad characters
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint_with_unit("1.1"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint_with_unit("1a"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint_with_unit("a1"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint_with_unit("1T"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint_with_unit(""));
+}
+
+void test_util_parse_uint(void) {
+  assert_ok_eq(0, util::parse_uint("0"));
+  assert_ok_eq(1023, util::parse_uint("1023"));
+  assert_false(util::parse_uint("1k"));
+  assert_ok_eq(9223372036854775807LL, util::parse_uint("9223372036854775807"));
+
+  // check overflow case
+  assert_err(Error::INTEGER_OVERFLOW, util::parse_uint("9223372036854775808"));
+  assert_err(Error::INTEGER_OVERFLOW, util::parse_uint("10000000000000000000"));
+
+  // bad characters
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint("1.1"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint("1a"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint("a1"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint("1T"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_uint(""));
+}
+
+void test_util_parse_duration_with_unit(void) {
+  assert_ok_eq(0., util::parse_duration_with_unit("0"));
+  assert_ok_eq(123., util::parse_duration_with_unit("123"));
+  assert_ok_eq(123., util::parse_duration_with_unit("123s"));
+  assert_ok_eq(0.500, util::parse_duration_with_unit("500ms"));
+  assert_ok_eq(123., util::parse_duration_with_unit("123S"));
+  assert_ok_eq(0.500, util::parse_duration_with_unit("500MS"));
+  assert_ok_eq(180, util::parse_duration_with_unit("3m"));
+  assert_ok_eq(3600 * 5, util::parse_duration_with_unit("5h"));
+
+  // check overflow case
+  assert_err(Error::INTEGER_OVERFLOW,
+             util::parse_duration_with_unit("9223372036854775808"));
+
+  // bad characters
+  assert_err(Error::INVALID_ARGUMENT, util::parse_duration_with_unit("0u"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_duration_with_unit("0xs"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_duration_with_unit("0mt"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_duration_with_unit("0mss"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_duration_with_unit("s"));
+  assert_err(Error::INVALID_ARGUMENT, util::parse_duration_with_unit("ms"));
+}
+
+void test_util_duration_str(void) {
+  assert_eq("0", util::duration_str(0.));
+  assert_eq("1s", util::duration_str(1.));
+  assert_eq("500ms", util::duration_str(0.5));
+  assert_eq("1500ms", util::duration_str(1.5));
+  assert_eq("2m", util::duration_str(120.));
+  assert_eq("121s", util::duration_str(121.));
+  assert_eq("1h", util::duration_str(3600.));
+}
+
+void test_util_format_duration(void) {
+  assert_eq("0us", util::format_duration(std::chrono::microseconds(0)));
+  assert_eq("999us", util::format_duration(std::chrono::microseconds(999)));
+  assert_eq("1.00ms", util::format_duration(std::chrono::microseconds(1000)));
+  assert_eq("1.09ms", util::format_duration(std::chrono::microseconds(1090)));
+  assert_eq("1.01ms", util::format_duration(std::chrono::microseconds(1009)));
+  assert_eq("999.99ms",
+            util::format_duration(std::chrono::microseconds(999990)));
+  assert_eq("1.00s", util::format_duration(std::chrono::microseconds(1000000)));
+  assert_eq("1.05s", util::format_duration(std::chrono::microseconds(1050000)));
+
+  assert_eq("0us", util::format_duration(0.));
+  assert_eq("999us", util::format_duration(0.000999));
+  assert_eq("1.00ms", util::format_duration(0.001));
+  assert_eq("1.09ms", util::format_duration(0.00109));
+  assert_eq("1.01ms", util::format_duration(0.001009));
+  assert_eq("999.99ms", util::format_duration(0.99999));
+  assert_eq("1.00s", util::format_duration(1.));
+  assert_eq("1.05s", util::format_duration(1.05));
+}
+
+void test_util_starts_with(void) {
+  assert_true(util::starts_with("foo"sv, "foo"sv));
+  assert_true(util::starts_with("fooo"sv, "foo"sv));
+  assert_true(util::starts_with("ofoo"sv, ""sv));
+  assert_false(util::starts_with("ofoo"sv, "foo"sv));
+
+  assert_true(util::istarts_with("FOO"sv, "fOO"sv));
+  assert_true(util::istarts_with("ofoo"sv, ""sv));
+  assert_true(util::istarts_with("fOOo"sv, "Foo"sv));
+  assert_false(util::istarts_with("ofoo"sv, "foo"sv));
+}
+
+void test_util_ends_with(void) {
+  assert_true(util::ends_with("foo"sv, "foo"sv));
+  assert_true(util::ends_with("foo"sv, ""sv));
+  assert_true(util::ends_with("ofoo"sv, "foo"sv));
+  assert_false(util::ends_with("ofoo"sv, "fo"sv));
+
+  assert_true(util::iends_with("fOo"sv, "Foo"sv));
+  assert_true(util::iends_with("foo"sv, ""sv));
+  assert_true(util::iends_with("oFoo"sv, "fOO"sv));
+  assert_false(util::iends_with("ofoo"sv, "fo"sv));
+}
+
+void test_util_parse_http_date(void) {
+  assert_ok_eq(1001939696,
+               util::parse_http_date("Mon, 1 Oct 2001 12:34:56 GMT"sv));
+
+  assert_err(Error::INVALID_ARGUMENT,
+             util::parse_http_date("Mon, 1 Oct 200X 12:34:56 GMT"sv));
+}
+
+void test_util_localtime_date(void) {
+  std::array<char, 30> buf;
+
+#ifdef HAVE_STD_CHRONO_TIME_ZONE
+  assert_eq(
+    "2001-10-02T00:34:56.123+12:00"sv,
+    util::format_iso8601(buf.data(),
+                         std::chrono::system_clock::time_point(
+                           std::chrono::milliseconds(1001939696123LL)),
+                         std::chrono::locate_zone("Pacific/Auckland"sv)));
+
+  assert_eq(
+    "20011002T003456.123+1200"sv,
+    util::format_iso8601_basic(buf.data(),
+                               std::chrono::system_clock::time_point(
+                                 std::chrono::milliseconds(1001939696123LL)),
+                               std::chrono::locate_zone("Pacific/Auckland"sv)));
+
+  assert_eq("02/Oct/2001:00:34:56 +1200"sv,
+            util::format_common_log(
+              buf.data(), std::chrono::system_clock::from_time_t(1001939696),
+              std::chrono::locate_zone("Pacific/Auckland"sv)));
+
+  assert_eq("2001-10-01T12:34:56.123Z"sv,
+            util::format_iso8601(buf.data(),
+                                 std::chrono::system_clock::time_point(
+                                   std::chrono::milliseconds(1001939696123LL)),
+                                 std::chrono::locate_zone("GMT"sv)));
+
+  assert_eq(
+    "20011001T123456.123Z"sv,
+    util::format_iso8601_basic(buf.data(),
+                               std::chrono::system_clock::time_point(
+                                 std::chrono::milliseconds(1001939696123LL)),
+                               std::chrono::locate_zone("GMT"sv)));
+
+  assert_eq("01/Oct/2001:12:34:56 +0000"sv,
+            util::format_common_log(
+              buf.data(), std::chrono::system_clock::from_time_t(1001939696),
+              std::chrono::locate_zone("GMT"sv)));
+#else // !defined(HAVE_STD_CHRONO_TIME_ZONE)
+  auto tz = getenv("TZ");
+  if (tz) {
+    tz = strdup(tz);
+  }
+#  ifdef __linux__
+  setenv("TZ", "NZST-12:00:00:00", 1);
+#  else  // !defined(__linux__)
+  setenv("TZ", ":Pacific/Auckland", 1);
+#  endif // !defined(__linux__)
+  tzset();
+
+  assert_eq("2001-10-02T00:34:56.123+12:00"sv,
+            util::format_iso8601(
+              buf.data(), std::chrono::system_clock::time_point(
+                            std::chrono::milliseconds(1001939696123LL))));
+
+  assert_eq("20011002T003456.123+1200"sv,
+            util::format_iso8601_basic(
+              buf.data(), std::chrono::system_clock::time_point(
+                            std::chrono::milliseconds(1001939696123LL))));
+
+  assert_eq("02/Oct/2001:00:34:56 +1200"sv,
+            util::format_common_log(
+              buf.data(), std::chrono::system_clock::from_time_t(1001939696)));
+
+  if (tz) {
+    setenv("TZ", tz, 1);
+    free(tz);
+  } else {
+    unsetenv("TZ");
+  }
+  tzset();
+#endif   // !defined(HAVE_STD_CHRONO_TIME_ZONE)
+}
+
+void test_util_get_uint64(void) {
+  {
+    auto v = std::to_array<unsigned char>(
+      {0x01, 0x12, 0x34, 0x56, 0xFF, 0x9A, 0xAB, 0xBC});
+
+    auto n = util::get_uint64(v.data());
+
+    assert_eq(0x01123456FF9AABBCULL, n);
+  }
+  {
+    auto v = std::to_array<unsigned char>(
+      {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF});
+
+    auto n = util::get_uint64(v.data());
+
+    assert_eq(0xFFFFFFFFFFFFFFFFULL, n);
+  }
+}
+
+void test_util_parse_config_str_list(void) {
+  assert_eq(std::vector{"a"s}, util::parse_config_str_list("a"sv));
+  assert_eq((std::vector{"a"s, ""s}), util::parse_config_str_list("a,"sv));
+  assert_eq((std::vector{""s, "a"s, ""s, ""s}),
+            util::parse_config_str_list(":a::"sv, ':'));
+  assert_eq(std::vector<std::string>{}, util::parse_config_str_list(""sv));
+  assert_eq((std::vector{"alpha"s, "bravo"s, "charlie"s}),
+            util::parse_config_str_list("alpha,bravo,charlie"sv));
+}
+
+void test_util_make_http_hostport(void) {
+  BlockAllocator balloc(4096, 4096);
+
+  assert_eq("localhost"sv, util::make_http_hostport(balloc, "localhost"sv, 80));
+  assert_eq("[::1]"sv, util::make_http_hostport(balloc, "::1"sv, 443));
+  assert_eq("localhost:3000"sv,
+            util::make_http_hostport(balloc, "localhost"sv, 3000));
+}
+
+void test_util_make_hostport(void) {
+  std::array<char, util::max_hostport> hostport_buf;
+  assert_eq(
+    "localhost:80"sv,
+    util::make_hostport("localhost"sv, 80, std::ranges::begin(hostport_buf)));
+  assert_eq("[::1]:443"sv, util::make_hostport(
+                             "::1"sv, 443, std::ranges::begin(hostport_buf)));
+
+  BlockAllocator balloc(4096, 4096);
+  assert_eq("localhost:80"sv, util::make_hostport(balloc, "localhost"sv, 80));
+  assert_eq("[::1]:443"sv, util::make_hostport(balloc, "::1"sv, 443));
+}
+
+void test_util_random_alpha_digit(void) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::array<uint8_t, 19> data;
+
+  auto p = util::random_alpha_digit(std::ranges::begin(data),
+                                    std::ranges::end(data), gen);
+
+  assert_true(std::ranges::end(data) == p);
+
+  for (auto b : data) {
+    assert_true(('A' <= b && b <= 'Z') || ('a' <= b && b <= 'z') ||
+                ('0' <= b && b <= '9'));
+  }
+}
+
+void test_util_format_hex(void) {
+  BlockAllocator balloc(4096, 4096);
+
+  assert_eq("0ff0"sv, util::format_hex(balloc, "\x0f\xf0"sv));
+  assert_eq(""sv, util::format_hex(balloc, ""sv));
+
+  std::string o;
+  o.resize(4);
+
+  assert_true(std::ranges::end(o) ==
+              util::format_hex("\xbe\xef"sv, std::ranges::begin(o)));
+  assert_eq("beef"s, o);
+  assert_eq("beef"s, util::format_hex("\xbe\xef"sv));
+
+  std::array<char, 64> buf;
+
+  assert_eq("00"sv, as_string_view(std::ranges::begin(buf),
+                                   util::format_hex(static_cast<uint8_t>(0u),
+                                                    std::ranges::begin(buf))));
+  assert_eq("ec"sv, as_string_view(std::ranges::begin(buf),
+                                   util::format_hex(static_cast<uint8_t>(0xECU),
+                                                    std::ranges::begin(buf))));
+  assert_eq("00000000"sv,
+            as_string_view(std::ranges::begin(buf),
+                           util::format_hex(0u, std::ranges::begin(buf))));
+  assert_eq("0000ab01"sv,
+            as_string_view(std::ranges::begin(buf),
+                           util::format_hex(0xAB01U, std::ranges::begin(buf))));
+  assert_eq("deadbeefbaadf00d"sv,
+            as_string_view(
+              std::ranges::begin(buf),
+              util::format_hex(0xDEADBEEFBAADF00DU, std::ranges::begin(buf))));
+  assert_eq(
+    "ffffffffffffffff"sv,
+    as_string_view(std::ranges::begin(buf),
+                   util::format_hex(std::numeric_limits<uint64_t>::max(),
+                                    std::ranges::begin(buf))));
+
+  std::vector<char> char_vec;
+  util::format_hex(0xDEADBEEF, std::back_inserter(char_vec));
+
+  assert_eq("deadbeef"sv, as_string_view(std::ranges::begin(char_vec),
+                                         std::ranges::end(char_vec)));
+
+  std::vector<uint8_t> uint8_vec;
+  util::format_hex(0xDEADBEEF, std::back_inserter(uint8_vec));
+
+  assert_eq("deadbeef"sv,
+            as_string_view(reinterpret_cast<const char *>(uint8_vec.data()),
+                           uint8_vec.size()));
+}
+
+void test_util_format_upper_hex_uint8(void) {
+  std::array<char, 64> buf;
+
+  assert_eq("00"sv, as_string_view(std::ranges::begin(buf),
+                                   util::format_upper_hex_uint8(
+                                     0, std::ranges::begin(buf))));
+  assert_eq("0A"sv, as_string_view(std::ranges::begin(buf),
+                                   util::format_upper_hex_uint8(
+                                     0xA, std::ranges::begin(buf))));
+  assert_eq("7C"sv, as_string_view(std::ranges::begin(buf),
+                                   util::format_upper_hex_uint8(
+                                     0x07C, std::ranges::begin(buf))));
+  assert_eq("EB"sv, as_string_view(std::ranges::begin(buf),
+                                   util::format_upper_hex_uint8(
+                                     0xEB, std::ranges::begin(buf))));
+  assert_eq("FF"sv, as_string_view(std::ranges::begin(buf),
+                                   util::format_upper_hex_uint8(
+                                     0xFF, std::ranges::begin(buf))));
+}
+
+void test_util_is_hex_string(void) {
+  assert_true(util::is_hex_string(""sv));
+  assert_true(util::is_hex_string("0123456789abcdef"sv));
+  assert_true(util::is_hex_string("0123456789ABCDEF"sv));
+  assert_false(util::is_hex_string("000"sv));
+  assert_false(util::is_hex_string("XX"sv));
+}
+
+void test_util_decode_hex(void) {
+  BlockAllocator balloc(4096, 4096);
+
+  assert_eq("\x0f\xf0"sv, as_string_view(util::decode_hex(balloc, "0ff0"sv)));
+  assert_eq(""sv, as_string_view(util::decode_hex(balloc, ""sv)));
+}
+
+void test_util_extract_host(void) {
+  assert_ok_eq("foo"sv, util::extract_host("foo"sv));
+  assert_ok_eq("foo"sv, util::extract_host("foo:"sv));
+  assert_ok_eq("foo"sv, util::extract_host("foo:0"sv));
+  assert_ok_eq("[::1]"sv, util::extract_host("[::1]"sv));
+  assert_ok_eq("[::1]"sv, util::extract_host("[::1]:"sv));
+
+  assert_err(Error::INVALID_ARGUMENT, util::extract_host(":foo"sv));
+  assert_err(Error::INVALID_ARGUMENT, util::extract_host("[::1"sv));
+  assert_err(Error::INVALID_ARGUMENT, util::extract_host("[::1]0"sv));
+  assert_err(Error::INVALID_ARGUMENT, util::extract_host(""sv));
+}
+
+void test_util_split_hostport(void) {
+  assert_ok_eq(std::make_pair("foo"sv, ""sv), util::split_hostport("foo"sv));
+  assert_ok_eq(std::make_pair("foo"sv, "80"sv),
+               util::split_hostport("foo:80"sv));
+  assert_ok_eq(std::make_pair("::1"sv, "80"sv),
+               util::split_hostport("[::1]:80"sv));
+  assert_ok_eq(std::make_pair("::1"sv, ""sv), util::split_hostport("[::1]"sv));
+
+  assert_err(Error::INVALID_ARGUMENT, util::split_hostport(""sv));
+  assert_err(Error::INVALID_ARGUMENT, util::split_hostport("[::1]:"sv));
+  assert_err(Error::INVALID_ARGUMENT, util::split_hostport("foo:"sv));
+  assert_err(Error::INVALID_ARGUMENT, util::split_hostport("[::1:"sv));
+  assert_err(Error::INVALID_ARGUMENT, util::split_hostport("[::1]80"sv));
+}
+
+void test_util_split_str(void) {
+  assert_eq(std::vector<std::string_view>{}, util::split_str(""sv, ','));
+  assert_eq(std::vector{"alpha"sv}, util::split_str("alpha"sv, ','));
+  assert_eq((std::vector<std::string_view>{"alpha"sv, ""sv}),
+            util::split_str("alpha,"sv, ','));
+  assert_eq((std::vector<std::string_view>{"alpha"sv, "bravo"sv}),
+            util::split_str("alpha,bravo"sv, ','));
+  assert_eq((std::vector<std::string_view>{"alpha"sv, "bravo"sv, "charlie"sv}),
+            util::split_str("alpha,bravo,charlie"sv, ','));
+
+  BlockAllocator balloc(4096, 4096);
+
+  assert_eq((std::vector<std::string_view>{"alpha"sv, "bravo"sv}),
+            util::split_str(balloc, "alpha,bravo"sv, ','));
+
+  assert_eq((std::vector<std::string_view>{"alpha"sv, "bravo"sv, "charlie"sv}),
+            util::split_str("alpha,bravo,charlie"sv, ',', 3));
+  assert_eq(std::vector<std::string_view>{}, util::split_str(""sv, ',', 1));
+  assert_eq(std::vector<std::string_view>{}, util::split_str(""sv, ',', 2));
+  assert_eq((std::vector<std::string_view>{"alpha"sv, "bravo,charlie"sv}),
+            util::split_str("alpha,bravo,charlie"sv, ',', 2));
+  assert_eq(std::vector<std::string_view>{"alpha"sv},
+            util::split_str("alpha"sv, ',', 2));
+  assert_eq((std::vector<std::string_view>{"alpha"sv, ""sv}),
+            util::split_str("alpha,"sv, ',', 2));
+  assert_eq(std::vector<std::string_view>{"alpha,bravo,charlie"sv},
+            util::split_str("alpha,bravo,charlie"sv, ',', 1));
+}
+
+void test_util_rstrip(void) {
+  BlockAllocator balloc(4096, 4096);
+
+  assert_eq("alpha"sv, util::rstrip(balloc, "alpha"sv));
+  assert_eq("alpha"sv, util::rstrip(balloc, "alpha "sv));
+  assert_eq("alpha"sv, util::rstrip(balloc, "alpha \t"sv));
+  assert_eq(""sv, util::rstrip(balloc, ""sv));
+  assert_eq(""sv, util::rstrip(balloc, "\t\t\t   "sv));
+}
+
+void test_util_contains(void) {
+  assert_true(util::contains("alphabravo"sv, 'a'));
+  assert_true(util::contains("alphabravo"sv, 'o'));
+  assert_false(util::contains("alphabravo"sv, 'x'));
+  assert_false(util::contains(""sv, ' '));
+}
+
+void test_util_hex_to_uint(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    if (!util::is_hex_digit(c)) {
+      assert_eq(256, util::hex_to_uint(c));
+    }
+  }
+
+  for (uint32_t i = 0; i < 10; ++i) {
+    assert_eq(i, util::hex_to_uint(static_cast<char>('0' + i)));
+  }
+
+  for (uint32_t i = 0; i < 6; ++i) {
+    assert_eq(i + 10, util::hex_to_uint(static_cast<char>('A' + i)));
+  }
+
+  for (uint32_t i = 0; i < 6; ++i) {
+    assert_eq(i + 10, util::hex_to_uint(static_cast<char>('a' + i)));
+  }
+}
+
+void test_util_is_alpha(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    if (('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z')) {
+      assert_true(util::is_alpha(c));
+    } else {
+      assert_false(util::is_alpha(c));
+    }
+  }
+}
+
+void test_util_is_digit(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    if ('0' <= c && c <= '9') {
+      assert_true(util::is_digit(c));
+    } else {
+      assert_false(util::is_digit(c));
+    }
+  }
+}
+
+void test_util_is_hex_digit(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    if (util::is_digit(c) || ('A' <= c && c <= 'F') || ('a' <= c && c <= 'f')) {
+      assert_true(util::is_hex_digit(c));
+    } else {
+      assert_false(util::is_hex_digit(c));
+    }
+  }
+}
+
+void test_util_in_rfc3986_unreserved_chars(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    switch (c) {
+    case '-':
+    case '.':
+    case '_':
+    case '~':
+      assert_true(util::in_rfc3986_unreserved_chars(c));
+      break;
+    default:
+      if (util::is_digit(c) || util::is_alpha(c)) {
+        assert_true(util::in_rfc3986_unreserved_chars(c));
+      } else {
+        assert_false(util::in_rfc3986_unreserved_chars(c));
+      }
+    }
+  }
+}
+
+void test_util_in_rfc3986_sub_delims(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    switch (c) {
+    case '!':
+    case '$':
+    case '&':
+    case '\'':
+    case '(':
+    case ')':
+    case '*':
+    case '+':
+    case ',':
+    case ';':
+    case '=':
+      assert_true(util::in_rfc3986_sub_delims(c));
+      break;
+    default:
+      assert_false(util::in_rfc3986_sub_delims(c));
+    }
+  }
+}
+
+void test_util_in_token(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    switch (c) {
+    case '!':
+    case '#':
+    case '$':
+    case '%':
+    case '&':
+    case '\'':
+    case '*':
+    case '+':
+    case '-':
+    case '.':
+    case '^':
+    case '_':
+    case '`':
+    case '|':
+    case '~':
+      assert_true(util::in_token(c));
+      break;
+    default:
+      if (util::is_digit(c) || util::is_alpha(c)) {
+        assert_true(util::in_token(c));
+      } else {
+        assert_false(util::in_token(c));
+      }
+    }
+  }
+}
+
+void test_util_in_attr_char(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    switch (c) {
+    case '%':
+    case '\'':
+    case '*':
+      assert_false(util::in_attr_char(c));
+      break;
+    default:
+      if (util::in_token(c)) {
+        assert_true(util::in_attr_char(c));
+      } else {
+        assert_false(util::in_attr_char(c));
+      }
+    }
+  }
+}
+
+void test_util_upcase(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    if ('a' <= c && c <= 'z') {
+      assert_eq(static_cast<char>(c - 'a' + 'A'), util::upcase(c));
+    } else {
+      assert_eq(c, util::upcase(c));
+    }
+  }
+}
+
+void test_util_lowcase(void) {
+  for (size_t i = 0; i < 256; ++i) {
+    auto c = static_cast<char>(i);
+    if ('A' <= c && c <= 'Z') {
+      assert_eq(static_cast<char>(c - 'A' + 'a'), util::lowcase(c));
+    } else {
+      assert_eq(c, util::lowcase(c));
+    }
+  }
+}
+
+void test_util_to_numeric_addr(void) {
+  addrinfo hints{
+    .ai_flags = AI_NUMERICHOST | AI_NUMERICSERV,
+    .ai_family = AF_UNSPEC,
+  };
+
+  addrinfo *res;
+
+  auto rv = getaddrinfo("192.168.0.1", "443", &hints, &res);
+
+  assert_eq(0, rv);
+
+  assert_eq("192.168.0.1:443"s,
+            util::to_numeric_addr(res->ai_addr, res->ai_addrlen));
+
+  freeaddrinfo(res);
+
+  rv = getaddrinfo("2001:0db8:85a3:0000:0000:8a2e:0370:7334", "4443", &hints,
+                   &res);
+
+  assert_eq(0, rv);
+
+  assert_eq("[2001:db8:85a3::8a2e:370:7334]:4443"s,
+            util::to_numeric_addr(res->ai_addr, res->ai_addrlen));
+
+  freeaddrinfo(res);
+}
+
+void test_util_fieldeq(void) {
+  static constexpr auto a = "https://example.com/path"sv;
+  static constexpr auto b = "https://nghttp2.org"sv;
+
+  urlparse_url u1, u2;
+
+  assert_eq(0, urlparse_parse_url(a.data(), a.size(), 0, &u1));
+  assert_eq(0, urlparse_parse_url(b.data(), b.size(), 0, &u2));
+
+  assert_true(util::fieldeq(a.data(), u1, b.data(), u2, URLPARSE_SCHEMA));
+  assert_true(util::fieldeq(a.data(), u1, b.data(), u2, URLPARSE_PORT));
+  assert_false(util::fieldeq(a.data(), u1, b.data(), u2, URLPARSE_PATH));
+  assert_false(util::fieldeq(a.data(), u1, b.data(), u2, URLPARSE_HOST));
+}
+
+void test_util_sha256(void) {
+  static constexpr auto s = "All your base are belong to us."sv;
+  std::array<uint8_t, 32> md;
+
+  assert_true(util::sha256(md, s).has_value());
+  auto mdhex = util::format_hex(md);
+
+  assert_eq(
+    "c2c565a8c7dc220ed7d9ff2f34b40dae7864ef0b8189557f0d3b7360ef34e1cd"sv,
+    mdhex);
+}
+
+void test_util_sha1(void) {
+  static constexpr auto s = "All your base are belong to us."sv;
+  std::array<uint8_t, 20> md;
+
+  assert_true(util::sha1(md, s).has_value());
+  auto mdhex = util::format_hex(md);
+
+  assert_eq("6e65eeb0bab294dadf2297a7aa2315703ed5b958"sv, mdhex);
+}
+
+} // namespace shrpx

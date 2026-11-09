@@ -1,0 +1,17 @@
+.{
+    .name = .orchd_rootstock_containerd,
+    .version = "0.4.0",
+    .fingerprint = 0xbb03db856b9b0050,
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .nghttp2 = .{
+            .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.71.0/nghttp2-1.71.0.tar.gz",
+            .hash = "N-V-__8AAIgi2gCNAFzaSP_Qwb8MVv4GhCI5tn9HjmJdBW5y",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

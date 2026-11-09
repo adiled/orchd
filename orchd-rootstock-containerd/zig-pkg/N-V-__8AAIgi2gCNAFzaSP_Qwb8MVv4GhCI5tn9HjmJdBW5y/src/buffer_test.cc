@@ -1,0 +1,87 @@
+/*
+ * nghttp2 - HTTP/2 C Library
+ *
+ * Copyright (c) 2015 Tatsuhiro Tsujikawa
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+#include "buffer_test.h"
+
+#include <cstring>
+#include <tuple>
+
+#include <nghttp2/nghttp2.h>
+
+#include "buffer.h"
+
+using namespace std::literals;
+
+namespace nghttp2 {
+
+namespace {
+const MunitTest tests[]{
+  munit_void_test(test_buffer_write),
+  munit_test_end(),
+};
+} // namespace
+
+const MunitSuite buffer_suite{
+  .prefix = "/buffer",
+  .tests = tests,
+};
+
+void test_buffer_write(void) {
+  Buffer<16> b;
+  assert_eq(0, b.rleft());
+  assert_eq(16, b.wleft());
+
+  b.write(as_uint8_span(std::span{"012"sv}));
+
+  assert_eq(3, b.rleft());
+  assert_eq(13, b.wleft());
+  assert_ptr_equal(b.pos, std::ranges::begin(b.buf));
+
+  b.drain(3);
+
+  assert_eq(0, b.rleft());
+  assert_eq(13, b.wleft());
+  assert_eq(3, b.pos - std::ranges::begin(b.buf));
+
+  assert_eq(13, b.write(as_uint8_span(std::span{"0123456789ABCDEF"sv})));
+
+  assert_eq(13, b.rleft());
+  assert_eq(0, b.wleft());
+  assert_eq(3, b.pos - std::ranges::begin(b.buf));
+  assert_memory_equal(13, b.pos, "0123456789ABC");
+
+  b.reset();
+
+  assert_eq(0, b.rleft());
+  assert_eq(16, b.wleft());
+  assert_ptr_equal(b.pos, std::ranges::begin(b.buf));
+
+  b.write(5);
+
+  assert_eq(5, b.rleft());
+  assert_eq(11, b.wleft());
+  assert_ptr_equal(b.pos, std::ranges::begin(b.buf));
+}
+
+} // namespace nghttp2
