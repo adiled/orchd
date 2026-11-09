@@ -30,6 +30,9 @@ pub const Service = struct {
     name: []const u8,
     mode: []const u8,
     image: ?[]const u8 = null,
+    run_command: ?[]const u8 = null,
+    stop_command: ?[]const u8 = null,
+    reload_command: ?[]const u8 = null,
     entrypoint: ?[]const u8 = null,
     cmd: ?[]const u8 = null,
     publish: []const Port = &.{},
@@ -62,11 +65,14 @@ pub const ExecSet = struct {
     /// Used to delete the container so the next start gets a fresh one.
     post_stop: ?[]const u8 = null,
 
+    reload: ?[]const u8 = null,
+
     /// Free all owned strings. Call when the ExecSet was produced by exec_set.build().
     pub fn deinit(self: ExecSet, allocator: std.mem.Allocator) void {
         allocator.free(self.start);
         if (self.pre_start) |s| allocator.free(s);
         if (self.stop) |s| allocator.free(s);
         if (self.post_stop) |s| allocator.free(s);
+        if (self.reload) |s| allocator.free(s);
     }
 };

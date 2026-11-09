@@ -1,7 +1,7 @@
 //! Client for com.apple.container.apiserver.
 //!
 //! Covers the operations orchd needs:
-//!   ping      — liveness check (used by `orchd-apple check`)
+//!   ping      — liveness check (used by `orchd-rootstock-apple check`)
 //!   stop      — graceful container stop
 //!   delete    — container deletion
 //!
@@ -55,24 +55,30 @@ pub const Client = struct {
         const id_z = allocator.dupeSentinel(u8, id, 0) catch return xpc.XpcError.ConnectionFailed;
         defer allocator.free(id_z);
 
-        // ContainerStopOptions @ 0.12.3 { timeoutInSeconds: Int32, signal: Int32 }
-        // signal is a number (15 = SIGTERM). NOTE: this struct differs across
-        // container versions; it must match the pinned, installed daemon.
-        const opts_json = std.fmt.allocPrint(
-            allocator,
-            "{{\"timeoutInSeconds\":{d},\"signal\":15}}",
-            .{timeout_secs},
-        ) catch return xpc.XpcError.ConnectionFailed;
-        defer allocator.free(opts_json);
+        // ContainerStopOptions { timeoutInSeconds: Int32, signal }: the daemon
+        // since 1.0 decodes signal as a String, 0.12 as an Int32. Speak the
+        // newer form, and the older one when the daemon says so.
+        for ([_][]const u8{ "\"SIGTERM\"", "15" }) |signal| {
+            const opts_json = std.fmt.allocPrint(
+                allocator,
+                "{{\"timeoutInSeconds\":{d},\"signal\":{s}}}",
+                .{ timeout_secs, signal },
+            ) catch return xpc.XpcError.ConnectionFailed;
+            defer allocator.free(opts_json);
 
-        const req = xpc.Message.init(xpc.Route.container_stop);
-        defer req.deinit();
-        req.setString(xpc.Key.id, id_z);
-        req.setData(xpc.Key.stop_options, opts_json);
+            const req = xpc.Message.init(xpc.Route.container_stop);
+            defer req.deinit();
+            req.setString(xpc.Key.id, id_z);
+            req.setData(xpc.Key.stop_options, opts_json);
 
-        const reply = try self.conn.send(req);
-        defer reply.deinit();
-        try reply.checkError();
+            const reply = try self.conn.send(req);
+            defer reply.deinit();
+            if (reply.errorText()) |text| {
+                if (std.mem.indexOf(u8, text, "typeMismatch") != null) continue;
+            }
+            return reply.checkError();
+        }
+        return xpc.XpcError.ApiError;
     }
 
     /// Delete a container. Pass force=true to delete even if running.

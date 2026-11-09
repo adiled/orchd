@@ -1,14 +1,14 @@
-//! ExecSet generation: translates a Service into `orchd-apple` XPC subcommands.
+//! ExecSet generation: translates a Service into `orchd-rootstock-apple` XPC subcommands.
 //!
 //! Naming:  <grove>-<service.name>  e.g. "orch-postgres"
 //!
 //! Each stage re-invokes this very binary, which talks to the pinned apple
 //! container daemon over XPC (no `container` CLI anywhere):
-//!   pre_start  — `orchd-apple pull <image>`
-//!   start      — `orchd-apple run <name> <image> --spec <b64> && orchd-apple wait <name>`
+//!   pre_start  — `orchd-rootstock-apple pull <image>`
+//!   start      — `orchd-rootstock-apple run <name> <image> --spec <b64> && orchd-rootstock-apple wait <name>`
 //!                (wait blocks while the container lives, so launchd tracks it)
-//!   stop       — `orchd-apple stop <name>`
-//!   post_stop  — `orchd-apple delete <name>` (clean slate on restart)
+//!   stop       — `orchd-rootstock-apple stop <name>`
+//!   post_stop  — `orchd-rootstock-apple delete <name>` (clean slate on restart)
 //!
 //! The full Service config (env, env_files, memory, cpus, workdir, entrypoint,
 //! cmd) is carried into `run` as a base64-encoded JSON blob via `--spec`. The
@@ -81,7 +81,7 @@ pub fn encodeSpec(allocator: std.mem.Allocator, svc: types.Service) Error![]u8 {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-test "minimal container service drives orchd-apple over xpc" {
+test "minimal container service drives orchd-rootstock-apple over xpc" {
     const allocator = std.testing.allocator;
     const io = std.Io.Threaded.global_single_threaded.io();
     const svc = types.Service{ .name = "postgres", .mode = "container", .image = "postgres:15" };

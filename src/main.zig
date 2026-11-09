@@ -72,7 +72,7 @@ fn run(
     diag: *Diagnostic,
 ) !void {
     switch (command) {
-        .sow => return orchard.sow(arena, io, environ, config, stdout, stderr, diag),
+        .sow => return orchard.sow(arena, io, environ, config, stdout, diag),
         .plant => return orchard.plant(arena, io, config, stdout, stderr, diag),
         .tend => |t| if (t.service) |service| {
             const label = try supervise.serviceLabel(arena, config, service);

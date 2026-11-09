@@ -71,9 +71,9 @@ pub const Engine = struct {
         const spec = try e.parsed();
         try e.say("parsed {d} services (orch v{s})", .{ spec.services.len, spec.version });
 
-        const stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.log, e.diag);
+        const stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.diag);
         try stock.check(e.arena, e.io, e.diag);
-        try e.say("rootstock: {s}", .{stock.name()});
+        try e.say("rootstock: {s}", .{stock.name});
 
         var planted: std.ArrayList(types.Planted) = .empty;
         var skipped: std.ArrayList([]const u8) = .empty;
@@ -144,7 +144,7 @@ pub const Engine = struct {
     pub fn reloadTrees(e: *Engine, names: []const []const u8) !void {
         try e.checkServices(names);
         const spec = try e.parsed();
-        const stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.log, e.diag);
+        const stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.diag);
         try stock.check(e.arena, e.io, e.diag);
 
         var done: std.ArrayList([]const u8) = .empty;
