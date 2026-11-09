@@ -1,0 +1,110 @@
+#!/bin/sh
+set -eu
+
+repo="adiled/orchd"
+version="${ORCHD_VERSION:-latest}"
+dest="${ORCHD_INSTALL_DIR:-$HOME/.local/bin}"
+base="${ORCHD_DOWNLOAD_URL:-}"
+
+usage() {
+    cat <<EOF
+Install orchd, its rootstocks and orch from a GitHub release.
+
+  curl -fsSL https://raw.githubusercontent.com/$repo/main/install | sh
+
+Settings, as environment variables:
+  ORCHD_VERSION=0.5.0               a release other than the latest
+  ORCHD_INSTALL_DIR=/usr/local/bin  where the binaries go (default: ~/.local/bin)
+  ORCHD_DOWNLOAD_URL=<url>          a mirror holding the release files
+
+For system-wide use:
+  curl -fsSL https://raw.githubusercontent.com/$repo/main/install | sudo ORCHD_INSTALL_DIR=/usr/local/bin sh
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+die() {
+    printf 'install: %s\n' "$*" >&2
+    exit 1
+}
+
+case "${1:-}" in
+-h | --help)
+    usage
+    exit 0
+    ;;
+"") ;;
+*) die "unknown argument '$1' (try --help)" ;;
+esac
+
+case "$(uname -s)" in
+Linux) os=linux ;;
+Darwin) os=macos ;;
+*) die "no orchd build for $(uname -s); build from source with 'just install'" ;;
+esac
+case "$(uname -m)" in
+x86_64 | amd64) arch=x86_64 ;;
+arm64 | aarch64) arch=aarch64 ;;
+*) die "no orchd build for $(uname -m); build from source with 'just install'" ;;
+esac
+target="$arch-$os"
+case "$target" in
+x86_64-linux | aarch64-linux | aarch64-macos) ;;
+*) die "no orchd build for $target (there are x86_64-linux, aarch64-linux and aarch64-macos)" ;;
+esac
+
+if [ -z "$base" ]; then
+    if [ "$version" = latest ]; then
+        base="https://github.com/$repo/releases/latest/download"
+    else
+        base="https://github.com/$repo/releases/download/v${version#v}"
+    fi
+fi
+
+fetch() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$1" -O "$2"
+    else
+        die "need curl or wget"
+    fi
+}
+
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        die "need sha256sum or shasum to check the download"
+    fi
+}
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+tarball="orchd-$target.tar.gz"
+say "orchd: fetching $tarball ($version)"
+fetch "$base/$tarball" "$tmp/$tarball" || die "no $tarball at $base (releases before 0.5.0 carry no binaries)"
+fetch "$base/$tarball.sha256" "$tmp/$tarball.sha256" || die "no checksum for $tarball at $base"
+want="$(cut -d' ' -f1 <"$tmp/$tarball.sha256")"
+got="$(sha256 "$tmp/$tarball")"
+[ "$want" = "$got" ] || die "checksum mismatch for $tarball: expected $want, got $got"
+
+tar -xzf "$tmp/$tarball" -C "$tmp"
+[ -x "$tmp/bin/orchd" ] || die "$tarball holds no bin/orchd"
+mkdir -p "$dest" || die "cannot make $dest (set ORCHD_INSTALL_DIR, or run with sudo)"
+for file in "$tmp"/bin/*; do
+    name="$(basename "$file")"
+    cp "$file" "$dest/.$name.new" || die "cannot write to $dest (set ORCHD_INSTALL_DIR, or run with sudo)"
+    chmod 755 "$dest/.$name.new"
+    mv -f "$dest/.$name.new" "$dest/$name"
+    say "  $dest/$name"
+done
+
+say "installed $("$dest/orchd" --version)"
+case ":$PATH:" in
+*":$dest:"*) ;;
+*) say "$dest is not on your PATH; add it with: export PATH=\"$dest:\$PATH\"" ;;
+esac

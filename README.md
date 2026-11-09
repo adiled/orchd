@@ -9,19 +9,11 @@ uses systemd. You do not need to know how either works.
 
 ## Install
 
-From a [release](https://github.com/adiled/orchd/releases): unpack
-`orchd-<target>.tar.gz` and put its `bin/` on your `PATH`. It carries orchd, its
-rootstocks and `orch`, the parser orchd reads Orchfiles with; orchd finds them
-beside it, so keep them together.
-
-From source, with Zig 0.17.1, [`just`](https://github.com/casey/just) and
-[`orch`](https://github.com/adiled/orch) on your `PATH`:
-
 ```sh
-just install
+curl -fsSL https://raw.githubusercontent.com/adiled/orchd/main/install | sh
 ```
 
-That installs into `/usr/local/bin` (set `PREFIX` for elsewhere).
+From source: `just install` (Zig 0.17.1, with [`orch`](https://github.com/adiled/orch) on your `PATH`).
 
 ## Write an Orchfile
 
