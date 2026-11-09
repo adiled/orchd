@@ -14,6 +14,23 @@ use crate::config::Config;
 use crate::orchdi::{service_label, supervise_spec_path};
 use crate::platform::PlatformError;
 
+pub(crate) fn disabled_spec_path(config: &Config, label: &str) -> PathBuf {
+    config
+        .state_dir
+        .join("supervise")
+        .join("disabled")
+        .join(format!("{label}.json"))
+}
+
+fn spec_for(config: &Config, label: &str) -> PathBuf {
+    let enabled = PathBuf::from(supervise_spec_path(config, label));
+    if enabled.exists() {
+        enabled
+    } else {
+        disabled_spec_path(config, label)
+    }
+}
+
 fn run_dir(config: &Config) -> PathBuf {
     config.state_dir.join("run")
 }
@@ -87,7 +104,7 @@ pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> 
                 continue; // already supervised
             }
         }
-        let spec = supervise_spec_path(config, &label);
+        let spec = spec_for(config, &label);
         let out = fs::File::create(logfile(config, &label))?;
         let err = out.try_clone()?;
         let child = Command::new(orchd_exe())

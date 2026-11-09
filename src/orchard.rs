@@ -234,7 +234,13 @@ fn beds_systemd(services: &[Service], exec_sets: &[(usize, ExecSet)], config: &C
         artifacts: vec![Artifact {
             kind: "target".into(),
             path: units_dir.join(config.target_name()).display().to_string(),
-            content: generate_target(config),
+            content: generate_target(
+                config,
+                &exec_sets
+                    .iter()
+                    .map(|(idx, _)| &services[*idx])
+                    .collect::<Vec<_>>(),
+            ),
         }],
     });
     beds

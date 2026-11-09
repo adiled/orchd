@@ -194,11 +194,14 @@ pub fn generate_ready_gate(service: &Service, config: &Config) -> String {
     unit
 }
 
-pub fn generate_target(_config: &Config) -> String {
+pub fn generate_target(config: &Config, planted: &[&Service]) -> String {
     let mut unit = String::with_capacity(128);
 
     writeln!(unit, "[Unit]").unwrap();
     writeln!(unit, "Description=orch managed services").unwrap();
+    for svc in planted.iter().filter(|s| !s.disabled) {
+        writeln!(unit, "Wants={}", config.unit_name(&svc.name)).unwrap();
+    }
 
     writeln!(unit).unwrap();
     writeln!(unit, "[Install]").unwrap();
@@ -723,10 +726,22 @@ mod tests {
     #[test]
     fn test_generate_target() {
         let config = test_config();
-        let unit = generate_target(&config);
+        let unit = generate_target(&config, &[]);
 
         assert!(unit.contains("Description=orch managed services"));
         assert!(unit.contains("WantedBy=multi-user.target"));
+    }
+
+    #[test]
+    fn test_generate_target__wants_enabled_services_only() {
+        let config = test_config();
+        let web = simple_host_service("web", "x");
+        let mut db = simple_host_service("db", "x");
+        db.disabled = true;
+        let unit = generate_target(&config, &[&web, &db]);
+
+        assert!(unit.contains("Wants=orch-web.service"));
+        assert!(!unit.contains("orch-db.service"));
     }
 
     #[test]

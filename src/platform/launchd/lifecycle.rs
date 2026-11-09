@@ -1,9 +1,10 @@
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::Config;
 use crate::platform::PlatformError;
 
-use super::{install_dir, plist_dest_path};
+use super::{disabled_units_dir, install_dir, plist_dest_path};
 use crate::orchdi::service_label;
 
 /// launchctl domain target: `gui/<uid>` (user) or `system` (system).
@@ -60,17 +61,28 @@ pub(crate) fn bootout_label(config: &Config, label: &str) -> bool {
     false
 }
 
+fn plist_source(config: &Config, label: &str) -> Option<PathBuf> {
+    [
+        plist_dest_path(config, label),
+        disabled_units_dir(config).join(format!("{}.plist", label)),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
 pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> {
     let labels = labels_for(services, config)?;
     let dom = domain(config);
     for label in &labels {
+        let plist = plist_source(config, label).ok_or_else(|| {
+            PlatformError::LifecycleFailed(format!("no bed is planted for {}", label))
+        })?;
         if !bootout_label(config, label) {
             return Err(PlatformError::LifecycleFailed(format!(
                 "launchd still holds {} after bootout",
                 service_target(config, label)
             )));
         }
-        let plist = plist_dest_path(config, label);
         let out = Command::new("launchctl")
             .args(["bootstrap", &dom, plist.to_str().unwrap_or("")])
             .output()
@@ -129,7 +141,12 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
     let grove_prefix = format!("{}.", config.grove);
     let mut statuses: Vec<ServiceStatus> = Vec::new();
 
-    for entry in entries.flatten() {
+    let disabled = std::fs::read_dir(disabled_units_dir(config))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| (e, true));
+    for (entry, is_disabled) in entries.flatten().map(|e| (e, false)).chain(disabled) {
         let filename = entry.file_name().to_string_lossy().to_string();
         if !filename.ends_with(".plist") {
             continue;
@@ -147,7 +164,10 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
             .unwrap_or(&label)
             .to_string();
 
-        let (state, sub, pid) = query_status(&label, config);
+        let (mut state, sub, pid) = query_status(&label, config);
+        if is_disabled && pid.is_none() && state == "inactive" {
+            state = "disabled".to_string();
+        }
         statuses.push(ServiceStatus {
             name: svc_name,
             active_state: state,
@@ -239,10 +259,7 @@ fn print_status_json(statuses: &[ServiceStatus]) {
 /// Tail StandardOutPath + StandardErrorPath for a service. launchd has no
 /// journald, so we shell out to `tail`.
 pub fn logs(service: &str, follow: bool, lines: u32, config: &Config) -> Result<(), PlatformError> {
-    let label = service_label(config, service);
-    let log_base = log_base(config);
-    let out_path = format!("{}/{}.out.log", log_base, label);
-    let err_path = format!("{}/{}.err.log", log_base, label);
+    let (out_path, err_path) = super::generate::default_log_paths(config, service);
 
     let mut args: Vec<String> = vec!["-n".to_string(), lines.to_string()];
     if follow {
@@ -263,15 +280,6 @@ pub fn logs(service: &str, follow: bool, lines: u32, config: &Config) -> Result<
         )));
     }
     Ok(())
-}
-
-fn log_base(config: &Config) -> String {
-    if config.scope.is_user() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        format!("{}/Library/Logs", home)
-    } else {
-        "/Library/Logs".to_string()
-    }
 }
 
 /// Resolve target service names to launchd labels. Empty list → all managed

@@ -53,35 +53,11 @@ impl Platform for LaunchdPlatform {
     }
 
     fn install(&self, config: &Config) -> Result<(), PlatformError> {
-        let units_dir = config.units_dir();
         let dest_dir = install_dir(config);
         std::fs::create_dir_all(&dest_dir).map_err(|e| {
             PlatformError::InstallFailed(format!("create {}: {}", dest_dir.display(), e))
         })?;
-
-        if let Ok(entries) = std::fs::read_dir(&units_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("plist") {
-                    continue;
-                }
-                if let Some(name) = path.file_name() {
-                    let dest = dest_dir.join(name);
-                    // Copy (not symlink) — launchd requires plists owned by the
-                    // installing user and rejects some symlinks.
-                    let _ = std::fs::remove_file(&dest);
-                    std::fs::copy(&path, &dest).map_err(|e| {
-                        PlatformError::InstallFailed(format!(
-                            "copy {} -> {}: {}",
-                            path.display(),
-                            dest.display(),
-                            e
-                        ))
-                    })?;
-                }
-            }
-        }
-        Ok(())
+        install_beds(&config.units_dir(), &dest_dir)
     }
 
     fn clean(&self, config: &Config) -> Result<(), PlatformError> {
@@ -90,21 +66,23 @@ impl Platform for LaunchdPlatform {
         let grove_prefix = format!("{}.", config.grove);
 
         // bootout + remove each installed plist
-        if let Ok(entries) = std::fs::read_dir(&units_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("plist") {
-                    continue;
-                }
-                if let Some(name) = path.file_name() {
-                    let name = name.to_string_lossy();
-                    if !name.starts_with(&grove_prefix) {
+        for dir in [units_dir.clone(), disabled_units_dir(config)] {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("plist") {
                         continue;
                     }
-                    let label = name.trim_end_matches(".plist");
-                    lifecycle::bootout_label(config, label);
-                    let _ = std::fs::remove_file(dest_dir.join(name.as_ref()));
-                    let _ = std::fs::remove_file(&path);
+                    if let Some(name) = path.file_name() {
+                        let name = name.to_string_lossy();
+                        if !name.starts_with(&grove_prefix) {
+                            continue;
+                        }
+                        let label = name.trim_end_matches(".plist");
+                        lifecycle::bootout_label(config, label);
+                        let _ = std::fs::remove_file(dest_dir.join(name.as_ref()));
+                        let _ = std::fs::remove_file(&path);
+                    }
                 }
             }
         }
@@ -134,7 +112,9 @@ impl LaunchdPlatform {
         config: &Config,
     ) -> Result<Vec<String>, PlatformError> {
         let units_dir = config.units_dir();
+        let disabled_dir = disabled_units_dir(config);
         std::fs::create_dir_all(&units_dir)?;
+        std::fs::create_dir_all(config.state_dir.join("logs"))?;
 
         let mut generated = Vec::new();
         let spec_dir = config.state_dir.join("supervise");
@@ -157,7 +137,15 @@ impl LaunchdPlatform {
             }
 
             let content = generate_service_plist_with_deps(service, exec_set, config, &deps);
-            let path = units_dir.join(plist_filename(config, &service.name));
+            let name = plist_filename(config, &service.name);
+            let (dir, other) = if service.disabled {
+                std::fs::create_dir_all(&disabled_dir)?;
+                (&disabled_dir, &units_dir)
+            } else {
+                (&units_dir, &disabled_dir)
+            };
+            let _ = std::fs::remove_file(other.join(&name));
+            let path = dir.join(&name);
             std::fs::write(&path, &content)?;
             generated.push(path.display().to_string());
         }
@@ -165,10 +153,46 @@ impl LaunchdPlatform {
     }
 }
 
+pub(crate) fn disabled_units_dir(config: &Config) -> PathBuf {
+    config.units_dir().join("disabled")
+}
+
+fn install_beds(units_dir: &Path, dest_dir: &Path) -> Result<(), PlatformError> {
+    if let Ok(entries) = std::fs::read_dir(units_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("plist") {
+                continue;
+            }
+            if let Some(name) = path.file_name() {
+                let dest = dest_dir.join(name);
+                // Copy (not symlink) — launchd requires plists owned by the
+                // installing user and rejects some symlinks.
+                let _ = std::fs::remove_file(&dest);
+                std::fs::copy(&path, &dest).map_err(|e| {
+                    PlatformError::InstallFailed(format!(
+                        "copy {} -> {}: {}",
+                        path.display(),
+                        dest.display(),
+                        e
+                    ))
+                })?;
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(units_dir.join("disabled")) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_file(dest_dir.join(entry.file_name()));
+        }
+    }
+    Ok(())
+}
+
 fn remove_beds(units_dir: &Path, install_dir: &Path, label: &str) {
     let name = format!("{}.plist", label);
     let _ = std::fs::remove_file(install_dir.join(&name));
     let _ = std::fs::remove_file(units_dir.join(&name));
+    let _ = std::fs::remove_file(units_dir.join("disabled").join(&name));
 }
 
 #[cfg(test)]
@@ -245,6 +269,25 @@ mod tests {
             assert!(!dir.join("orch.web.plist").exists());
             assert!(dir.join("orch.db.plist").exists());
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_install_beds__leaves_disabled_beds_out_of_launchagents() {
+        let root = std::env::temp_dir().join("orchd-install-beds");
+        let _ = std::fs::remove_dir_all(&root);
+        let units = root.join("units");
+        let installed = root.join("LaunchAgents");
+        std::fs::create_dir_all(units.join("disabled")).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(units.join("orch.web.plist"), "x").unwrap();
+        std::fs::write(units.join("disabled").join("orch.db.plist"), "x").unwrap();
+        std::fs::write(installed.join("orch.db.plist"), "was enabled").unwrap();
+
+        install_beds(&units, &installed).unwrap();
+
+        assert!(installed.join("orch.web.plist").exists());
+        assert!(!installed.join("orch.db.plist").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
