@@ -160,7 +160,10 @@ mod tests {
 
     fn plugin(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(plugin_name(name));
-        std::fs::write(&path, format!("#!/bin/sh\n{}\n", body)).unwrap();
+        let draft = dir.join(format!("{}.draft", plugin_name(name)));
+        std::fs::write(&draft, format!("#!/bin/sh\n{}\n", body)).unwrap();
+        let copied = Command::new("cp").arg(&draft).arg(&path).status().unwrap();
+        assert!(copied.success());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }

@@ -16,6 +16,7 @@ permissions:
 jobs:
   binaries:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -26,16 +27,16 @@ jobs:
             target: aarch64-macos
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.1
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v4
       - run: just test
       - run: just dist
       - run: tar -czf orchd-${{ matrix.target }}.tar.gz -C dist bin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: orchd-${{ matrix.target }}
           path: orchd-${{ matrix.target }}.tar.gz
@@ -45,7 +46,7 @@ jobs:
     needs: [binaries]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Publish to crates.io
@@ -58,8 +59,8 @@ jobs:
     needs: [publish-crate, binaries]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
