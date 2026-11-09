@@ -1,0 +1,65 @@
+name: containerd
+
+on:
+  pull_request:
+    paths:
+      - "orchd-rootstock-containerd/**"
+      - "src/**"
+      - "justfile"
+      - ".github/workflows/containerd.yml"
+  workflow_dispatch:
+
+jobs:
+  grow-and-fell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - uses: extractions/setup-just@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install orch, the parser orchd runs
+        run: cargo install the-orch --locked
+      - name: Build orchd and its rootstocks
+        run: |
+          just build-orchd build-bare build-containerd
+          cp orchd-rootstock-bare/zig-out/bin/orchd-rootstock-bare orchd-rootstock-containerd/zig-out/bin/orchd-rootstock-containerd zig-out/bin/
+      - name: containerd is running
+        run: sudo ctr version
+      - name: Grow a service on containerd, see it run, fell it, find nothing left
+        run: |
+          set -eu
+          B=$PWD/zig-out/bin
+          T=$(mktemp -d)
+          echo "T=$T" >> "$GITHUB_ENV"
+          mkdir -p $T/proj/note
+          echo "mounted from the host" > $T/proj/note/note
+          cat > $T/proj/Orchfile <<'ORCH'
+          ORCH_VERSION 1.0.0-rc
+
+          SERVICE hello
+          FROM alpine:3.20
+          CMD sh -c "echo hello from $GREETING; cat /data/note; sleep 600"
+          ENV GREETING=containerd
+          VOLUME ./note:/data
+          ORCH
+          o() { sudo env PATH="$PATH" "$B/orchd" --project-dir $T/proj --state-dir $T/state --grove ci --rootstock containerd --platform orchdi --system "$@"; }
+          o grow
+          for i in $(seq 1 90); do sudo ctr -n ci tasks ls | grep -q "ci-hello.*RUNNING" && break; sleep 1; done
+          sudo ctr -n ci tasks ls | grep "ci-hello.*RUNNING"
+          o survey
+          sleep 2
+          sudo cat $T/state/logs/ci.hello.log
+          sudo grep -q "hello from containerd" $T/state/logs/ci.hello.log
+          sudo grep -q "mounted from the host" $T/state/logs/ci.hello.log
+          o fell
+          test -z "$(sudo ctr -n ci tasks ls -q)"
+          test -z "$(sudo ctr -n ci containers ls -q)"
+          ! sudo ctr -n ci snapshots ls | grep -q ci-hello
+          echo "grown, seen running, felled, nothing left"
+      - name: What containerd and the tree said
+        if: failure()
+        run: |
+          sudo journalctl -u containerd --no-pager | tail -60
+          sudo sh -c "tail -50 $T/state/logs/*.log" || true

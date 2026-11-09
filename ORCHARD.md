@@ -62,7 +62,7 @@ flags:   --rootstock {bare|apple|<name>}
 #### Bring your own rootstock
 
 Every rootstock is an executable named `orchd-rootstock-<name>`, beside orchd or
-on `PATH`; none is built in. orchd ships `bare`, `apple` and `applz` this way, and
+on `PATH`; none is built in. orchd ships `bare`, `containerd`, `apple` and `applz` this way, and
 `orchd-rootstock-bare` is the smallest whole example of the contract. orchd calls
 it with one verb at a time:
 
