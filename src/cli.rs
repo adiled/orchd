@@ -89,8 +89,11 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Tear the grove down: stop and remove its beds.
+    /// Fell trees: stop them and remove their beds. With no service, the whole grove.
     Fell {
+        #[arg(help = "Services to fell (default: the whole grove)")]
+        services: Vec<String>,
+
         /// Keep service data directories.
         #[arg(long)]
         keep_data: bool,
@@ -133,4 +136,34 @@ pub enum Commands {
         #[arg(long, help = "Write and install but do not start.")]
         no_start: bool,
     },
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fell__takes_services() {
+        let cli = Cli::try_parse_from(["orchd", "fell", "web", "db", "--keep-data"]).unwrap();
+        match cli.command {
+            Commands::Fell {
+                services,
+                keep_data,
+            } => {
+                assert_eq!(services, ["web", "db"]);
+                assert!(keep_data);
+            }
+            _ => panic!("expected fell"),
+        }
+    }
+
+    #[test]
+    fn test_fell__bare_is_the_whole_grove() {
+        let cli = Cli::try_parse_from(["orchd", "fell"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Fell { ref services, keep_data: false } if services.is_empty()
+        ));
+    }
 }

@@ -70,4 +70,13 @@ impl Platform for OrchdiPlatform {
         let _ = std::fs::remove_dir_all(config.state_dir.join("run"));
         Ok(())
     }
+
+    fn remove(&self, config: &Config, services: &[String]) -> Result<(), PlatformError> {
+        let _ = lifecycle::stop(services, config);
+        for service in services {
+            let _ =
+                std::fs::remove_file(supervise_spec_path(config, &service_label(config, service)));
+        }
+        Ok(())
+    }
 }

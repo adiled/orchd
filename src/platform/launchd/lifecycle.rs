@@ -28,34 +28,60 @@ fn current_uid() -> String {
     }
 }
 
-/// Start services (bootstrap their plists, or kickstart if already loaded).
+fn is_loaded(target: &str) -> bool {
+    Command::new("launchctl")
+        .args(["print", target])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn wait_unloaded(target: &str, tries: u32) -> bool {
+    for _ in 0..tries {
+        if !is_loaded(target) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    !is_loaded(target)
+}
+
+pub(crate) fn bootout_label(config: &Config, label: &str) -> bool {
+    let tgt = service_target(config, label);
+    for _ in 0..2 {
+        if !is_loaded(&tgt) {
+            return true;
+        }
+        let _ = Command::new("launchctl").args(["bootout", &tgt]).output();
+        if wait_unloaded(&tgt, 300) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> {
     let labels = labels_for(services, config)?;
+    let dom = domain(config);
     for label in &labels {
+        if !bootout_label(config, label) {
+            return Err(PlatformError::LifecycleFailed(format!(
+                "launchd still holds {} after bootout",
+                service_target(config, label)
+            )));
+        }
         let plist = plist_dest_path(config, label);
-        // bootstrap is idempotent-ish: if already loaded, kickstart instead.
-        let dom = domain(config);
-        let bootstrap = Command::new("launchctl")
+        let out = Command::new("launchctl")
             .args(["bootstrap", &dom, plist.to_str().unwrap_or("")])
-            .output();
-        let already = match &bootstrap {
-            Ok(o) => !o.status.success(),
-            Err(_) => true,
-        };
-        if already {
-            let tgt = service_target(config, label);
-            let st = Command::new("launchctl")
-                .args(["kickstart", "-k", &tgt])
-                .status()
-                .map_err(|e| {
-                    PlatformError::LifecycleFailed(format!("launchctl kickstart: {}", e))
-                })?;
-            if !st.success() {
-                return Err(PlatformError::LifecycleFailed(format!(
-                    "launchctl kickstart {} failed",
-                    tgt
-                )));
-            }
+            .output()
+            .map_err(|e| PlatformError::LifecycleFailed(format!("launchctl bootstrap: {}", e)))?;
+        if !out.status.success() {
+            return Err(PlatformError::LifecycleFailed(format!(
+                "launchctl bootstrap {} {} failed: {}",
+                dom,
+                plist.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
         }
     }
     Ok(())
@@ -63,15 +89,22 @@ pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> 
 
 pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
     let labels = labels_for(services, config)?;
-    let dom = domain(config);
-    for label in &labels {
-        let plist = plist_dest_path(config, label);
-        // bootout unloads the service.
-        let _ = Command::new("launchctl")
-            .args(["bootout", &dom, plist.to_str().unwrap_or("")])
-            .status();
+    let stuck: Vec<&String> = labels
+        .iter()
+        .filter(|label| !bootout_label(config, label))
+        .collect();
+    if stuck.is_empty() {
+        Ok(())
+    } else {
+        Err(PlatformError::LifecycleFailed(format!(
+            "launchd still holds {} after bootout",
+            stuck
+                .iter()
+                .map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )))
     }
-    Ok(())
 }
 
 #[derive(Debug)]

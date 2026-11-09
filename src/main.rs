@@ -34,7 +34,10 @@ fn main() {
             force,
         } => engine::grow(&config, services, *no_start, *strict, *force).map_err(boxed),
         Commands::Survey { json } => engine::status(&config, *json).map_err(boxed),
-        Commands::Fell { keep_data } => engine::fell(&config, *keep_data).map_err(boxed),
+        Commands::Fell {
+            services,
+            keep_data,
+        } => engine::fell(&config, services, *keep_data).map_err(boxed),
         Commands::Logs {
             service,
             follow,

@@ -170,6 +170,7 @@ for the common path; they are never the only path.
 orchd grow    ==  orch parse $files | orchd sow | orchd plant | orchd tend
 orchd survey  ==  status of a grove (walk it, query the init system, report health)
 orchd fell    ==  stop the grove, then remove its beds
+orchd fell t  ==  stop tree t, then remove its beds; the rest of the grove stands
 ```
 
 A grower who wants control reaches past `grow` for the individual rows. orchd never
