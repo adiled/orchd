@@ -89,7 +89,7 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Fell trees: stop them and remove their beds. With no service, the whole grove.
+    /// Fell trees: cut them down and clear their beds. With no service, the whole grove.
     Fell {
         #[arg(help = "Services to fell (default: the whole grove)")]
         services: Vec<String>,
