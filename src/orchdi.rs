@@ -369,13 +369,10 @@ pub fn parse_memory_bytes(s: &str) -> Option<u64> {
     digits.parse::<u64>().ok()?.checked_mul(mult)
 }
 
-pub fn build_supervise_spec(
-    service: &Service,
-    exec_set: &ExecSet,
-    config: &Config,
-    deps: &[DepGate],
-) -> SuperviseSpec {
-    let stop_timeout = service
+pub const KEEPER_GRACE_SECS: u32 = 10;
+
+pub fn keeper_stop_timeout(service: &Service, exec_set: &ExecSet) -> u32 {
+    service
         .timeouts
         .stop
         .as_deref()
@@ -384,7 +381,16 @@ pub fn build_supervise_spec(
             30
         } else {
             10
-        });
+        })
+}
+
+pub fn build_supervise_spec(
+    service: &Service,
+    exec_set: &ExecSet,
+    config: &Config,
+    deps: &[DepGate],
+) -> SuperviseSpec {
+    let stop_timeout = keeper_stop_timeout(service, exec_set);
     let ready_marker = if service.oneshot {
         let path = ready_marker_path(config, &service.name);
         let _ = std::fs::create_dir_all(config.state_dir.join("ready"));
@@ -620,6 +626,24 @@ mod tests {
         let spec = build_supervise_spec(&svc, &exec, &cfg, &[]);
 
         assert_eq!(spec.reload.as_deref(), Some("kill -HUP $MAINPID"));
+    }
+
+    #[test]
+    fn test_keeper_stop_timeout__explicit_then_teardown_then_plain() {
+        let mut svc = simple_host_service("pg", "x");
+        let plain = ExecSet {
+            start: "x".into(),
+            ..Default::default()
+        };
+        let teardown = ExecSet {
+            stop: Some("y".into()),
+            ..plain.clone()
+        };
+
+        assert_eq!(keeper_stop_timeout(&svc, &plain), 10);
+        assert_eq!(keeper_stop_timeout(&svc, &teardown), 30);
+        svc.timeouts.stop = Some("45s".into());
+        assert_eq!(keeper_stop_timeout(&svc, &teardown), 45);
     }
 
     #[test]

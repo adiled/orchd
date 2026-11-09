@@ -9,9 +9,10 @@ use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
-use crate::orchdi::{service_label, supervise_spec_path};
+use crate::orchdi::{KEEPER_GRACE_SECS, SuperviseSpec, service_label, supervise_spec_path};
 use crate::platform::PlatformError;
 
 pub(crate) fn disabled_spec_path(config: &Config, label: &str) -> PathBuf {
@@ -127,6 +128,7 @@ pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> 
 }
 
 pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
+    let mut keepers = Vec::new();
     for label in labels_to_stop(services, config) {
         let pf = pidfile(config, &label);
         if let Some(pid) = read_pid(&pf) {
@@ -134,10 +136,32 @@ pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
             unsafe {
                 libc::kill(pid, libc::SIGTERM);
             }
+            keepers.push((pf, pid, Instant::now() + keeper_budget(config, &label)));
+        } else {
+            let _ = fs::remove_file(&pf);
+        }
+    }
+    for (pf, pid, deadline) in keepers {
+        while alive(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if alive(pid) {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
         }
         let _ = fs::remove_file(&pf);
     }
     Ok(())
+}
+
+fn keeper_budget(config: &Config, label: &str) -> Duration {
+    let stop_secs = fs::read_to_string(spec_for(config, label))
+        .ok()
+        .and_then(|s| serde_json::from_str::<SuperviseSpec>(&s).ok())
+        .map(|s| s.stop_timeout_secs)
+        .unwrap_or(30);
+    Duration::from_secs((stop_secs + KEEPER_GRACE_SECS) as u64)
 }
 
 pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
