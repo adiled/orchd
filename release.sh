@@ -14,7 +14,7 @@ set -euo pipefail
 # --- Project add-ons (optional) ----------------------------------------------
 # Extra files kept in version lockstep with Cargo.toml. Leave empty for plain
 # Rust projects. Example: (orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
-EXTRA_VERSIONED_FILES=(orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
+EXTRA_VERSIONED_FILES=(orchd-rootstock-bare/build.zig.zon orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
 # -----------------------------------------------------------------------------
 
 BRANCH="$(git branch --show-current)"

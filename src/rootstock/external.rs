@@ -87,9 +87,12 @@ impl ExternalRootstock {
             };
             let json = serde_json::to_vec(&envelope)
                 .map_err(|e| RootstockError::Other(format!("{} {}: {}", plugin, verb, e)))?;
-            stdin
-                .write_all(&json)
-                .map_err(|e| RootstockError::Other(format!("{} {}: {}", plugin, verb, e)))?;
+            match stdin.write_all(&json) {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+                    return Err(RootstockError::Other(format!("{} {}: {}", plugin, verb, e)));
+                }
+                _ => {}
+            }
         }
         drop(stdin);
 
@@ -160,7 +163,10 @@ mod tests {
 
     fn plugin(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(plugin_name(name));
-        std::fs::write(&path, format!("#!/bin/sh\n{}\n", body)).unwrap();
+        let draft = dir.join(format!("{}.draft", plugin_name(name)));
+        std::fs::write(&draft, format!("#!/bin/sh\n{}\n", body)).unwrap();
+        let copied = Command::new("cp").arg(&draft).arg(&path).status().unwrap();
+        assert!(copied.success());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
