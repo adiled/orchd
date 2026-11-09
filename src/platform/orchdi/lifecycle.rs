@@ -23,13 +23,13 @@ pub(crate) fn disabled_spec_path(config: &Config, label: &str) -> PathBuf {
         .join(format!("{label}.json"))
 }
 
-fn spec_for(config: &Config, label: &str) -> PathBuf {
-    let enabled = PathBuf::from(supervise_spec_path(config, label));
-    if enabled.exists() {
-        enabled
-    } else {
-        disabled_spec_path(config, label)
-    }
+fn spec_for(config: &Config, label: &str) -> Option<PathBuf> {
+    [
+        PathBuf::from(supervise_spec_path(config, label)),
+        disabled_spec_path(config, label),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
 }
 
 fn run_dir(config: &Config) -> PathBuf {
@@ -109,7 +109,9 @@ pub fn start(services: &[String], config: &Config) -> Result<(), PlatformError> 
                 continue; // already supervised
             }
         }
-        let spec = spec_for(config, &label);
+        let spec = spec_for(config, &label).ok_or_else(|| {
+            PlatformError::LifecycleFailed(format!("no bed is planted for {}", label))
+        })?;
         let out = fs::File::create(logfile(config, &label))?;
         let err = out.try_clone()?;
         let child = Command::new(orchd_exe())
@@ -156,8 +158,8 @@ pub fn stop(services: &[String], config: &Config) -> Result<(), PlatformError> {
 }
 
 fn keeper_budget(config: &Config, label: &str) -> Duration {
-    let stop_secs = fs::read_to_string(spec_for(config, label))
-        .ok()
+    let stop_secs = spec_for(config, label)
+        .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<SuperviseSpec>(&s).ok())
         .map(|s| s.stop_timeout_secs)
         .unwrap_or(30);
@@ -213,4 +215,44 @@ pub fn logs(service: &str, follow: bool, lines: u32, config: &Config) -> Result<
     cmd.status()
         .map_err(|e| PlatformError::LifecycleFailed(format!("tail: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    use crate::config::Scope;
+
+    fn config(dir: &std::path::Path) -> Config {
+        Config {
+            orchfile: dir.join("Orchfile"),
+            overlays: Vec::new(),
+            rootstock: "bare".to_string(),
+            platform: "orchdi".to_string(),
+            scope: Scope::User,
+            state_dir: dir.join("state"),
+            project_dir: dir.to_path_buf(),
+            data_dir: dir.join("data"),
+            grove: "unplanted".to_string(),
+            args: Vec::new(),
+            verbose: false,
+            quiet: true,
+        }
+    }
+
+    #[test]
+    fn test_start__a_tree_with_no_bed_is_refused_not_started() {
+        let dir = std::env::temp_dir().join("orchd-orchdi-unplanted");
+        let _ = fs::remove_dir_all(&dir);
+        let config = config(&dir);
+
+        let err = start(&["pg".to_string()], &config).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("no bed is planted for unplanted.pg")
+        );
+        assert!(keeper_pid(&config, "unplanted.pg").is_none());
+        assert!(!pidfile(&config, "unplanted.pg").exists());
+    }
 }
