@@ -93,7 +93,7 @@ impl Platform for SystemdPlatform {
     fn clean(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
         let systemd_dir = self.systemd_dir(config);
-        let ns_prefix = format!("{}-", config.namespace);
+        let grove_prefix = format!("{}-", config.grove);
         let ns_target = config.target_name();
 
         // Remove symlinks from systemd directory
@@ -101,7 +101,7 @@ impl Platform for SystemdPlatform {
             for entry in entries.flatten() {
                 if let Some(name) = entry.path().file_name() {
                     let name = name.to_string_lossy();
-                    if !name.starts_with(&ns_prefix) && name != ns_target {
+                    if !name.starts_with(&grove_prefix) && name != ns_target {
                         continue;
                     }
                     let dest = systemd_dir.join(name.as_ref());
@@ -127,7 +127,7 @@ impl Platform for SystemdPlatform {
         for service in services {
             for unit in [
                 config.unit_name(service),
-                format!("{}-{}-ready.service", config.namespace, service),
+                format!("{}-{}-ready.service", config.grove, service),
             ] {
                 let _ = std::fs::remove_file(systemd_dir.join(&unit));
                 let _ = std::fs::remove_file(units_dir.join(&unit));
@@ -172,7 +172,7 @@ impl SystemdPlatform {
         for service in services {
             if ready_gates.contains(&service.name) {
                 let gate_content = generate_ready_gate(service, config);
-                let gate_name = format!("{}-{}-ready.service", config.namespace, service.name);
+                let gate_name = format!("{}-{}-ready.service", config.grove, service.name);
                 let gate_path = units_dir.join(&gate_name);
                 std::fs::write(&gate_path, &gate_content)?;
                 generated.push(gate_path.display().to_string());

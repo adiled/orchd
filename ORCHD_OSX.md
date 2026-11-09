@@ -123,9 +123,9 @@ The key containment boundaries:
 
 ```
 orchd-osx check                 -- exit 0 if the VZ backend is usable
-orchd-osx exec-set <namespace>  -- stdin: Service JSON -> stdout: ExecSet JSON
-orchd-osx prepare  <namespace>  -- stdin: Service JSON, fetch/prepare rootfs
-orchd-osx cleanup  <namespace>  -- stdin: Service JSON, tear down
+orchd-osx exec-set <grove>  -- stdin: Service JSON -> stdout: ExecSet JSON
+orchd-osx prepare  <grove>  -- stdin: Service JSON, fetch/prepare rootfs
+orchd-osx cleanup  <grove>  -- stdin: Service JSON, tear down
 orchd-osx pull   <image>        -- fetch an image
 orchd-osx run    <name> <image> -- create+boot a VM, start the container
 orchd-osx wait   <name>         -- block until the container exits (foreground)

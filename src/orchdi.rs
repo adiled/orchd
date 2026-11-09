@@ -273,7 +273,7 @@ pub struct DepGate {
 }
 
 pub fn service_label(config: &Config, service_name: &str) -> String {
-    format!("{}.{}", config.namespace, service_name)
+    format!("{}.{}", config.grove, service_name)
 }
 
 pub fn supervise_spec_path(config: &Config, label: &str) -> String {
@@ -446,7 +446,7 @@ mod tests {
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: Vec::new(),
             verbose: false,
             quiet: false,

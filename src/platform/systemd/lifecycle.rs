@@ -62,7 +62,7 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
         ))
     })?;
 
-    let ns_prefix = format!("{}-", config.namespace);
+    let grove_prefix = format!("{}-", config.grove);
 
     for entry in entries.flatten() {
         let filename = entry.file_name().to_string_lossy().to_string();
@@ -74,13 +74,13 @@ pub fn status(config: &Config, as_json: bool) -> Result<(), PlatformError> {
         if filename.contains("-ready.service") {
             continue;
         }
-        if !filename.starts_with(&ns_prefix) {
+        if !filename.starts_with(&grove_prefix) {
             continue;
         }
 
         // Extract service name: orch-django.service → django
         let service_name = filename
-            .strip_prefix(&ns_prefix)
+            .strip_prefix(&grove_prefix)
             .and_then(|s| s.strip_suffix(".service"))
             .unwrap_or(&filename)
             .to_string();

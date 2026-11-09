@@ -13,10 +13,10 @@ CLI flag   >   env var   >   .orchrc   >   default
 | Project dir | `--project-dir` | `ORCH_PROJECT` | (n/a) | current directory |
 | Orchfile | `--orchfile` | `ORCH_ORCHFILE` | `orchfile` | `<project>/Orchfile` |
 | State dir | `--state-dir` | `ORCH_STATE_DIR` | `state_dir` | `~/.orch` |
-| Data dir | `--data-dir` | `ORCH_DATA` | `data_dir` | `<state>/data` |
+| Data dir | `--data-dir` | `ORCH_DATA` | `data_dir` | `<state>/data/<grove>` |
 | Runtime | `--runtime` | `ORCH_RUNTIME` | `runtime` | `bare` |
 | Platform | `--platform` | `ORCH_PLATFORM` | `platform` | auto (launchd on macOS, else systemd) |
-| Namespace | `--namespace` | `ORCH_NAMESPACE` | `namespace` | `orch` |
+| Grove | `--grove` | `ORCH_GROVE` | `grove` | `orch` |
 | Scope | `--user` / `--system` | `ORCH_SCOPE` | `scope` | `system` |
 
 Project dir has no `.orchrc` layer because `.orchrc` itself is found inside the
@@ -24,7 +24,7 @@ project dir.
 
 ## What they mean
 
-- **Namespace**: the prefix stamped on every generated name (`orch-web.service`,
+- **Grove**: the prefix stamped on every generated name (`orch-web.service`,
   `orch.target`). Lets separate stacks live on one machine. `survey` and `fell`
   match by this prefix.
 - **Scope**: who runs the services and where they install. `user` installs to
@@ -32,7 +32,7 @@ project dir.
   as you, no root. `system` installs to `/Library/LaunchDaemons` or
   `/etc/systemd/system`, runs at boot, needs root.
 - **State dir**: orchd's working folder. It writes generated files to
-  `<state>/units`, `<state>/supervise`, and `<state>/data`, then installs them
+  `<state>/units`, `<state>/supervise`, and `<state>/data/<grove>`, then installs them
   into the scope's directory.
 
 ## `.orchrc`
@@ -42,7 +42,7 @@ dir first, then `$HOME`. The first file found wins (no merging between files).
 
 ```
 runtime=apple
-namespace=myapp
+grove=myapp
 state_dir=/var/lib/myapp
 ```
 

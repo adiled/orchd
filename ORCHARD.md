@@ -56,7 +56,7 @@ stdout:  Cuttings
 flags:   --runtime {bare|apple|containerd|podman}
 ```
 
-### `orchd plant --platform <name> --namespace <ns>`
+### `orchd plant --platform <name> --grove <grove>`
 
 Platform transform. Prepares a bed for each cutting: the native files its init
 system plants and tends, grouped per service.
@@ -64,7 +64,7 @@ system plants and tends, grouped per service.
 ```
 stdin:   Cuttings
 stdout:  Beds
-flags:   --platform {systemd|launchd}  --namespace <ns>  --scope {user|system}
+flags:   --platform {systemd|launchd}  --grove <grove>  --scope {user|system}
 ```
 
 ### `orchd tend`
@@ -123,9 +123,9 @@ runtime ran.
       "service": { "...": "the full Service object from the spec" },
       "exec": {
         "pre_start": "container image pull docker.io/library/nginx:alpine",
-        "start":     "container run --name <ns>-nginx --init --publish 8080:80 docker.io/library/nginx:alpine",
-        "stop":      "container stop <ns>-nginx",
-        "post_stop": "container delete --force <ns>-nginx"
+        "start":     "container run --name <grove>-nginx --init --publish 8080:80 docker.io/library/nginx:alpine",
+        "stop":      "container stop <grove>-nginx",
+        "post_stop": "container delete --force <grove>-nginx"
       }
     }
   ]
@@ -144,7 +144,7 @@ gets its own bed. `kind` lets `tend` install each file correctly.
 ```json
 {
   "platform": "launchd",
-  "namespace": "orch",
+  "grove": "orch",
   "scope": "user",
   "beds": [
     {
@@ -176,12 +176,12 @@ orchd fell t  ==  cut tree t down, then clear its bed; the rest of the grove sta
 A grower who wants control reaches past `grow` for the individual rows. orchd never
 owns *how* the walk is arranged.
 
-## Groves (namespaces)
+## Groves
 
-A **grove** is a named cluster of tended trees, a namespace. Many groves share one
+A **grove** is a named cluster of tended trees. Many groves share one
 orchard (machine); each is surveyed and felled independently. A grove's identity is
-the `--namespace` carried through `plant`/`tend`; on systemd it is also a real
-`<ns>.target`, on launchd a `<ns>.`-prefixed set.
+the `--grove` carried through `plant`/`tend`; on systemd it is also a real
+`<grove>.target`, on launchd a `<grove>.`-prefixed set.
 
 Naming a grove, pinning which composition produced it, detecting drift: these are
 **policy**. A consuming project layers them by capturing the rows' JSON (the Spec it
@@ -197,7 +197,7 @@ orch parse base.orch staging.orch --arg env=staging \
   | orchd sow --runtime apple \
   | jq '.cuttings |= map(select(.service.disabled | not))' \   # their policy, not orchd's
   | my-secret-injector \                                       # their step
-  | orchd plant --platform launchd --namespace staging \
+  | orchd plant --platform launchd --grove staging \
   | tee staging.beds.json \                                    # their manifest, their format
   | orchd tend
 ```
@@ -226,14 +226,14 @@ Worked end to end on a real Mac:
 orch parse Orchfile \
   | orchd --runtime bare  sow \
   | jq '.cuttings |= map(select(.service.name != "worker"))' \   # a grower's own step
-  | orchd --platform launchd --namespace orch --user plant \
-  | orchd --platform launchd --namespace orch --user tend     # service running under launchd
+  | orchd --platform launchd --grove orch --user plant \
+  | orchd --platform launchd --grove orch --user tend     # service running under launchd
 ```
 
 Two contracts to remember when piping by hand:
 - `sow` is the only stage that takes `--runtime`; `plant`/`tend` take `--platform`.
 - `plant` bakes absolute paths into each artifact from its config, so `plant` and
-  `tend` must be given the same `--namespace` / `--scope` / `--state-dir`. The
+  `tend` must be given the same `--grove` / `--scope` / `--state-dir`. The
   porcelain and any single flag set do this for you.
 
 Still future work: re-expressing `generate`/`up` as a `grow` walk over the rows so

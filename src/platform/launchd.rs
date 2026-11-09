@@ -87,7 +87,7 @@ impl Platform for LaunchdPlatform {
     fn clean(&self, config: &Config) -> Result<(), PlatformError> {
         let units_dir = config.units_dir();
         let dest_dir = install_dir(config);
-        let ns_prefix = format!("{}.", config.namespace);
+        let grove_prefix = format!("{}.", config.grove);
 
         // bootout + remove each installed plist
         if let Ok(entries) = std::fs::read_dir(&units_dir) {
@@ -98,7 +98,7 @@ impl Platform for LaunchdPlatform {
                 }
                 if let Some(name) = path.file_name() {
                     let name = name.to_string_lossy();
-                    if !name.starts_with(&ns_prefix) {
+                    if !name.starts_with(&grove_prefix) {
                         continue;
                     }
                     let label = name.trim_end_matches(".plist");
@@ -188,7 +188,7 @@ mod tests {
             state_dir: PathBuf::from("/test/.orch"),
             project_dir: PathBuf::from("/test/project"),
             data_dir: PathBuf::from("/test/.orch/data"),
-            namespace: "orch".to_string(),
+            grove: "orch".to_string(),
             args: Vec::new(),
             verbose: false,
             quiet: false,
