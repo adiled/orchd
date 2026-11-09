@@ -79,14 +79,17 @@ const Keeper = struct {
         }
         const budget: i64 = @max(k.spec.stop_timeout_secs, 1);
         const deadline = Io.Timestamp.now(k.io, .awake).addDuration(.fromSeconds(budget));
-        const graceful = while (exited(pid) == null) {
+        var child_gone = false;
+        const graceful = while (true) {
+            if (!child_gone and exited(pid) != null) child_gone = true;
+            if (child_gone and !groupAlive(pid)) break true;
             if (Io.Timestamp.now(k.io, .awake).nanoseconds >= deadline.nanoseconds) {
                 signalGroup(pid, .KILL);
-                _ = reap(pid);
+                if (!child_gone) _ = reap(pid);
                 break false;
             }
             k.io.sleep(poll_interval, .awake) catch {};
-        } else true;
+        };
         k.runOptional(k.spec.post_stop);
         return graceful;
     }
@@ -217,6 +220,10 @@ fn shell(io: Io, cmd: []const u8, environ: ?*const Environ.Map, workdir: ?[]cons
 
 fn signalGroup(pgid: posix.pid_t, sig: posix.SIG) void {
     posix.kill(-pgid, sig) catch {};
+}
+
+fn groupAlive(pgid: posix.pid_t) bool {
+    return std.c.kill(-pgid, @fromBackingInt(0)) == 0;
 }
 
 fn exited(pid: posix.pid_t) ?u8 {
