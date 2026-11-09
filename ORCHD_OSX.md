@@ -2,7 +2,7 @@
 
 A from-scratch Apple container runtime for orchd, built on
 **Virtualization.framework** with no container daemon and no Swift linked. It is
-the third operating mode of the `apple` runtime:
+the third operating mode of the `apple` rootstock:
 
 | Mode | `ORCHD_APPLE_MODE` | Backend | Status |
 |------|--------------------|---------|--------|
@@ -11,7 +11,7 @@ the third operating mode of the `apple` runtime:
 | 3 | `osx` / `vz` | `orchd-osx`: this runtime | **works** |
 
 All three turn a container Service into the same `ExecSet` contract. The Rust
-`apple` runtime (`src/runtime/apple.rs`) is a thin envelope that selects one.
+`apple` rootstock (`src/rootstock/apple.rs`) is a thin envelope that selects one.
 Modes 2 and 3 are the same code path from Rust's side: spawn a co-process that
 speaks a small JSON-over-stdio protocol.
 

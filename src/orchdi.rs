@@ -440,7 +440,7 @@ mod tests {
         Config {
             orchfile: PathBuf::from("/test/Orchfile"),
             overlays: Vec::new(),
-            runtime: "bare".to_string(),
+            rootstock: "bare".to_string(),
             platform: "launchd".to_string(),
             scope: Scope::User,
             state_dir: PathBuf::from("/test/.orch"),

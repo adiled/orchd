@@ -26,7 +26,7 @@ pub enum PlatformError {
 
 /// A platform knows how to install and manage services on a specific init system.
 ///
-/// Platforms consume ExecSets (from runtimes) and produce native artifacts
+/// Platforms consume ExecSets (from rootstocks) and produce native artifacts
 /// (systemd units, launchd plists, etc.).
 pub trait Platform {
     /// Check that the platform is available on this system.

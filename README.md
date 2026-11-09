@@ -44,11 +44,11 @@ the whole idea: say what you want, orchd handles the rest. (The full list of
 options lives in the [Orch spec](https://github.com/adiled/orch).)
 
 A service with `FROM` is a Linux container. On a Mac, tell orchd to use the
-Apple runtime once, by putting this in a file named `.orchrc` next to your
+Apple rootstock once, by putting this in a file named `.orchrc` next to your
 Orchfile:
 
 ```
-runtime=apple
+rootstock=apple
 ```
 
 (Services with `RUN` are plain programs and need no setup. On Linux, containers
@@ -77,9 +77,9 @@ your own logic in the middle:
 
 ```sh
 orch parse Orchfile \
-  | orchd sow --runtime apple \           # services -> run commands
-  | orchd plant --platform launchd \      # -> native service files
-  | orchd tend                            # -> running
+  | orchd sow --rootstock apple \        # services -> run commands
+  | orchd plant --platform launchd \     # -> native service files
+  | orchd tend                           # -> running
 ```
 
 Every step is plain JSON in, JSON out, so you can pipe anything between them:
@@ -91,7 +91,12 @@ Every step is plain JSON in, JSON out, so you can pipe anything between them:
 orchd has no opinion about how you compose; that part is yours. Full reference:
 [`ORCHARD.md`](ORCHARD.md).
 
-On a Mac, the Apple runtime can run Linux containers with no Docker and no
+A rootstock is what runs each service: `bare` (a plain process) and `apple` are
+built in, and any `orchd-rootstock-<name>` on your `PATH` is one more. Bring your
+own: the contract is a few verbs and some JSON, in
+[`ORCHARD.md`](ORCHARD.md#bring-your-own-rootstock).
+
+On a Mac, the Apple rootstock can run Linux containers with no Docker and no
 background daemon at all, using only macOS itself. Add `ORCHD_APPLE_MODE=osx`.
 How it works: [`ORCHD_OSX.md`](ORCHD_OSX.md).
 

@@ -3,7 +3,7 @@ use crate::exec::ExecSet;
 use crate::platform::Platform;
 use crate::platform::launchd::LaunchdPlatform;
 use crate::platform::systemd::SystemdPlatform;
-use crate::runtime;
+use crate::rootstock;
 use crate::types::OrchFile;
 
 /// Errors from the engine pipeline.
@@ -11,8 +11,8 @@ use crate::types::OrchFile;
 pub enum EngineError {
     #[error("orch parse failed: {0}")]
     OrchParse(String),
-    #[error("runtime error: {0}")]
-    Runtime(#[from] crate::runtime::RuntimeError),
+    #[error("rootstock error: {0}")]
+    Rootstock(#[from] crate::rootstock::RootstockError),
     #[error("platform error: {0}")]
     Platform(#[from] crate::platform::PlatformError),
     #[error("service(s) skipped:\n{0}")]
@@ -24,8 +24,8 @@ pub enum EngineError {
 /// Run the full generate pipeline:
 /// 1. Check mtime (skip if up-to-date unless `force`)
 /// 2. Parse the Orchfile (+ overlays) in-process via the orch library
-/// 3. Create runtime, check prerequisites
-/// 4. For each enabled service: runtime.prepare() + runtime.exec_set()
+/// 3. Create rootstock, check prerequisites
+/// 4. For each enabled service: rootstock.prepare() + rootstock.exec_set()
 /// 5. Platform generate_all() + install()
 fn should_skip_generate(config: &Config, force: bool, strict: bool) -> bool {
     !force && !strict && is_up_to_date(config)
@@ -50,12 +50,12 @@ pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), Engine
         );
     }
 
-    // 3. Create runtime and check
-    let rt = runtime::create_runtime(&config.runtime, config)?;
+    // 3. Create rootstock and check
+    let rt = rootstock::create_rootstock(&config.rootstock, config)?;
     rt.check()?;
 
     if !config.quiet {
-        eprintln!("runtime: {}", rt.name());
+        eprintln!("rootstock: {}", rt.name());
     }
 
     // 4. Process each enabled service
@@ -87,7 +87,7 @@ pub fn generate(config: &Config, force: bool, strict: bool) -> Result<(), Engine
 
     if !errors.is_empty() {
         let summary = format!(
-            "{} service(s) skipped (runtime incompatible):\n  {}",
+            "{} service(s) skipped (rootstock incompatible):\n  {}",
             errors.len(),
             errors.join("\n  ")
         );
@@ -457,7 +457,7 @@ fn config_hash_for(config: &Config, orchd_version: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
     orchd_version.hash(&mut h);
-    config.runtime.hash(&mut h);
+    config.rootstock.hash(&mut h);
     config.platform.hash(&mut h);
     config.grove.hash(&mut h);
     format!("{:?}", config.scope).hash(&mut h);
@@ -670,7 +670,7 @@ mod tests {
         let cfg = Config {
             orchfile: proj.join("Orchfile"),
             overlays: vec![],
-            runtime: "bare".to_string(),
+            rootstock: "bare".to_string(),
             platform: if artifact == "plist" {
                 "launchd".to_string()
             } else {
@@ -756,12 +756,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_up_to_date__changed_runtime_invalidates() {
-        let (mut cfg, root, _guard) = cache_fixture("runtime", "plist");
+    fn test_is_up_to_date__changed_rootstock_invalidates() {
+        let (mut cfg, root, _guard) = cache_fixture("rootstock", "plist");
         write_stamp(&cfg, &[]);
         assert!(is_up_to_date(&cfg));
-        cfg.runtime = "apple".to_string();
-        assert!(!is_up_to_date(&cfg), "runtime change must invalidate");
+        cfg.rootstock = "apple".to_string();
+        assert!(!is_up_to_date(&cfg), "rootstock change must invalidate");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -913,7 +913,7 @@ mod tests {
         let mut cfg = Config {
             orchfile: root.join("Orchfile"),
             overlays: vec![],
-            runtime: "bare".to_string(),
+            rootstock: "bare".to_string(),
             platform: "systemd".to_string(),
             scope: crate::config::Scope::User,
             state_dir: root.join(".orch"),
@@ -974,7 +974,7 @@ mod tests {
         let cfg = Config {
             orchfile: root.join("Orchfile"),
             overlays: vec![],
-            runtime: "bare".to_string(),
+            rootstock: "bare".to_string(),
             platform: "launchd".to_string(),
             scope: crate::config::Scope::User,
             state_dir: root.join(".orch"),
@@ -1044,7 +1044,7 @@ mod tests {
         let cfg = Config {
             orchfile: root.join("Orchfile"),
             overlays: vec![],
-            runtime: "bare".to_string(),
+            rootstock: "bare".to_string(),
             platform: "systemd".to_string(),
             scope: crate::config::Scope::User,
             state_dir: root.join(".orch"),
@@ -1093,7 +1093,7 @@ mod tests {
         let cfg = Config {
             orchfile: root.join("Orchfile"),
             overlays: vec![],
-            runtime: "bare".to_string(),
+            rootstock: "bare".to_string(),
             platform: "systemd".to_string(),
             scope: crate::config::Scope::User,
             state_dir: root.join(".orch"),
@@ -1210,10 +1210,10 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_error_display__runtime_wraps_inner() {
-        let inner = crate::runtime::RuntimeError::Other("boom".to_string());
-        let err = EngineError::Runtime(inner);
-        assert_eq!(format!("{}", err), "runtime error: boom");
+    fn test_engine_error_display__rootstock_wraps_inner() {
+        let inner = crate::rootstock::RootstockError::Other("boom".to_string());
+        let err = EngineError::Rootstock(inner);
+        assert_eq!(format!("{}", err), "rootstock error: boom");
     }
 
     #[test]
@@ -1229,13 +1229,13 @@ mod tests {
     // --- From conversions ---
 
     #[test]
-    fn test_engine_error_from_runtime_error() {
-        let inner = crate::runtime::RuntimeError::UnsupportedMode {
+    fn test_engine_error_from_rootstock_error() {
+        let inner = crate::rootstock::RootstockError::UnsupportedMode {
             service: "web".to_string(),
             mode: "container".to_string(),
         };
         let err: EngineError = inner.into();
-        assert!(matches!(err, EngineError::Runtime(_)));
+        assert!(matches!(err, EngineError::Rootstock(_)));
     }
 
     #[test]
@@ -1253,7 +1253,7 @@ mod tests {
             command: crate::cli::Commands::Survey { json: false },
             orchfile: None,
             overlay: vec![],
-            runtime: None,
+            rootstock: None,
             platform: None,
             state_dir: Some(std::path::PathBuf::from("/tmp/orchd-test-state")),
             project_dir: Some(std::path::PathBuf::from("/srv/project")),
@@ -1274,10 +1274,10 @@ mod tests {
         assert!(content.contains("ARG ORCH_CONTAINERS_DIR="));
     }
 
-    // --- Integration: orch parse → bare runtime → systemd generate ---
+    // --- Integration: orch parse → bare rootstock → systemd generate ---
 
     /// Full pipeline integration test: parse fixture Orchfile via real `orch` binary,
-    /// run through bare runtime + systemd generator, assert unit file contents.
+    /// run through bare rootstock + systemd generator, assert unit file contents.
     ///
     /// Requires: `orch` binary in PATH, systemd available.
     /// Run with: `cargo test -- --ignored`
@@ -1304,7 +1304,7 @@ mod tests {
             command: crate::cli::Commands::Survey { json: false },
             orchfile: Some(fixture),
             overlay: vec![],
-            runtime: Some("bare".to_string()),
+            rootstock: Some("bare".to_string()),
             platform: Some("systemd".to_string()),
             state_dir: Some(state_dir.clone()),
             project_dir: Some(tmp.clone()),
@@ -1347,10 +1347,10 @@ mod tests {
         assert_eq!(disabled.name, "disabled-svc");
         assert!(disabled.disabled);
 
-        // Step 2: bare runtime should produce ExecSets for enabled services
-        let rt =
-            crate::runtime::create_runtime("bare", &config).expect("bare runtime should create");
-        rt.check().expect("bare runtime check should pass");
+        // Step 2: bare rootstock should produce ExecSets for enabled services
+        let rt = crate::rootstock::create_rootstock("bare", &config)
+            .expect("bare rootstock should create");
+        rt.check().expect("bare rootstock check should pass");
 
         let mut exec_sets = Vec::new();
         for (idx, svc) in orchfile.services.iter().enumerate() {

@@ -21,19 +21,19 @@ use crate::types::{OrchFile, Service};
 // ----- contracts -----------------------------------------------------------
 
 /// A seed plus how to grow it: one service paired with the execution commands
-/// the runtime produced for it. Output unit of `sow`.
+/// the rootstock produced for it. Output unit of `sow`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cutting {
     pub service: Service,
     pub exec: ExecSet,
 }
 
-/// Output of `sow`: every materialized service as a cutting. The runtime's
+/// Output of `sow`: every materialized service as a cutting. The rootstock's
 /// knowledge is now captured entirely in command strings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cuttings {
     pub version: String,
-    pub runtime: String,
+    pub rootstock: String,
     pub cuttings: Vec<Cutting>,
 }
 
@@ -70,8 +70,8 @@ pub enum OrchardError {
     Stdin(#[from] std::io::Error),
     #[error("invalid JSON on stdin: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("runtime error: {0}")]
-    Runtime(#[from] crate::runtime::RuntimeError),
+    #[error("rootstock error: {0}")]
+    Rootstock(#[from] crate::rootstock::RootstockError),
     #[error("{0}")]
     Other(String),
 }
@@ -84,14 +84,14 @@ fn read_stdin() -> Result<String, OrchardError> {
 
 // ----- sow: Spec -> Cuttings -----------------------------------------------
 
-/// Runtime transform. Reads an Orchfile spec, takes a cutting of each enabled
-/// service: the service plus the ExecSet for `config.runtime`. Pure: no image
+/// Rootstock transform. Reads an Orchfile spec, takes a cutting of each enabled
+/// service: the service plus the ExecSet for `config.rootstock`. Pure: no image
 /// pulls, no I/O beyond stdio.
 pub fn sow(config: &Config) -> Result<(), OrchardError> {
     let input = read_stdin()?;
     let spec: OrchFile = serde_json::from_str(&input)?;
 
-    let rt = crate::runtime::create_runtime(&config.runtime, config)?;
+    let rt = crate::rootstock::create_rootstock(&config.rootstock, config)?;
 
     let mut cuttings = Vec::new();
     for service in &spec.services {
@@ -109,7 +109,7 @@ pub fn sow(config: &Config) -> Result<(), OrchardError> {
 
     let out = Cuttings {
         version: spec.version,
-        runtime: config.runtime.clone(),
+        rootstock: config.rootstock.clone(),
         cuttings,
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
@@ -302,7 +302,7 @@ mod tests {
         Config {
             orchfile: PathBuf::from("/t/Orchfile"),
             overlays: vec![],
-            runtime: "bare".into(),
+            rootstock: "bare".into(),
             platform: platform.into(),
             scope: Scope::User,
             state_dir: PathBuf::from("/t/.orch"),
@@ -424,7 +424,7 @@ mod tests {
     fn test_contracts_roundtrip() {
         let cut = Cuttings {
             version: "0.2.1".into(),
-            runtime: "apple".into(),
+            rootstock: "apple".into(),
             cuttings: vec![Cutting {
                 service: host_service("a", "x"),
                 exec: exec("x"),
