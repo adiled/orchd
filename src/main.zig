@@ -52,4 +52,8 @@ test {
     _ = @import("supervise.zig");
     _ = @import("keeper.zig");
     _ = @import("cli.zig");
+    _ = @import("exe.zig");
+    _ = @import("settings.zig");
+    _ = @import("spec.zig");
+    _ = @import("rootstock.zig");
 }
