@@ -23,6 +23,7 @@ pub const Config = struct {
     project_dir: []const u8,
     data_dir: []const u8,
     grove: []const u8 = "orch",
+    home: []const u8 = "/root",
     args: []const []const u8 = &.{},
     verbose: bool = false,
     quiet: bool = false,
@@ -48,6 +49,7 @@ pub fn forTest(dir: []const u8) Config {
         .state_dir = dir,
         .project_dir = "/test/project",
         .data_dir = "/test/.orch/data",
+        .home = "/Users/test",
     };
 }
 

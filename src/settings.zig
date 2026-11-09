@@ -52,6 +52,7 @@ pub fn load(arena: Allocator, io: Io, environ: *const Environ.Map, global: Globa
         .data_dir = sources.pick(global.data_dir, "ORCH_DATA", "data_dir") orelse
             try std.fs.path.join(arena, &.{ state_dir, "data", grove }),
         .grove = grove,
+        .home = home,
         .args = global.arg,
         .verbose = global.verbose,
         .quiet = global.quiet,

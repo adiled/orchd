@@ -56,4 +56,6 @@ test {
     _ = @import("settings.zig");
     _ = @import("spec.zig");
     _ = @import("rootstock.zig");
+    _ = @import("platform/orchdi.zig");
+    _ = @import("platform/launchd.zig");
 }
