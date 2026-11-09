@@ -171,16 +171,18 @@ pub fn generate_service_plist_with_deps(
     writeln!(p, "  <key>ProcessType</key>").unwrap();
     writeln!(p, "  <string>Interactive</string>").unwrap();
 
-    let exit_timeout = service
-        .timeouts
-        .stop
-        .as_deref()
-        .and_then(parse_duration_secs)
-        .or(if exec_set.stop.is_some() || exec_set.post_stop.is_some() {
-            Some(30)
-        } else {
-            None
-        });
+    let exit_timeout = if needs_supervisor {
+        Some(
+            crate::orchdi::keeper_stop_timeout(service, exec_set)
+                + crate::orchdi::KEEPER_GRACE_SECS,
+        )
+    } else {
+        service
+            .timeouts
+            .stop
+            .as_deref()
+            .and_then(parse_duration_secs)
+    };
     if let Some(secs) = exit_timeout {
         writeln!(p, "  <key>ExitTimeOut</key>").unwrap();
         writeln!(p, "  <integer>{}</integer>", secs).unwrap();
@@ -573,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_service_plist__container_default_exit_timeout() {
+    fn test_generate_service_plist__keeper_job_outlasts_the_keepers_stop_budget() {
         let cfg = test_config();
         let svc = simple_host_service("pg", "container run --name orch-pg pg:15");
         let exec = ExecSet {
@@ -586,7 +588,7 @@ mod tests {
         let p = generate_service_plist(&svc, &exec, &cfg);
 
         assert!(p.contains("<key>ExitTimeOut</key>"));
-        assert!(p.contains("<integer>30</integer>"));
+        assert!(p.contains("<integer>40</integer>"));
     }
 
     #[test]
@@ -603,8 +605,7 @@ mod tests {
         };
         let p = generate_service_plist(&svc, &exec, &cfg);
 
-        assert!(p.contains("<integer>45</integer>"));
-        assert!(!p.contains("<integer>30</integer>"));
+        assert!(p.contains("<integer>55</integer>"));
     }
 
     #[test]
