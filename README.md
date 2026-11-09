@@ -21,8 +21,7 @@ From source, with Zig 0.17.1, [`just`](https://github.com/casey/just) and
 just install
 ```
 
-That installs into `/usr/local/bin` (set `PREFIX` for elsewhere), and on a Mac
-also fetches the kernel for Linux containers.
+That installs into `/usr/local/bin` (set `PREFIX` for elsewhere).
 
 ## Write an Orchfile
 
@@ -101,9 +100,10 @@ orchd as `orchd-rootstock-bare`, `apple` is built in, and any
 own: the contract is a few verbs and some JSON, in
 [`ORCHARD.md`](ORCHARD.md#bring-your-own-rootstock).
 
-On a Mac, the Apple rootstock can run Linux containers with no Docker and no
-background daemon at all, using only macOS itself. Add `ORCHD_APPLE_MODE=osx`.
-How it works: [`ORCHD_OSX.md`](ORCHD_OSX.md).
+On a Mac, [applz](https://github.com/adiled/applz) runs Linux containers with no
+Docker and no background daemon at all, using only macOS itself. Install it and
+grow with `--rootstock applz`; orchd ships the `orchd-rootstock-applz` that
+speaks to it.
 
 ## License
 

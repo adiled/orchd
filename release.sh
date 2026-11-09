@@ -13,7 +13,7 @@ set -euo pipefail
 
 # --- Project add-ons (optional) ----------------------------------------------
 # Extra files kept in version lockstep with build.zig.zon.
-EXTRA_VERSIONED_FILES=(orchd-rootstock-bare/build.zig.zon orchd-osx/build.zig.zon orchd-apple/build.zig.zon)
+EXTRA_VERSIONED_FILES=(orchd-rootstock-bare/build.zig.zon orchd-rootstock-applz/build.zig.zon orchd-apple/build.zig.zon)
 # -----------------------------------------------------------------------------
 
 BRANCH="$(git branch --show-current)"

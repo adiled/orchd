@@ -46,7 +46,7 @@ pub fn create(arena: Allocator, io: Io, environ: *const Environ.Map, config: Con
     const path_var = environ.get("PATH") orelse "";
     const beside = exe.selfDir(arena, io);
     if (std.mem.eql(u8, config.rootstock, "apple")) {
-        return .{ .apple = try Apple.init(arena, io, environ, config, beside, log) };
+        return .{ .apple = try Apple.init(arena, io, environ, config, beside, log, diag) };
     }
     const file = try pluginName(arena, config.rootstock);
     const bin = try exe.find(arena, io, file, beside, path_var) orelse {
@@ -127,16 +127,14 @@ pub const External = struct {
 pub const AppleMode = enum {
     container_cli,
     orchd_apple,
-    orchd_osx,
 
     pub fn parse(s: []const u8) ?AppleMode {
         const t = std.mem.trim(u8, s, " \t\r\n");
         const table = [_]struct { []const u8, AppleMode }{
             .{ "container", .container_cli }, .{ "cli", .container_cli },
-            .{ "osx", .orchd_osx },           .{ "vz", .orchd_osx },
-            .{ "orchd-osx", .orchd_osx },     .{ "xpc", .orchd_apple },
-            .{ "daemon", .orchd_apple },      .{ "apple", .orchd_apple },
-            .{ "orchd-apple", .orchd_apple }, .{ "", .orchd_apple },
+            .{ "xpc", .orchd_apple },         .{ "daemon", .orchd_apple },
+            .{ "apple", .orchd_apple },       .{ "orchd-apple", .orchd_apple },
+            .{ "", .orchd_apple },
         };
         for (table) |entry| {
             if (std.ascii.eqlIgnoreCase(t, entry[0])) return entry[1];
@@ -148,7 +146,6 @@ pub const AppleMode = enum {
         return switch (mode) {
             .container_cli => null,
             .orchd_apple => .{ .file = "orchd-apple", .env = "ORCHD_APPLE_BIN" },
-            .orchd_osx => .{ .file = "orchd-osx", .env = "ORCHD_OSX_BIN" },
         };
     }
 };
@@ -160,8 +157,12 @@ pub const Apple = struct {
     data_dir: []const u8,
     project_dir: []const u8,
 
-    fn init(arena: Allocator, io: Io, environ: *const Environ.Map, config: Config, beside: ?[]const u8, log: *Io.Writer) !Apple {
+    fn init(arena: Allocator, io: Io, environ: *const Environ.Map, config: Config, beside: ?[]const u8, log: *Io.Writer, diag: *Diagnostic) !Apple {
         const wanted = environ.get("ORCHD_APPLE_MODE") orelse "";
+        if (movedToApplz(wanted)) {
+            diag.set(arena, "ORCHD_APPLE_MODE={s} is now applz, its own runtime (https://github.com/adiled/applz): install it and use --rootstock applz", .{wanted});
+            return error.MovedToApplz;
+        }
         const mode = AppleMode.parse(wanted) orelse blk: {
             try log.print("warning: unknown ORCHD_APPLE_MODE '{s}', using 'xpc' (orchd-apple)\n", .{wanted});
             break :blk .orchd_apple;
@@ -216,7 +217,7 @@ pub const Apple = struct {
                 diag.set(arena, "container CLI/daemon not reachable (run: container system start)", .{});
                 return error.RootstockFailed;
             },
-            .orchd_apple, .orchd_osx => _ = try a.call(arena, io, "check", null, diag),
+            .orchd_apple => _ = try a.call(arena, io, "check", null, diag),
         }
     }
 
@@ -237,7 +238,7 @@ pub const Apple = struct {
                     return error.RootstockFailed;
                 }
             },
-            .orchd_apple, .orchd_osx => _ = try a.call(arena, io, "prepare", try serviceJson(arena, service), diag),
+            .orchd_apple => _ = try a.call(arena, io, "prepare", try serviceJson(arena, service), diag),
         }
     }
 
@@ -254,7 +255,7 @@ pub const Apple = struct {
         }
         switch (a.mode) {
             .container_cli => return a.cliExecSet(arena, service, diag),
-            .orchd_apple, .orchd_osx => {
+            .orchd_apple => {
                 const out = try a.call(arena, io, "exec-set", try serviceJson(arena, service), diag);
                 return std.json.parseFromSliceLeaky(ExecSet, arena, out, .{ .ignore_unknown_fields = true }) catch |err| {
                     diag.set(arena, "failed to deserialize ExecSet from co-process: {t}\nraw: {s}", .{ err, out });
@@ -300,6 +301,14 @@ pub const Apple = struct {
     }
 };
 
+fn movedToApplz(mode: []const u8) bool {
+    const t = std.mem.trim(u8, mode, " \t\r\n");
+    for ([_][]const u8{ "osx", "vz", "orchd-osx" }) |old| {
+        if (std.ascii.eqlIgnoreCase(t, old)) return true;
+    }
+    return false;
+}
+
 fn serviceJson(arena: Allocator, service: Service) ![]const u8 {
     return std.json.Stringify.valueAlloc(arena, service, .{ .emit_null_optional_fields = false });
 }
@@ -318,12 +327,13 @@ test "apple modes read from ORCHD_APPLE_MODE, any case" {
     try testing.expectEqual(.orchd_apple, AppleMode.parse("xpc"));
     try testing.expectEqual(.orchd_apple, AppleMode.parse("daemon"));
     try testing.expectEqual(.orchd_apple, AppleMode.parse(""));
-    try testing.expectEqual(.orchd_osx, AppleMode.parse("osx"));
-    try testing.expectEqual(.orchd_osx, AppleMode.parse("vz"));
-    try testing.expectEqual(.orchd_osx, AppleMode.parse("OSX"));
+    try testing.expectEqual(null, AppleMode.parse("osx"));
+    try testing.expect(movedToApplz("OSX"));
+    try testing.expect(movedToApplz("vz"));
+    try testing.expect(!movedToApplz("xpc"));
     try testing.expectEqual(null, AppleMode.parse("bogus"));
     try testing.expectEqual(null, AppleMode.binary(.container_cli));
-    try testing.expectEqualStrings("ORCHD_OSX_BIN", AppleMode.binary(.orchd_osx).?.env);
+    try testing.expectEqualStrings("ORCHD_APPLE_BIN", AppleMode.binary(.orchd_apple).?.env);
 }
 
 test "the container CLI mode spells out the whole container" {
