@@ -289,7 +289,7 @@ pub const Engine = struct {
     const Stamp = struct { config_hash: u64, inputs: []const Input };
 
     fn stampPath(e: Engine) ![]const u8 {
-        return std.fs.path.join(e.arena, &.{ try e.config.unitsDir(e.arena), ".orchd-stamp" });
+        return std.fs.path.join(e.arena, &.{ try e.config.unitsDir(e.arena), try std.fmt.allocPrint(e.arena, ".{s}.orchd-stamp", .{e.config.grove}) });
     }
 
     fn dropStamp(e: Engine) void {
@@ -379,4 +379,21 @@ test "the engine refuses a platform it does not know" {
     var diag: Diagnostic = .{};
     try testing.expectError(error.UnknownPlatform, Engine.init(arena.allocator(), testing.io, &environ, config, &sink.writer, &diag));
     try testing.expectEqualStrings("unknown platform 'upstart' (launchd, systemd, orchdi)", diag.message);
+}
+
+test "each grove keeps its own stamp, so groves sharing a state dir leave each other's alone" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var environ: Environ.Map = .init(a);
+    var sink: Io.Writer.Discarding = .init(&.{});
+    var diag: Diagnostic = .{};
+    var config = @import("config.zig").forTest("/s");
+    config.platform = "orchdi";
+    config.grove = "shop";
+    const shop = try Engine.init(a, testing.io, &environ, config, &sink.writer, &diag);
+    config.grove = "blog";
+    const blog = try Engine.init(a, testing.io, &environ, config, &sink.writer, &diag);
+    try testing.expectEqualStrings("/s/units/.shop.orchd-stamp", try shop.stampPath());
+    try testing.expectEqualStrings("/s/units/.blog.orchd-stamp", try blog.stampPath());
 }
