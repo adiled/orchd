@@ -49,9 +49,9 @@ jobs:
 
           SERVICE hello
           FROM alpine:3.20
-          CMD sh -c "echo hello from $GREETING; cat /data/note; sleep 600"
+          CMD sh -c "echo hello from $GREETING; cat /data/note; touch /data/x 2>/dev/null && echo note is writable || echo note is read-only; sleep 600"
           ENV GREETING=cri
-          VOLUME ${ORCH_PROJECT}/note:/data
+          VOLUME ${ORCH_PROJECT}/note:/data:ro
 
           SERVICE web
           FROM nginx:alpine
@@ -69,6 +69,8 @@ jobs:
           sudo cat $T/state/logs/ci.hello.log
           sudo grep -q "hello from cri" $T/state/logs/ci.hello.log
           sudo grep -q "mounted from the host" $T/state/logs/ci.hello.log
+          sudo grep -q "note is read-only" $T/state/logs/ci.hello.log
+          test ! -e $T/proj/note/x
           for i in $(seq 1 60); do curl -fsS -m 2 http://127.0.0.1:18080/ && break; sleep 1; done
           test "$(curl -fsS -m 2 http://127.0.0.1:18080/)" = "published from the pod"
           ! curl -fsS -m 2 "http://$(hostname -I | cut -d' ' -f1):18080/"

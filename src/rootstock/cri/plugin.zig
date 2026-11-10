@@ -92,7 +92,7 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, mode:
     for (env.map.keys(), env.map.values(), pairs) |k, v, *pair| pair.* = .{ k, v };
 
     const mounts = try arena.alloc(cri.Mount, s.volumes.len);
-    for (s.volumes, mounts) |v, *m| m.* = .{ .host_path = try envelope.mountSource(arena, v), .container_path = v.destination };
+    for (s.volumes, mounts) |v, *m| m.* = .{ .host_path = try envelope.mountSource(arena, v), .container_path = v.destination, .readonly = v.read_only };
 
     const r = s.resources;
     const cpu = r.cpu();

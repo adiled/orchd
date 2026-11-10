@@ -12,6 +12,7 @@ const quoted = contract.quoted;
 pub const Mount = struct {
     source: []const u8,
     destination: []const u8,
+    read_only: ?bool = null,
 };
 
 pub const Limits = struct {
@@ -46,7 +47,7 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, from_files: Env) !RunSpec {
     for (env.map.keys(), env.map.values(), pairs) |k, v, *pair| pair.* = try std.fmt.allocPrint(arena, "{s}={s}", .{ k, v });
 
     const mounts = try arena.alloc(Mount, s.volumes.len);
-    for (s.volumes, mounts) |v, *m| m.* = .{ .source = try envelope.mountSource(arena, v), .destination = v.destination };
+    for (s.volumes, mounts) |v, *m| m.* = .{ .source = try envelope.mountSource(arena, v), .destination = v.destination, .read_only = if (v.read_only) true else null };
 
     const r = s.resources;
     return .{
@@ -104,7 +105,7 @@ test "a container becomes an applz run with its whole spec, plus pull, stop and 
     s.publish = &.{.{ .address = "127.0.0.1", .host = 5432, .container = 5432 }};
     s.volumes = &.{
         .{ .source = "pgdata", .destination = "/var/lib/postgresql/data", .is_named = true },
-        .{ .source = "/proj/init", .destination = "/docker-entrypoint-initdb.d" },
+        .{ .source = "/proj/init", .destination = "/docker-entrypoint-initdb.d", .read_only = true },
         .{ .source = "/etc/hosts", .destination = "/etc/hosts" },
     };
     s.resources = .{ .memory = "1G", .cpus = 2, .limit_nofile = 4096, .tasks_max = 64, .cpu_quota = "50%" };
@@ -130,6 +131,10 @@ test "a container becomes an applz run with its whole spec, plus pull, stop and 
     try testing.expectEqualStrings("POSTGRES_PASSWORD=it's secret", spec.env[2]);
     try testing.expectEqualStrings("/data/hum/db/volumes/pgdata", spec.mounts[0].source);
     try testing.expectEqualStrings("/proj/init", spec.mounts[1].source);
+    try testing.expect(spec.mounts[1].read_only.?);
+    try testing.expectEqual(null, spec.mounts[0].read_only);
+    try testing.expect(std.mem.indexOf(u8, json, "\"read_only\":true") != null);
+    try testing.expectEqual(1, std.mem.count(u8, json, "read_only"));
     try testing.expectEqualStrings("/etc/hosts", spec.mounts[2].source);
     try testing.expectEqual(5432, spec.ports[0].host);
     try testing.expectEqualStrings("1G", spec.memory.?);

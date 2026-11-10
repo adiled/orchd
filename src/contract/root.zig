@@ -24,6 +24,22 @@ pub const VolumeMount = struct {
     source: []const u8,
     destination: []const u8,
     is_named: bool = false,
+    read_only: bool = false,
+
+    pub fn jsonStringify(v: VolumeMount, w: *std.json.Stringify) std.json.Stringify.Error!void {
+        try w.beginObject();
+        try w.objectField("source");
+        try w.write(v.source);
+        try w.objectField("destination");
+        try w.write(v.destination);
+        try w.objectField("is_named");
+        try w.write(v.is_named);
+        if (v.read_only) {
+            try w.objectField("read_only");
+            try w.write(true);
+        }
+        try w.endObject();
+    }
 };
 
 pub const ResourceLimits = struct {
@@ -285,6 +301,23 @@ test "the envelope reads what orchd sends and passes over what a rootstock does 
     try testing.expectEqualStrings("b", envelope.service.env.map.get("A").?);
     try testing.expect(!envelope.service.volumes[0].is_named);
     try testing.expectEqual(null, envelope.service.stop_command);
+}
+
+test "a volume is written as it always was, and only a read-only one says so" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const volumes = [_]VolumeMount{
+        .{ .source = "pgdata", .destination = "/data", .is_named = true },
+        .{ .source = "/srv/site", .destination = "/srv", .read_only = true },
+    };
+    const json = try std.json.Stringify.valueAlloc(a, volumes, .{});
+    try testing.expectEqualStrings(
+        \\[{"source":"pgdata","destination":"/data","is_named":true},{"source":"/srv/site","destination":"/srv","is_named":false,"read_only":true}]
+    , json);
+    const back = try std.json.parseFromSliceLeaky([]const VolumeMount, a, json, .{});
+    try testing.expect(!back[0].read_only);
+    try testing.expect(back[1].read_only);
 }
 
 test "an envelope from another contract is refused" {

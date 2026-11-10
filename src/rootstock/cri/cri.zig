@@ -47,6 +47,7 @@ pub const Pod = struct {
 pub const Mount = struct {
     host_path: []const u8,
     container_path: []const u8,
+    readonly: bool = false,
 };
 
 pub const User = struct {
@@ -215,6 +216,7 @@ pub fn createContainerRequest(arena: Allocator, pod_id: []const u8, c: Container
         var entry: pb.Writer = .init(arena);
         try entry.string(1, m.container_path);
         try entry.string(2, m.host_path);
+        try entry.boolean(3, m.readonly);
         try config.message(7, entry.bytes());
     }
     try map(&config, 9, c.labels);
@@ -425,6 +427,27 @@ test "a container carries its argv, env, mounts, log, user and limits where CRI 
     try testing.expectEqual(101, try uintAt(try sub(security, &.{12}), 1));
     try testing.expectEqual(namespace_container, try uintAt(try sub(security, &.{3}), 2));
     try testing.expectEqual(null, try find(try sub(security, &.{3}), 1));
+}
+
+test "a read-only mount says so, and a writable one says nothing" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const request = try createContainerRequest(a, "pod-1", .{
+        .name = "web",
+        .image = "nginx:alpine",
+        .mounts = &.{
+            .{ .host_path = "/proj/site", .container_path = "/usr/share/nginx/html", .readonly = true },
+            .{ .host_path = "/data/cache", .container_path = "/var/cache/nginx" },
+        },
+        .log_path = "web.log",
+    }, "sandbox");
+    var mounts: std.ArrayList([]const u8) = .empty;
+    var r: pb.Reader = .init(try sub(request, &.{2}));
+    while (try r.next()) |f| if (f.number == 7) try mounts.append(a, f.asBytes());
+    try testing.expectEqual(2, mounts.items.len);
+    try testing.expectEqual(1, try uintAt(mounts.items[0], 3));
+    try testing.expectEqual(null, try find(mounts.items[1], 3));
 }
 
 test "a user is a uid, a uid and gid, or a name" {

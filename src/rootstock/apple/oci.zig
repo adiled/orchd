@@ -280,8 +280,9 @@ pub fn publishedPorts(arena: std.mem.Allocator, publish: []const contract.PortMa
 }
 
 pub fn mountFor(volume: contract.VolumeMount, source: []const u8) Mount {
-    if (volume.is_named) return .{ .type = .{ .volume = .{ .name = volume.source } }, .source = source, .destination = volume.destination };
-    return .{ .type = .{ .virtiofs = .{} }, .source = source, .destination = volume.destination };
+    const options: []const []const u8 = if (volume.read_only) &.{"ro"} else &.{};
+    if (volume.is_named) return .{ .type = .{ .volume = .{ .name = volume.source } }, .source = source, .destination = volume.destination, .options = options };
+    return .{ .type = .{ .virtiofs = .{} }, .source = source, .destination = volume.destination, .options = options };
 }
 
 fn mountsFor(arena: std.mem.Allocator, io: std.Io, volumes: []const contract.VolumeMount) ![]const Mount {
@@ -566,9 +567,9 @@ test "ports and mounts take the shapes the daemon stores" {
     , try std.json.Stringify.valueAlloc(a, ports, .{}));
     const mounts = [_]Mount{
         mountFor(.{ .source = "/proj/site", .destination = "/srv" }, "/proj/site"),
-        mountFor(.{ .source = "pgdata", .destination = "/data", .is_named = true }, "/v/pgdata/volume.img"),
+        mountFor(.{ .source = "pgdata", .destination = "/data", .is_named = true, .read_only = true }, "/v/pgdata/volume.img"),
     };
     try std.testing.expectEqualStrings(
-        \\[{"type":{"virtiofs":{}},"source":"/proj/site","destination":"/srv","options":[]},{"type":{"volume":{"name":"pgdata","format":"ext4","cache":{"on":{}},"sync":{"fsync":{}}}},"source":"/v/pgdata/volume.img","destination":"/data","options":[]}]
+        \\[{"type":{"virtiofs":{}},"source":"/proj/site","destination":"/srv","options":[]},{"type":{"volume":{"name":"pgdata","format":"ext4","cache":{"on":{}},"sync":{"fsync":{}}}},"source":"/v/pgdata/volume.img","destination":"/data","options":["ro"]}]
     , try std.json.Stringify.valueAlloc(a, mounts, .{}));
 }
