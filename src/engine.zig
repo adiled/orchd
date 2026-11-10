@@ -71,7 +71,7 @@ pub const Engine = struct {
         const spec = try e.parsed();
         try e.say("parsed {d} services (orch v{s})", .{ spec.services.len, spec.version });
 
-        const stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.diag);
+        var stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.diag);
         try stock.check(e.arena, e.io, e.diag);
         try e.say("rootstock: {s}", .{stock.name});
 
@@ -144,7 +144,7 @@ pub const Engine = struct {
     pub fn reloadTrees(e: *Engine, names: []const []const u8) !void {
         try e.checkServices(names);
         const spec = try e.parsed();
-        const stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.diag);
+        var stock = try rootstock.create(e.arena, e.io, e.environ, e.config, e.diag);
         try stock.check(e.arena, e.io, e.diag);
 
         var done: std.ArrayList([]const u8) = .empty;
@@ -207,6 +207,7 @@ pub const Engine = struct {
         e.platform.stop(e.arena, e.io, e.config, names, &ignored) catch {};
         try e.platform.remove(e.arena, e.io, e.config, names);
         e.dropStamp();
+        try e.uproot(names);
         if (!keep_data) {
             for (names) |n| Io.Dir.cwd().deleteTree(e.io, try std.fs.path.join(e.arena, &.{ e.config.data_dir, n })) catch {};
         }
@@ -219,11 +220,27 @@ pub const Engine = struct {
         try e.platform.clean(e.arena, e.io, e.config);
         e.dropStamp();
         try e.say("removed generated units", .{});
+        try e.uproot(&.{});
         if (keep_data) return;
         const cwd = Io.Dir.cwd();
         cwd.access(e.io, e.config.data_dir, .{}) catch return;
         cwd.deleteTree(e.io, e.config.data_dir) catch {};
         try e.say("removed data directory: {s}", .{e.config.data_dir});
+    }
+
+    fn uproot(e: *Engine, names: []const []const u8) !void {
+        const spec = e.parsed() catch {
+            try e.warn("the Orchfile could not be read, so the rootstock was not asked to remove what it keeps", .{});
+            return;
+        };
+        var why: Diagnostic = .{};
+        var stock = rootstock.create(e.arena, e.io, e.environ, e.config, &why) catch return e.warn("{s}", .{why.message});
+        stock.check(e.arena, e.io, &why) catch return e.warn("{s}", .{why.message});
+        if (!stock.removes) return;
+        for (spec.services) |service| {
+            if (names.len > 0 and !contains(names, service.name)) continue;
+            stock.remove(e.arena, e.io, service, &why) catch try e.warn("{s}: {s}", .{ service.name, why.message });
+        }
     }
 
     pub fn status(e: *Engine, out: *Io.Writer, as_json: bool) !void {

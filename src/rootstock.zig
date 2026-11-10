@@ -11,6 +11,7 @@ const ExecSet = types.ExecSet;
 const Diagnostic = types.Diagnostic;
 
 pub const contract: u32 = 1;
+pub const removal_contract: u32 = 2;
 
 pub fn create(arena: Allocator, io: Io, environ: *const Environ.Map, config: Config, diag: *Diagnostic) !Rootstock {
     const file = try pluginName(arena, config.rootstock);
@@ -29,6 +30,7 @@ pub const Rootstock = struct {
     name: []const u8,
     bin: []const u8,
     config: Config,
+    removes: bool = false,
 
     const Envelope = struct {
         contract: u32,
@@ -60,12 +62,16 @@ pub const Rootstock = struct {
         return out.stdout;
     }
 
-    pub fn check(e: Rootstock, arena: Allocator, io: Io, diag: *Diagnostic) !void {
+    pub fn check(e: *Rootstock, arena: Allocator, io: Io, diag: *Diagnostic) !void {
         const spoken = try e.call(arena, io, "contract", null, diag);
+        var speaks_base = false;
         var versions = std.mem.tokenizeAny(u8, spoken, " \t\r\n");
         while (versions.next()) |v| {
-            if (std.fmt.parseInt(u32, v, 10) catch null == contract) break;
-        } else {
+            const version = std.fmt.parseInt(u32, v, 10) catch continue;
+            if (version == contract) speaks_base = true;
+            if (version == removal_contract) e.removes = true;
+        }
+        if (!speaks_base) {
             diag.set(arena, "{s} speaks contract {s}, orchd needs {d}", .{
                 try pluginName(arena, e.name),
                 std.mem.trim(u8, spoken, " \t\r\n"),
@@ -78,6 +84,11 @@ pub const Rootstock = struct {
 
     pub fn prepare(e: Rootstock, arena: Allocator, io: Io, service: Service, diag: *Diagnostic) !void {
         _ = try e.call(arena, io, "prepare", service, diag);
+    }
+
+    pub fn remove(e: Rootstock, arena: Allocator, io: Io, service: Service, diag: *Diagnostic) !void {
+        if (!e.removes) return;
+        _ = try e.call(arena, io, "remove", service, diag);
     }
 
     pub fn execSet(e: Rootstock, arena: Allocator, io: Io, service: Service, diag: *Diagnostic) !ExecSet {
@@ -121,7 +132,7 @@ test "a plugin gets the envelope on stdin and answers with an exec set" {
         \\  exec-set) cat > {s}; echo '{{"start":"fake run web","stop":null}}' ;;
         \\esac
     , .{seen}));
-    const plugin = fakeRootstock(bin, root);
+    var plugin = fakeRootstock(bin, root);
     var diag: Diagnostic = .{};
     try plugin.check(a, testing.io, &diag);
     const set = try plugin.execSet(a, testing.io, .{ .name = "web", .mode = .host, .run_command = "sleep 1" }, &diag);
@@ -145,7 +156,7 @@ test "a plugin that speaks another contract is refused by name" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
-    const plugin = fakeRootstock(try fakePlugin(a, tmp.dir, root, "echo 2"), root);
+    var plugin = fakeRootstock(try fakePlugin(a, tmp.dir, root, "echo 2"), root);
     var diag: Diagnostic = .{};
     try testing.expectError(error.ContractMismatch, plugin.check(a, testing.io, &diag));
     try testing.expectEqualStrings("orchd-rootstock-fake speaks contract 2, orchd needs 1", diag.message);
@@ -162,4 +173,36 @@ test "a failing verb carries the plugin's own reason, even unread" {
     var diag: Diagnostic = .{};
     try testing.expectError(error.RootstockFailed, plugin.prepare(a, testing.io, .{ .name = "web", .mode = .host }, &diag));
     try testing.expectEqualStrings("orchd-rootstock-fake prepare failed: no image for web", diag.message);
+}
+
+test "a plugin that speaks contract 2 is asked to remove what it keeps; one that speaks only 1 is not" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
+    const seen = try std.fs.path.join(a, &.{ root, "removed.json" });
+    const body = try std.fmt.allocPrint(a,
+        \\case "$1" in
+        \\  contract) echo "$VERSIONS" ;;
+        \\  check) exit 0 ;;
+        \\  remove) cat > {s} ;;
+        \\esac
+    , .{seen});
+    const keeps = try fakePlugin(a, tmp.dir, root, try std.mem.replaceOwned(u8, a, body, "$VERSIONS", "1 2"));
+    var two = fakeRootstock(keeps, root);
+    var diag: Diagnostic = .{};
+    try two.check(a, testing.io, &diag);
+    try testing.expect(two.removes);
+    try two.remove(a, testing.io, .{ .name = "db", .mode = .container, .image = "postgres:16" }, &diag);
+    const envelope = try std.json.parseFromSliceLeaky(std.json.Value, a, try tmp.dir.readFileAlloc(testing.io, "removed.json", a, .limited(1 << 16)), .{});
+    try testing.expectEqualStrings("db", envelope.object.get("service").?.object.get("name").?.string);
+
+    try tmp.dir.deleteFile(testing.io, "removed.json");
+    var one = fakeRootstock(try fakePlugin(a, tmp.dir, root, try std.mem.replaceOwned(u8, a, body, "$VERSIONS", "1")), root);
+    try one.check(a, testing.io, &diag);
+    try testing.expect(!one.removes);
+    try one.remove(a, testing.io, .{ .name = "db", .mode = .container, .image = "postgres:16" }, &diag);
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "removed.json", .{}));
 }

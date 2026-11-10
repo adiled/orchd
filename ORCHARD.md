@@ -67,10 +67,11 @@ on `PATH`; none is built in. orchd ships `bare`, `containerd`, `apple` and `appl
 it with one verb at a time:
 
 ```
-orchd-rootstock-<name> contract   stdout: the contract versions it speaks, e.g. 1
+orchd-rootstock-<name> contract   stdout: the contract versions it speaks, e.g. 1 2
 orchd-rootstock-<name> check      exit 0 if it can run on this machine
 orchd-rootstock-<name> prepare    stdin: Envelope  (pull an image, make a dir, ...)
 orchd-rootstock-<name> exec-set   stdin: Envelope  stdout: ExecSet
+orchd-rootstock-<name> remove     stdin: Envelope  (contract 2: uproot what it keeps)
 ```
 
 ```json
@@ -85,6 +86,11 @@ itself. `reload` runs against the living tree with `MAINPID` set to it. A non-ze
 exit fails the verb, with the rootstock's stderr as the reason. What the
 ExecSet's commands do when they run is the rootstock's own business; orchd plants
 and tends them without knowing.
+
+Contract 2 adds `remove`. A rootstock that keeps something between runs, such as
+a container honouring `RECREATE never`, speaks `1 2`, and `fell` calls `remove`
+for each service it fells once the trees are down. A rootstock that speaks only
+1 is never asked.
 
 ### `orchd plant --platform <name> --grove <grove>`
 

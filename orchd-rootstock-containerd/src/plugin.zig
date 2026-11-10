@@ -6,6 +6,7 @@ const image = @import("image.zig");
 const oci = @import("oci.zig");
 
 pub const contract: u32 = 1;
+pub const removal_contract: u32 = 2;
 pub const default_socket = "/run/containerd/containerd.sock";
 pub const default_snapshotter = "overlayfs";
 
@@ -29,6 +30,8 @@ pub const Resources = struct {
 
 pub const Mode = enum { host, container };
 
+pub const Recreate = enum { always, never };
+
 pub const Service = struct {
     name: []const u8,
     mode: Mode,
@@ -44,6 +47,7 @@ pub const Service = struct {
     env: Env = .{},
     env_files: []const []const u8 = &.{},
     resources: Resources = .{},
+    recreate: Recreate = .never,
 };
 
 pub const Envelope = struct {
@@ -78,7 +82,19 @@ pub const RunSpec = struct {
     mounts: []const oci.BindMount = &.{},
     resources: oci.Resources = .{},
     no_pivot_root: bool = false,
+    recreate: Recreate = .never,
+    definition: []const u8 = "",
 };
+
+pub fn definitionOf(arena: Allocator, spec: RunSpec) ![]const u8 {
+    var unhashed = spec;
+    unhashed.definition = "";
+    unhashed.recreate = .never;
+    const json = try std.json.Stringify.valueAlloc(arena, unhashed, .{ .emit_null_optional_fields = false });
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(json, &digest, .{});
+    return std.fmt.allocPrint(arena, "{x}", .{&digest});
+}
 
 pub const Refusal = error{ NoRunCommand, NoImage, UnterminatedQuote };
 
@@ -223,6 +239,17 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, socket: []const u8, from_fi
     };
 }
 
+pub fn removalSpec(arena: Allocator, envelope: Envelope, socket: []const u8) !RunSpec {
+    const id = try containerId(arena, envelope);
+    return .{
+        .socket = socket,
+        .namespace = envelope.grove,
+        .image = envelope.service.image orelse "",
+        .container_id = id,
+        .fifo_dir = try std.fs.path.join(arena, &.{ envelope.state_dir, "containerd", id }),
+    };
+}
+
 pub const Quoted = struct {
     text: []const u8,
 
@@ -242,6 +269,8 @@ pub fn execSet(arena: Allocator, envelope: Envelope, self: []const u8, socket: [
     };
     var run_spec = try runSpec(arena, envelope, socket, from_files);
     run_spec.no_pivot_root = no_pivot_root;
+    run_spec.recreate = s.recreate;
+    run_spec.definition = try definitionOf(arena, run_spec);
     const spec = try std.json.Stringify.valueAlloc(arena, run_spec, .{ .emit_null_optional_fields = false });
     const encoded = try arena.alloc(u8, std.base64.standard.Encoder.calcSize(spec.len));
     _ = std.base64.standard.Encoder.encode(encoded, spec);
@@ -321,4 +350,34 @@ test "cpu quota comes from CPUS, else CPU_QUOTA as a percentage" {
     const none = try runSpec(a, testEnvelope(.{ .name = "x", .mode = .container, .image = "x" }), default_socket, .{});
     try testing.expectEqual(null, none.resources.cpu_quota_us);
     try testing.expectEqual(null, none.resources.cpu_period_us);
+}
+
+test "the definition names everything that shapes the container, and nothing else" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base: Service = .{ .name = "db", .mode = .container, .image = "postgres:16", .cmd = "postgres" };
+    const one = try execSet(a, testEnvelope(base), "/x", default_socket, false, .{});
+    const again = try execSet(a, testEnvelope(base), "/x", default_socket, false, .{});
+    const prefix = "'/x' run --spec-base64 ";
+    const first = try decodeRunSpec(a, one.start[prefix.len..]);
+    try testing.expectEqual(64, first.definition.len);
+    try testing.expectEqualStrings(first.definition, (try decodeRunSpec(a, again.start[prefix.len..])).definition);
+    try testing.expectEqual(.never, first.recreate);
+
+    var always = base;
+    always.recreate = .always;
+    const same_shape = try decodeRunSpec(a, (try execSet(a, testEnvelope(always), "/x", default_socket, false, .{})).start[prefix.len..]);
+    try testing.expectEqualStrings(first.definition, same_shape.definition);
+    try testing.expectEqual(.always, same_shape.recreate);
+
+    var other_image = base;
+    other_image.image = "postgres:17";
+    const changed = try decodeRunSpec(a, (try execSet(a, testEnvelope(other_image), "/x", default_socket, false, .{})).start[prefix.len..]);
+    try testing.expect(!std.mem.eql(u8, first.definition, changed.definition));
+
+    var env = base;
+    try env.env.map.put(a, "MODE", "x");
+    const env_changed = try decodeRunSpec(a, (try execSet(a, testEnvelope(env), "/x", default_socket, false, .{})).start[prefix.len..]);
+    try testing.expect(!std.mem.eql(u8, first.definition, env_changed.definition));
 }

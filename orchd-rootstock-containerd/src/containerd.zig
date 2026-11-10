@@ -10,6 +10,8 @@ pub const method = struct {
     pub const read_content = "/containerd.services.content.v1.Content/Read";
     pub const prepare_snapshot = "/containerd.services.snapshots.v1.Snapshots/Prepare";
     pub const remove_snapshot = "/containerd.services.snapshots.v1.Snapshots/Remove";
+    pub const snapshot_mounts = "/containerd.services.snapshots.v1.Snapshots/Mounts";
+    pub const get_container = "/containerd.services.containers.v1.Containers/Get";
     pub const create_container = "/containerd.services.containers.v1.Containers/Create";
     pub const delete_container = "/containerd.services.containers.v1.Containers/Delete";
     pub const create_task = "/containerd.services.tasks.v1.Tasks/Create";
@@ -36,6 +38,18 @@ pub const Descriptor = struct {
     media_type: []const u8 = "",
     digest: []const u8 = "",
     size: i64 = 0,
+};
+
+pub const Container = struct {
+    image: []const u8 = "",
+    snapshotter: []const u8 = "",
+    snapshot_key: []const u8 = "",
+    labels: []const [2][]const u8 = &.{},
+
+    pub fn label(c: Container, key: []const u8) ?[]const u8 {
+        for (c.labels) |kv| if (std.mem.eql(u8, kv[0], key)) return kv[1];
+        return null;
+    }
 };
 
 pub const Version = struct {
@@ -156,7 +170,41 @@ pub fn removeSnapshotRequest(arena: Allocator, snapshotter: []const u8, key: []c
     return w.bytes();
 }
 
-pub fn createContainerRequest(arena: Allocator, id: []const u8, image: []const u8, spec_json: []const u8, snapshotter: []const u8, no_pivot_root: bool) ![]const u8 {
+pub fn snapshotMountsRequest(arena: Allocator, snapshotter: []const u8, key: []const u8) ![]const u8 {
+    return removeSnapshotRequest(arena, snapshotter, key);
+}
+
+pub fn getContainerRequest(arena: Allocator, id: []const u8) ![]const u8 {
+    return idOnly(arena, id);
+}
+
+pub fn parseGetContainerResponse(arena: Allocator, data: []const u8) !Container {
+    var outer: pb.Reader = .init(data);
+    while (try outer.next()) |f| if (f.number == 1) {
+        var c: Container = .{};
+        var labels: std.ArrayList([2][]const u8) = .empty;
+        var r: pb.Reader = .init(f.asBytes());
+        while (try r.next()) |g| switch (g.number) {
+            2 => {
+                var entry: pb.Reader = .init(g.asBytes());
+                var kv: [2][]const u8 = .{ "", "" };
+                while (try entry.next()) |e| if (e.number == 1 or e.number == 2) {
+                    kv[e.number - 1] = e.asBytes();
+                };
+                try labels.append(arena, kv);
+            },
+            3 => c.image = g.asBytes(),
+            6 => c.snapshotter = g.asBytes(),
+            7 => c.snapshot_key = g.asBytes(),
+            else => {},
+        };
+        c.labels = labels.items;
+        return c;
+    };
+    return error.NoContainer;
+}
+
+pub fn createContainerRequest(arena: Allocator, id: []const u8, image: []const u8, spec_json: []const u8, snapshotter: []const u8, no_pivot_root: bool, labels: []const [2][]const u8) ![]const u8 {
     var runtime: pb.Writer = .init(arena);
     try runtime.string(1, runc_runtime);
     if (no_pivot_root) {
@@ -167,6 +215,7 @@ pub fn createContainerRequest(arena: Allocator, id: []const u8, image: []const u
 
     var container: pb.Writer = .init(arena);
     try container.string(1, id);
+    for (labels) |kv| try container.mapEntry(2, kv[0], kv[1]);
     try container.string(3, image);
     try container.message(4, runtime.bytes());
     try container.message(5, try any(arena, oci_spec_url, spec_json));
@@ -241,7 +290,7 @@ test "a container can ask runc for no_pivot_root, as an initramfs root needs" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const req = try createContainerRequest(a, "hum-db", "docker.io/library/alpine:3.20", "{}", "overlayfs", true);
+    const req = try createContainerRequest(a, "hum-db", "docker.io/library/alpine:3.20", "{}", "overlayfs", true, &.{});
 
     var outer: pb.Reader = .init(req);
     const container = (try outer.next()).?;
@@ -269,7 +318,7 @@ test "a container can ask runc for no_pivot_root, as an initramfs root needs" {
     }
     for ([_]usize{ 1, 3, 4, 5, 6, 7 }) |n| try testing.expect(seen[n]);
 
-    var plain: pb.Reader = .init(try createContainerRequest(a, "hum-db", "x", "{}", "overlayfs", false));
+    var plain: pb.Reader = .init(try createContainerRequest(a, "hum-db", "x", "{}", "overlayfs", false, &.{}));
     var pc: pb.Reader = .init((try plain.next()).?.asBytes());
     while (try pc.next()) |f| if (f.number == 4) {
         var rt: pb.Reader = .init(f.asBytes());
@@ -322,4 +371,22 @@ test "responses yield the image target, the snapshot mounts and the exit status"
     try wait.uint(1, 137);
     try testing.expectEqual(137, try parseWaitResponse(wait.bytes()));
     try testing.expectEqual(0, try parseWaitResponse(""));
+}
+
+test "a kept container carries its definition as a label, and comes back with it" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const req = try createContainerRequest(a, "hum-db", "docker.io/library/alpine:3.20", "{}", "overlayfs", false, &.{.{ "orchd.definition", "abc123" }});
+    var outer: pb.Reader = .init(req);
+    const container = (try outer.next()).?.asBytes();
+    var response: pb.Writer = .init(a);
+    try response.message(1, container);
+    const got = try parseGetContainerResponse(a, response.bytes());
+    try testing.expectEqualStrings("abc123", got.label("orchd.definition").?);
+    try testing.expectEqual(null, got.label("other"));
+    try testing.expectEqualStrings("overlayfs", got.snapshotter);
+    try testing.expectEqualStrings("hum-db", got.snapshot_key);
+    try testing.expectEqualStrings("docker.io/library/alpine:3.20", got.image);
+    try testing.expectError(error.NoContainer, parseGetContainerResponse(a, ""));
 }
