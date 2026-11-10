@@ -3,6 +3,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const grpc = @import("grpc");
+const publish = @import("publish");
 const cri = @import("cri.zig");
 const log = @import("log.zig");
 const plugin = @import("plugin.zig");
@@ -32,6 +33,7 @@ const Runner = struct {
     spec: plugin.RunSpec,
     err: *Io.Writer,
     scratch: std.heap.ArenaAllocator,
+    publisher: ?publish.Publisher = null,
 
     fn say(r: *Runner, comptime fmt: []const u8, args: anytype) void {
         r.err.print("cri-run[{s}]: " ++ fmt ++ "\n", .{r.spec.pod} ++ args) catch {};
@@ -75,21 +77,49 @@ const Runner = struct {
             _ = try r.call(conn, "pull", cri.method.pull_image, image, interruptible);
         }
 
+        if (spec.ports.len > 0) {
+            var failure: ?publish.Publisher.Failure = null;
+            r.publisher = publish.Publisher.bind(a, r.io, spec.ports, &failure) catch |err| {
+                if (failure) |f| r.say("PUBLISH {s}{s}{d}:{d}: {t}", .{ f.port.address, if (f.port.address.len > 0) ":" else "", f.port.host, f.port.container, f.err }) else r.say("PUBLISH: {t}", .{err});
+                return err;
+            };
+        }
         try Io.Dir.cwd().createDirPath(r.io, spec.log_dir);
-        const resolv = Io.Dir.cwd().readFileAlloc(r.io, "/etc/resolv.conf", a, .limited(64 << 10)) catch "";
         const labels = spec.labels();
         const sandbox = try cri.podSandboxConfig(a, .{
             .name = spec.pod,
             .namespace = spec.grove,
             .log_directory = spec.log_dir,
+            .hostname = spec.service,
+            .host_network = spec.host_network,
             .labels = &labels,
-            .dns = try cri.parseResolvConf(a, resolv),
+            .dns = try r.dns(),
         });
         const pod_id = try cri.parseId(try r.call(conn, "run pod", cri.method.run_pod, try cri.runPodSandboxRequest(a, sandbox), interruptible));
         const created = try r.call(conn, "create", cri.method.create_container, try cri.createContainerRequest(a, pod_id, try spec.container(a), sandbox), interruptible);
         const container_id = try cri.parseId(created);
         _ = try r.call(conn, "start", cri.method.start_container, try cri.containerRequest(a, container_id), interruptible);
+        if (r.publisher) |*publisher| {
+            const ip = try cri.parsePodIp(try r.call(conn, "pod status", cri.method.pod_status, try cri.podRequest(a, pod_id), interruptible));
+            if (ip.len == 0) {
+                r.say("the pod has no IP to publish to", .{});
+                return error.NoPodIp;
+            }
+            try publisher.serve(ip);
+        }
         return r.follow(container_id);
+    }
+
+    fn dns(r: *Runner) !cri.Dns {
+        const read = struct {
+            fn read(io: Io, arena: Allocator, path: []const u8) !cri.Dns {
+                return cri.parseResolvConf(arena, Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(64 << 10)) catch "");
+            }
+        }.read;
+        const host = try read(r.io, r.arena, "/etc/resolv.conf");
+        if (r.spec.host_network or !cri.onlyLoopback(host)) return host;
+        const upstream = try read(r.io, r.arena, "/run/systemd/resolve/resolv.conf");
+        return if (upstream.servers.len > 0 and !cri.onlyLoopback(upstream)) upstream else host;
     }
 
     fn follow(r: *Runner, container_id: []const u8) !u8 {
@@ -152,6 +182,8 @@ const Runner = struct {
     }
 
     fn teardown(r: *Runner) void {
+        if (r.publisher) |*publisher| publisher.close(r.arena);
+        r.publisher = null;
         const conn = r.fresh() catch return;
         defer conn.close();
         r.sweepOn(conn);

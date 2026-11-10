@@ -23,6 +23,7 @@ const Rootstock = struct {
     installs: bool,
     tests: bool = true,
     grpc: bool = false,
+    publish: bool = false,
     libc: bool = false,
 };
 
@@ -41,10 +42,16 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const grpc = grpcModule(b, target, optimize);
+    const publish = b.addModule("publish", .{
+        .root_source_file = b.path("src/publish/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const test_step = b.step("test", "Run every test this host can run");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = contract, .filters = filters })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = grpc, .filters = filters })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = publish, .filters = filters })).step);
 
     const orchd = b.addExecutable(.{
         .name = "orchd",
@@ -70,7 +77,7 @@ pub fn build(b: *std.Build) void {
     const rootstocks = [_]Rootstock{
         .{ .name = "bare", .installs = true },
         .{ .name = "containerd", .installs = os == .linux, .grpc = true, .libc = true },
-        .{ .name = "cri", .installs = os == .linux, .grpc = true, .libc = true },
+        .{ .name = "cri", .installs = os == .linux, .grpc = true, .publish = true, .libc = true },
         .{ .name = "apple", .installs = os == .macos, .tests = os == .macos },
         .{ .name = "applz", .installs = os == .macos },
     };
@@ -84,6 +91,7 @@ pub fn build(b: *std.Build) void {
         });
         module.addImport("contract", contract);
         if (rootstock.grpc) module.addImport("grpc", grpc);
+        if (rootstock.publish) module.addImport("publish", publish);
 
         if (rootstock.installs) b.installArtifact(b.addExecutable(.{
             .name = b.fmt("orchd-rootstock-{s}", .{rootstock.name}),

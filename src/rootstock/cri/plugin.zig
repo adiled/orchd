@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const contract = @import("contract");
 const cri = @import("cri.zig");
+const publish = @import("publish");
 const Env = contract.Env;
 const Service = contract.Service;
 const ExecSet = contract.ExecSet;
@@ -17,12 +18,25 @@ pub const default_endpoints = [_][]const u8{
 
 pub const stop_timeout_s: u64 = 5;
 
+pub const Network = enum {
+    pod,
+    host,
+
+    pub fn parse(value: ?[]const u8) ?Network {
+        const v = value orelse return .pod;
+        if (v.len == 0) return .pod;
+        return std.meta.stringToEnum(Network, v);
+    }
+};
+
 pub const RunSpec = struct {
     endpoint: []const u8,
     grove: []const u8,
     service: []const u8,
     pod: []const u8,
     image: []const u8,
+    host_network: bool = false,
+    ports: []const publish.Port = &.{},
     command: []const []const u8 = &.{},
     args: []const []const u8 = &.{},
     env: []const [2][]const u8 = &.{},
@@ -45,6 +59,7 @@ pub const RunSpec = struct {
         const own = spec.labels();
         return .{
             .name = spec.service,
+            .host_network = spec.host_network,
             .image = spec.image,
             .command = spec.command,
             .args = spec.args,
@@ -73,9 +88,20 @@ pub fn endpointPath(value: []const u8) error{UnsupportedEndpoint}![]const u8 {
     return value;
 }
 
-pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, from_files: Env) !RunSpec {
+fn allInterfaces(address: ?[]const u8) bool {
+    const a = address orelse return true;
+    return a.len == 0 or std.mem.eql(u8, a, "0.0.0.0") or std.mem.eql(u8, a, "::");
+}
+
+pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, network: Network, from_files: Env) !RunSpec {
     const s = envelope.service;
     const pod = try envelope.containerName(arena);
+
+    const ports = try arena.alloc(publish.Port, s.publish.len);
+    for (s.publish, ports) |p, *port| {
+        if (network == .host and (p.host != p.container or !allInterfaces(p.address))) return error.PublishNeedsPodNetwork;
+        port.* = .{ .address = p.address orelse "", .host = p.host, .container = p.container };
+    }
 
     var env: Env = .{};
     for (from_files.map.keys(), from_files.map.values()) |k, v| try env.map.put(arena, k, v);
@@ -94,6 +120,8 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, from_
         .service = s.name,
         .pod = pod,
         .image = try contract.normalizeImage(arena, s.image orelse return error.NoImage),
+        .host_network = network == .host,
+        .ports = if (network == .host) &.{} else ports,
         .command = if (s.entrypoint) |e| try contract.words(arena, e) else &.{},
         .args = if (s.cmd) |c| try contract.words(arena, c) else &.{},
         .env = pairs,
@@ -108,14 +136,14 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, from_
     };
 }
 
-pub fn execSet(arena: Allocator, envelope: Envelope, self: []const u8, endpoint: []const u8, from_files: Env) !ExecSet {
+pub fn execSet(arena: Allocator, envelope: Envelope, self: []const u8, endpoint: []const u8, network: Network, from_files: Env) !ExecSet {
     const s = envelope.service;
     if (s.mode == .host) return .{
         .start = s.run_command orelse return error.NoRunCommand,
         .stop = s.stop_command,
         .reload = s.reload_command,
     };
-    const spec = try std.json.Stringify.valueAlloc(arena, try runSpec(arena, envelope, endpoint, from_files), .{ .emit_null_optional_fields = false });
+    const spec = try std.json.Stringify.valueAlloc(arena, try runSpec(arena, envelope, endpoint, network, from_files), .{ .emit_null_optional_fields = false });
     const encoded = try arena.alloc(u8, std.base64.standard.Encoder.calcSize(spec.len));
     _ = std.base64.standard.Encoder.encode(encoded, spec);
     return .{ .start = try std.fmt.allocPrint(arena, "{f} run --spec-base64 {s}", .{ contract.quoted(self), encoded }) };
@@ -145,6 +173,8 @@ pub fn explain(refusal: anyerror, service: Service, w: *Io.Writer) Io.Writer.Err
         error.NoRunCommand => try w.print("service '{s}' is host-mode but has no RUN command\n", .{service.name}),
         error.NoImage => try w.print("service '{s}' is container-mode but has no FROM image\n", .{service.name}),
         error.UnterminatedQuote => try w.print("service '{s}': ENTRYPOINT or CMD has an unterminated quote\n", .{service.name}),
+        error.PublishNeedsPodNetwork => try w.print("service '{s}': with ORCHD_CRI_NETWORK=host a container's ports are the host's, " ++
+            "so PUBLISH can only be port:port on every address; leave ORCHD_CRI_NETWORK unset to publish through the pod network\n", .{service.name}),
         else => try w.print("service '{s}': {t}\n", .{ service.name, refusal }),
     }
 }
@@ -154,6 +184,7 @@ pub fn explainEndpoint(err: anyerror, w: *Io.Writer) Io.Writer.Error!void {
         error.NoEndpoint => try w.writeAll("no CRI runtime answered at " ++ default_endpoints[0] ++ ", " ++
             default_endpoints[1] ++ " or " ++ default_endpoints[2] ++ "; set ORCHD_CRI_ENDPOINT\n"),
         error.UnsupportedEndpoint => try w.writeAll("ORCHD_CRI_ENDPOINT must be a unix socket: unix:///path or /path\n"),
+        error.UnknownNetwork => try w.writeAll("ORCHD_CRI_NETWORK is pod (the default) or host\n"),
         else => try w.print("CRI endpoint: {t}\n", .{err}),
     }
 }
@@ -174,13 +205,14 @@ test "a container becomes one foreground run carrying its whole spec" {
     try files.map.put(a, "MODE", "file");
     try files.map.put(a, "FROM_FILE", "yes");
 
-    const set = try execSet(a, testEnvelope(s), "/usr/local/bin/orchd-rootstock-cri", "/run/crio/crio.sock", files);
+    const set = try execSet(a, testEnvelope(s), "/usr/local/bin/orchd-rootstock-cri", "/run/crio/crio.sock", .pod, files);
     try testing.expectEqual(null, set.stop);
     const prefix = "'/usr/local/bin/orchd-rootstock-cri' run --spec-base64 ";
     try testing.expect(std.mem.startsWith(u8, set.start, prefix));
 
     const spec = try decodeRunSpec(a, set.start[prefix.len..]);
     try testing.expectEqualStrings("/run/crio/crio.sock", spec.endpoint);
+    try testing.expect(!spec.host_network);
     try testing.expectEqualStrings("hum-web", spec.pod);
     try testing.expectEqualStrings("docker.io/library/nginx:alpine", spec.image);
     try testing.expectEqualDeep(@as([]const []const u8, &.{"/docker-entrypoint.sh"}), spec.command);
@@ -203,7 +235,7 @@ test "without ENTRYPOINT or CMD the image's own run, as Kubernetes does" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const spec = try runSpec(a, testEnvelope(.{ .name = "db", .mode = .container, .image = "postgres:16" }), "/s", .{});
+    const spec = try runSpec(a, testEnvelope(.{ .name = "db", .mode = .container, .image = "postgres:16" }), "/s", .pod, .{});
     try testing.expectEqual(0, spec.command.len);
     try testing.expectEqual(0, spec.args.len);
     try testing.expectEqual(null, spec.memory_bytes);
@@ -214,16 +246,40 @@ test "a host service runs as it would bare, and what cannot run is refused" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const set = try execSet(a, testEnvelope(.{ .name = "web", .mode = .host, .run_command = "python app.py", .reload_command = "kill -HUP $MAINPID" }), "/x", "/s", .{});
+    const set = try execSet(a, testEnvelope(.{ .name = "web", .mode = .host, .run_command = "python app.py", .reload_command = "kill -HUP $MAINPID" }), "/x", "/s", .pod, .{});
     try testing.expectEqualStrings("python app.py", set.start);
     try testing.expectEqualStrings("kill -HUP $MAINPID", set.reload.?);
-    try testing.expectError(error.NoRunCommand, execSet(a, testEnvelope(.{ .name = "web", .mode = .host }), "/x", "/s", .{}));
-    try testing.expectError(error.NoImage, execSet(a, testEnvelope(.{ .name = "db", .mode = .container }), "/x", "/s", .{}));
-    try testing.expectError(error.UnterminatedQuote, execSet(a, testEnvelope(.{ .name = "db", .mode = .container, .image = "x", .cmd = "sh -c 'half" }), "/x", "/s", .{}));
+    try testing.expectError(error.NoRunCommand, execSet(a, testEnvelope(.{ .name = "web", .mode = .host }), "/x", "/s", .pod, .{}));
+    try testing.expectError(error.NoImage, execSet(a, testEnvelope(.{ .name = "db", .mode = .container }), "/x", "/s", .pod, .{}));
+    try testing.expectError(error.UnterminatedQuote, execSet(a, testEnvelope(.{ .name = "db", .mode = .container, .image = "x", .cmd = "sh -c 'half" }), "/x", "/s", .pod, .{}));
 }
 
 test "an endpoint is a unix socket, given as a path or a unix:// URL" {
     try testing.expectEqualStrings("/run/crio/crio.sock", try endpointPath("unix:///run/crio/crio.sock"));
     try testing.expectEqualStrings("/run/crio/crio.sock", try endpointPath("/run/crio/crio.sock"));
     try testing.expectError(error.UnsupportedEndpoint, endpointPath("tcp://10.0.0.1:2376"));
+}
+
+test "PUBLISH forwards into the pod network, and the host network takes only port:port on every address" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Service = .{ .name = "web", .mode = .container, .image = "nginx" };
+    s.publish = &.{ .{ .address = "127.0.0.1", .host = 18080, .container = 80 }, .{ .host = 5433, .container = 5432 } };
+    const pod = try runSpec(a, testEnvelope(s), "/s", .pod, .{});
+    try testing.expectEqual(2, pod.ports.len);
+    try testing.expectEqual(18080, pod.ports[0].host);
+    try testing.expectEqualStrings("127.0.0.1", pod.ports[0].address);
+    try testing.expectEqualStrings("", pod.ports[1].address);
+    try testing.expectError(error.PublishNeedsPodNetwork, runSpec(a, testEnvelope(s), "/s", .host, .{}));
+
+    s.publish = &.{ .{ .host = 8080, .container = 8080 }, .{ .address = "0.0.0.0", .host = 53, .container = 53 } };
+    const shared = try runSpec(a, testEnvelope(s), "/s", .host, .{});
+    try testing.expect(shared.host_network);
+    try testing.expectEqual(0, shared.ports.len);
+    try testing.expect((try shared.container(a)).host_network);
+
+    try testing.expectEqual(Network.pod, Network.parse(null).?);
+    try testing.expectEqual(Network.host, Network.parse("host").?);
+    try testing.expectEqual(null, Network.parse("bridge"));
 }
