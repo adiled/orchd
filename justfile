@@ -1,9 +1,7 @@
 # orchd build + packaging. Run `just` (or `just --list`) to see recipes.
 #
-# Cross-platform: everywhere it builds orchd and its bare rootstock
-# (orchd-rootstock-bare); on Linux the containerd rootstock
-# (orchd-rootstock-containerd); on macOS the apple and applz rootstocks
-# (orchd-rootstock-apple, orchd-rootstock-applz).
+# One zig build makes orchd and the rootstocks this platform runs: bare
+# everywhere, containerd on Linux, apple and applz on macOS.
 # Requires zig 0.17.1, and orch on PATH to bundle the parser. Install just with
 # `brew install just`.
 
@@ -17,46 +15,16 @@ target   := if os() == "linux" { "-Dtarget=" + arch() + "-linux-musl" } else { "
 default:
     @just --list
 
-# Build for this platform: orchd and bare everywhere, containerd on Linux, apple and applz on macOS.
+# Build orchd and this platform's rootstocks into zig-out/bin.
 build:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    just build-orchd
-    just build-bare
-    if [ "{{os()}}" = "linux" ]; then just build-containerd; fi
-    if [ "{{os()}}" = "macos" ]; then just build-apple && just build-applz; fi
-
-build-orchd:
     zig build -Doptimize={{opt}} {{target}}
-
-build-bare:
-    cd orchd-rootstock-bare && zig build -Doptimize={{opt}} {{target}}
-
-build-containerd:
-    cd orchd-rootstock-containerd && zig build -Doptimize={{opt}} {{target}}
-
-[macos]
-build-apple:
-    cd orchd-rootstock-apple && zig build -Doptimize={{opt}}
-
-[macos]
-build-applz:
-    cd orchd-rootstock-applz && zig build -Doptimize={{opt}}
 
 # Stage a self-contained dist/bin for this platform.
 dist: build
     #!/usr/bin/env bash
     set -euo pipefail
     rm -rf dist && mkdir -p dist/bin
-    cp zig-out/bin/orchd dist/bin/
-    cp orchd-rootstock-bare/zig-out/bin/orchd-rootstock-bare dist/bin/
-    if [ "{{os()}}" = "linux" ]; then
-        cp orchd-rootstock-containerd/zig-out/bin/orchd-rootstock-containerd dist/bin/
-    fi
-    if [ "{{os()}}" = "macos" ]; then
-        cp orchd-rootstock-apple/zig-out/bin/orchd-rootstock-apple dist/bin/
-        cp orchd-rootstock-applz/zig-out/bin/orchd-rootstock-applz dist/bin/
-    fi
+    cp zig-out/bin/* dist/bin/
     if command -v orch >/dev/null; then cp "$(command -v orch)" dist/bin/; fi
     echo "staged -> dist/bin ($(ls dist/bin | tr '\n' ' '))"
 
@@ -68,35 +36,21 @@ install: dist
     install dist/bin/* "{{prefix}}/bin/"
     echo "installed -> {{prefix}}/bin"
 
-# Check before a pull request: format, every test suite this machine runs, and
-# the Linux builds (orchd, bare, containerd) cross-compiled.
+# Check before a pull request: format, every test this machine runs, and the
+# Linux builds cross-compiled.
 check:
     #!/usr/bin/env bash
     set -euo pipefail
-    zig fmt --check build.zig build.zig.zon src orchd-rootstock-*
+    zig fmt --check build.zig build.zig.zon src
     zig build test
-    for plugin in orchd-rootstock-bare orchd-rootstock-containerd; do (cd "$plugin" && zig build test); done
-    if [ "{{os()}}" = "macos" ]; then
-        for plugin in orchd-rootstock-apple orchd-rootstock-applz; do (cd "$plugin" && zig build test); done
-    fi
     for target in x86_64-linux-musl aarch64-linux-musl; do
-        out="$PWD/.zig-cache/check/$target"
-        zig build -Dtarget="$target" -p "$out"
-        for plugin in orchd-rootstock-bare orchd-rootstock-containerd; do (cd "$plugin" && zig build -Dtarget="$target" -p "$out"); done
+        zig build -Dtarget="$target" -p "$PWD/.zig-cache/check/$target"
     done
     echo "checks passed"
 
-# Run the test suites for this platform.
+# Run every test this machine runs.
 test:
-    #!/usr/bin/env bash
-    set -euo pipefail
     zig build test
-    (cd orchd-rootstock-bare && zig build test)
-    (cd orchd-rootstock-containerd && zig build test)
-    if [ "{{os()}}" = "macos" ]; then
-        (cd orchd-rootstock-apple && zig build test)
-        (cd orchd-rootstock-applz && zig build test)
-    fi
 
 clean:
-    rm -rf dist zig-out orchd-rootstock-bare/zig-out orchd-rootstock-containerd/zig-out orchd-rootstock-apple/zig-out orchd-rootstock-applz/zig-out
+    rm -rf dist zig-out
