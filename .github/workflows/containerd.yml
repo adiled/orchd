@@ -19,9 +19,7 @@ jobs:
       - name: Install orch, the parser orchd runs
         run: cargo install the-orch --locked
       - name: Build orchd and its rootstocks
-        run: |
-          just build-orchd build-bare build-containerd
-          cp orchd-rootstock-bare/zig-out/bin/orchd-rootstock-bare orchd-rootstock-containerd/zig-out/bin/orchd-rootstock-containerd zig-out/bin/
+        run: just build
       - name: containerd is running
         run: sudo ctr version
       - name: Grow a service on containerd, see it run, fell it, find nothing left

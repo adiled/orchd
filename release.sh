@@ -9,12 +9,7 @@ set -euo pipefail
 #     ./release.sh minor            # bumps 0.3.2 -> 0.4.0
 #     ./release.sh major            # bumps 0.3.2 -> 1.0.0
 #
-# Core (always): build.zig.zon, whose version the orchd binary reports.
-
-# --- Project add-ons (optional) ----------------------------------------------
-# Extra files kept in version lockstep with build.zig.zon.
-EXTRA_VERSIONED_FILES=(orchd-rootstock-bare/build.zig.zon orchd-rootstock-containerd/build.zig.zon orchd-rootstock-applz/build.zig.zon orchd-rootstock-apple/build.zig.zon)
-# -----------------------------------------------------------------------------
+# The version lives in build.zig.zon alone; orchd --version reports it.
 
 BRANCH="$(git branch --show-current)"
 if [[ "$BRANCH" != "main" ]]; then
@@ -48,24 +43,9 @@ case "${1:-patch}" in
      ;;
 esac
 
-# Files kept in version lockstep with build.zig.zon
-VERSIONED_FILES=(build.zig.zon "${EXTRA_VERSIONED_FILES[@]}")
-
-# Every versioned file must already carry OLD_VER, or versions have drifted.
-for f in "${VERSIONED_FILES[@]}"; do
-  if ! grep -q "\"$OLD_VER\"" "$f"; then
-    echo "error: $f does not contain version $OLD_VER (files out of sync?)" >&2
-    exit 1
-  fi
-done
-
-# Bump `.version = "x.y.z"` in every lockstep file (fingerprints are name-bound, unchanged).
-for f in "${VERSIONED_FILES[@]}"; do
-  sed -i '' -e "s/\.version = \"$OLD_VER\"/.version = \"$NEW_VER\"/" "$f"
-done
-
-if ! git diff --quiet -- "${VERSIONED_FILES[@]}"; then
-  git add "${VERSIONED_FILES[@]}"
+sed -i '' -e "s/\.version = \"$OLD_VER\"/.version = \"$NEW_VER\"/" build.zig.zon
+if ! git diff --quiet -- build.zig.zon; then
+  git add build.zig.zon
   git commit -m "chore: bump to $NEW_VER"
 fi
 
