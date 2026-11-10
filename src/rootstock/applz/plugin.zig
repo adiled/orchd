@@ -104,7 +104,7 @@ test "a container becomes an applz run with its whole spec, plus pull, stop and 
     s.publish = &.{.{ .address = "127.0.0.1", .host = 5432, .container = 5432 }};
     s.volumes = &.{
         .{ .source = "pgdata", .destination = "/var/lib/postgresql/data", .is_named = true },
-        .{ .source = "./init", .destination = "/docker-entrypoint-initdb.d" },
+        .{ .source = "/proj/init", .destination = "/docker-entrypoint-initdb.d" },
         .{ .source = "/etc/hosts", .destination = "/etc/hosts" },
     };
     s.resources = .{ .memory = "1G", .cpus = 2, .limit_nofile = 4096, .tasks_max = 64, .cpu_quota = "50%" };
@@ -129,7 +129,7 @@ test "a container becomes an applz run with its whole spec, plus pull, stop and 
     try testing.expectEqualStrings("ONLY_FILE=yes", spec.env[1]);
     try testing.expectEqualStrings("POSTGRES_PASSWORD=it's secret", spec.env[2]);
     try testing.expectEqualStrings("/data/hum/db/volumes/pgdata", spec.mounts[0].source);
-    try testing.expectEqualStrings("/proj/./init", spec.mounts[1].source);
+    try testing.expectEqualStrings("/proj/init", spec.mounts[1].source);
     try testing.expectEqualStrings("/etc/hosts", spec.mounts[2].source);
     try testing.expectEqual(5432, spec.ports[0].host);
     try testing.expectEqualStrings("1G", spec.memory.?);

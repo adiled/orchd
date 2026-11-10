@@ -126,18 +126,17 @@ pub fn defaultLogPaths(arena: Allocator, config: Config, service_name: []const u
     };
 }
 
-fn effectiveEnv(arena: Allocator, io: Io, config: Config, service: Service, log: *Io.Writer) ![]const [2][]const u8 {
+fn effectiveEnv(arena: Allocator, io: Io, service: Service, log: *Io.Writer) ![]const [2][]const u8 {
     var merged: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     for (service.env_files) |file| {
-        const path = try supervise.resolvePath(arena, file, config.project_dir);
-        const content = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch |err| {
-            try log.print("warning: cannot read env file '{s}': {t}\n", .{ path, err });
+        const content = Io.Dir.cwd().readFileAlloc(io, file, arena, .limited(1 << 20)) catch |err| {
+            try log.print("warning: cannot read env file '{s}': {t}\n", .{ file, err });
             continue;
         };
         var bad: usize = 0;
         const env = supervise.parseEnvFile(arena, content, &bad) catch |err| {
             const why = if (err == error.EmptyKey) "empty key" else "expected KEY=value";
-            try log.print("warning: invalid env file '{s}' line {d}: {s}\n", .{ path, bad, why });
+            try log.print("warning: invalid env file '{s}' line {d}: {s}\n", .{ file, bad, why });
             continue;
         };
         for (env.map.keys(), env.map.values()) |k, v| try merged.put(arena, k, v);
@@ -171,10 +170,10 @@ pub fn plistFor(
         .service = service,
         .set = set,
         .keeper = if (kept) .{ .orchd = orchd, .spec = try supervise.superviseSpecPath(arena, config, label) } else null,
-        .env = try effectiveEnv(arena, io, config, service, log),
-        .workdir = if (service.workdir) |wd| try supervise.resolvePath(arena, wd, config.project_dir) else null,
-        .stdout = if (service.logging.stdout) |s| try supervise.resolvePath(arena, s, config.project_dir) else log_paths[0],
-        .stderr = if (service.logging.stderr) |s| try supervise.resolvePath(arena, s, config.project_dir) else log_paths[1],
+        .env = try effectiveEnv(arena, io, service, log),
+        .workdir = supervise.hostWorkdir(service),
+        .stdout = service.logging.stdout orelse log_paths[0],
+        .stderr = service.logging.stderr orelse log_paths[1],
         .exit_timeout = if (kept)
             supervise.keeperStopTimeout(service, set) + supervise.keeper_grace_secs
         else if (service.timeouts.stop) |t| supervise.parseDurationSecs(t) else null,
@@ -588,13 +587,13 @@ test "env is sorted, a given PATH replaces the default, and limits become soft r
     try s.env.map.put(a, "ALPHA", "2");
     s.resources = .{ .memory = "512M", .limit_nofile = 4096, .limit_nproc = 64 };
     s.user = "nobody";
-    s.workdir = "app";
+    s.workdir = "/srv/app";
     const p = try render(a, s, .{ .start = "x" }, &.{});
     try testing.expect(has(p, "  <dict>\n    <key>ALPHA</key>\n    <string>2</string>\n    <key>PATH</key>\n    <string>/opt/bin</string>\n    <key>ZED</key>\n"));
     try testing.expect(!has(p, default_path));
     try testing.expect(has(p, "<key>NumberOfFiles</key>\n    <integer>4096</integer>\n    <key>NumberOfProcesses</key>\n    <integer>64</integer>\n    <key>ResidentSetSize</key>\n    <integer>536870912</integer>"));
     try testing.expect(has(p, "<key>UserName</key>\n  <string>nobody</string>"));
-    try testing.expect(has(p, "<key>WorkingDirectory</key>\n  <string>/test/project/app</string>"));
+    try testing.expect(has(p, "<key>WorkingDirectory</key>\n  <string>/srv/app</string>"));
     s.resources = .{ .memory = "lots" };
     try testing.expect(!has(try render(a, s, .{ .start = "x" }, &.{}), "SoftResourceLimits"));
 }

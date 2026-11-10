@@ -74,9 +74,8 @@ pub fn parseMemoryBytes(s: []const u8) ?u64 {
     return std.math.mul(u64, n, mult) catch null;
 }
 
-pub fn resolvePath(arena: Allocator, path: []const u8, project_dir: []const u8) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) return path;
-    return std.fs.path.join(arena, &.{ project_dir, path });
+pub fn hostWorkdir(service: Service) ?[]const u8 {
+    return if (service.mode == .host) service.workdir else null;
 }
 
 pub fn healthcheckToCmd(arena: Allocator, hc: []const u8) ![]const u8 {
@@ -111,7 +110,7 @@ pub fn buildSuperviseSpec(
         .ready_marker = if (service.oneshot) try readyMarkerPath(arena, config, service.name) else null,
         .stop_timeout_secs = keeperStopTimeout(service, set),
         .env = if (service.env.map.count() == 0) null else service.env,
-        .workdir = if (service.workdir) |w| try resolvePath(arena, w, config.project_dir) else null,
+        .workdir = hostWorkdir(service),
     };
 }
 
@@ -251,14 +250,14 @@ test "a supervise spec carries the exec set, env, workdir and a ready marker for
     const config = @import("config.zig").forTest("/s");
     var s = hostService("init");
     s.oneshot = true;
-    s.workdir = "app";
+    s.workdir = "/srv/app";
     try s.env.map.put(a, "A", "b");
     const spec = try buildSuperviseSpec(a, config, s, .{ .start = "run", .reload = "kill -HUP $MAINPID" }, &.{});
     try testing.expectEqualStrings("orch.init", spec.label);
     try testing.expectEqualStrings("run", spec.start);
     try testing.expectEqualStrings("kill -HUP $MAINPID", spec.reload.?);
     try testing.expectEqualStrings("/s/ready/orch.init.ready", spec.ready_marker.?);
-    try testing.expectEqualStrings("/test/project/app", spec.workdir.?);
+    try testing.expectEqualStrings("/srv/app", spec.workdir.?);
     try testing.expectEqualStrings("b", spec.env.?.map.get("A").?);
     try testing.expectEqual(10, spec.stop_timeout_secs);
 

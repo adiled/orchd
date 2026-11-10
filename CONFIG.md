@@ -47,18 +47,50 @@ grove=myapp
 state_dir=/var/lib/myapp
 ```
 
-## Alignment with the Orch spec
+## Values orchd hands the Orchfile
 
-orchd reuses the [Orch spec](https://github.com/adiled/orch)'s built-in variable
-names, so one name flows from your shell all the way into the Orchfile:
+orchd passes two of its settings to the parser as ARG overrides, the way the
+[Orch spec](https://github.com/adiled/orch/blob/main/SPEC.md#arg) has a runtime
+supply values:
+
+| ARG | Value |
+|-----|-------|
+| `ORCH_PROJECT` | the project dir |
+| `ORCH_DATA` | the data dir |
+
+An Orchfile uses one by declaring it with a default, so it still resolves on its
+own:
 
 ```
-shell:     ORCH_DATA=/srv/data
-  -> orchd config: data_dir = /srv/data
-  -> passed to the parser as: ARG ORCH_DATA=/srv/data
-  -> in your Orchfile: VOLUME ${ORCH_DATA}/pg:/data  ->  /srv/data/pg
+ARG ORCH_DATA=~/.orch/data
+
+SERVICE db
+FROM postgres:16
+VOLUME ${ORCH_DATA}/pg:/var/lib/postgresql/data
 ```
 
-`ORCH_PROJECT`, `ORCH_DATA`, and `ORCH_STATE_DIR` match the spec's `${ORCH_PROJECT}`,
-`${ORCH_DATA}`, `${ORCH_STATE_DIR}`. This is separate from the parser's
-`ORCH_ARG_<name>` convention, which overrides an Orchfile `ARG`.
+Under orchd the volume lands in the grove's data dir; under a plain `orch resolve`
+it takes the default. An Orchfile that declares neither is untouched. Your own
+`--arg` or `ORCH_ARG_<name>` for the same name wins over orchd's.
+
+## Paths
+
+The spec has every path be absolute or start with `~`. orchd reads `~` as the
+home of the user the service runs as:
+
+- a host service: its `USER`, or else the user orchd runs as;
+- a container service's host side (volume sources, env files, logs): the user
+  orchd runs as.
+
+Inside a container orchd cannot know the image's home, so a container's
+`WORKDIR` or `VOLUME` destination under `~` is refused; write those absolute.
+
+To point at the project's own files, use `${ORCH_PROJECT}`:
+
+```
+ARG ORCH_PROJECT=~/code/shop
+
+SERVICE web
+FROM nginx:alpine
+VOLUME ${ORCH_PROJECT}/site:/usr/share/nginx/html:ro
+```

@@ -6,6 +6,7 @@ const testing = std.testing;
 const types = @import("types.zig");
 const Config = @import("config.zig").Config;
 const rootstock = @import("rootstock.zig");
+const spec_mod = @import("spec.zig");
 const bed = @import("bed.zig");
 const Platform = @import("platform.zig").Platform;
 const Diagnostic = types.Diagnostic;
@@ -51,7 +52,7 @@ fn platformOf(arena: Allocator, name: []const u8, diag: *Diagnostic) !Platform {
 }
 
 pub fn sow(arena: Allocator, io: Io, environ: *const Environ.Map, config: Config, out: *Io.Writer, diag: *Diagnostic) !void {
-    const spec = try decode(types.Spec, arena, try readStdin(arena, io), diag);
+    const spec = try spec_mod.admit(arena, config, try decode(types.Spec, arena, try readStdin(arena, io), diag), diag);
     const stock = try rootstock.create(arena, io, environ, config, diag);
     var cuttings: std.ArrayList(Cutting) = .empty;
     for (spec.services) |service| {

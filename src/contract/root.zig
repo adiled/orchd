@@ -151,15 +151,13 @@ pub const Envelope = struct {
 
     pub fn mountSource(e: Envelope, arena: Allocator, volume: VolumeMount) ![]const u8 {
         if (volume.is_named) return e.volumeDir(arena, volume.source);
-        if (std.fs.path.isAbsolute(volume.source)) return volume.source;
-        return std.fs.path.join(arena, &.{ e.project_dir, volume.source });
+        return volume.source;
     }
 
     pub fn envFiles(e: Envelope, arena: Allocator, io: Io) !Env {
         var env: Env = .{};
         for (e.service.env_files) |file| {
-            const path = if (std.fs.path.isAbsolute(file)) file else try std.fs.path.join(arena, &.{ e.project_dir, file });
-            const content = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch continue;
+            const content = Io.Dir.cwd().readFileAlloc(io, file, arena, .limited(1 << 20)) catch continue;
             try parseEnvFile(arena, content, &env);
         }
         return env;
@@ -305,7 +303,6 @@ test "a container is named for its grove, and its volumes find their sources" {
     const e = testEnvelope(.{ .name = "db", .mode = .container });
     try testing.expectEqualStrings("hum-db", try e.containerName(a));
     try testing.expectEqualStrings("/data/hum/db/volumes/pgdata", try e.mountSource(a, .{ .source = "pgdata", .destination = "/d", .is_named = true }));
-    try testing.expectEqualStrings("/proj/./init", try e.mountSource(a, .{ .source = "./init", .destination = "/i" }));
     try testing.expectEqualStrings("/etc/hosts", try e.mountSource(a, .{ .source = "/etc/hosts", .destination = "/etc/hosts" }));
 }
 
@@ -329,15 +326,18 @@ test "env files take comments, export and quotes, and the last word wins" {
     try testing.expectEqual(2, env.map.count());
 }
 
-test "env files are read from the project, and a missing one is passed over" {
+test "env files are read where they are, and a missing one is passed over" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     try tmp.dir.writeFile(testing.io, .{ .sub_path = ".env", .data = "A=1\n" });
-    var e = testEnvelope(.{ .name = "web", .mode = .host, .env_files = &.{ ".env", "absent.env" } });
-    e.project_dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
+    const e = testEnvelope(.{ .name = "web", .mode = .host, .env_files = &.{
+        try std.fs.path.join(a, &.{ root, ".env" }),
+        try std.fs.path.join(a, &.{ root, "absent.env" }),
+    } });
     const env = try e.envFiles(a, testing.io);
     try testing.expectEqualStrings("1", env.map.get("A").?);
     try testing.expectEqual(1, env.map.count());

@@ -98,7 +98,7 @@ const global_flags = [_]Flag{
     .{ .field = "grove", .value = "GROVE", .help = "Grove to plant into: the prefix on every name it generates" },
     .{ .field = "user", .help = "Use user scope (~/.config/systemd/user, ~/Library/LaunchAgents)" },
     .{ .field = "system", .help = "Use system scope (/etc/systemd/system, /Library/LaunchDaemons; root)" },
-    .{ .field = "arg", .value = "ARG", .help = "Pass-through arg to orch parse (repeatable, format: key=value)" },
+    .{ .field = "arg", .value = "ARG", .help = "Override an Orchfile ARG (repeatable, format: key=value)" },
     .{ .field = "verbose", .short = 'v', .help = "Verbose output" },
     .{ .field = "quiet", .short = 'q', .help = "Suppress non-error output" },
 };

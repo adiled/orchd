@@ -102,12 +102,12 @@ pub fn writeUnit(arena: Allocator, w: *Io.Writer, config: Config, service: Servi
     if (set.stop) |c| try w.print("ExecStop={f}\n", .{Bash{ .cmd = c }});
     if (set.reload) |c| try w.print("ExecReload={f}\n", .{Bash{ .cmd = c }});
     if (set.post_stop) |c| try w.print("ExecStopPost={f}\n", .{Bash{ .cmd = c }});
-    if (service.workdir) |wd| try w.print("WorkingDirectory={f}\n", .{UnitPath{ .path = try supervise.resolvePath(arena, wd, config.project_dir) }});
+    if (supervise.hostWorkdir(service)) |wd| try w.print("WorkingDirectory={f}\n", .{UnitPath{ .path = wd }});
 
     const keys = try arena.dupe([]const u8, service.env.map.keys());
     std.mem.sort([]const u8, keys, {}, lessThan);
     for (keys) |k| try w.print("Environment=\"{s}={f}\"\n", .{ k, EnvValue{ .text = service.env.map.get(k).? } });
-    for (service.env_files) |f| try w.print("EnvironmentFile={f}\n", .{UnitPath{ .path = try supervise.resolvePath(arena, f, config.project_dir) }});
+    for (service.env_files) |f| try w.print("EnvironmentFile={f}\n", .{UnitPath{ .path = f }});
     if (service.user) |u| try w.print("User={s}\n", .{u});
 
     if (!service.oneshot) {
@@ -132,8 +132,8 @@ pub fn writeUnit(arena: Allocator, w: *Io.Writer, config: Config, service: Servi
     if (r.limit_nproc) |n| try w.print("LimitNPROC={d}\n", .{n});
     if (r.tasks_max) |n| try w.print("TasksMax={d}\n", .{n});
     if (r.io_weight) |n| try w.print("IOWeight={d}\n", .{n});
-    if (service.logging.stdout) |s| try w.print("StandardOutput=file:{f}\n", .{UnitPath{ .path = try supervise.resolvePath(arena, s, config.project_dir) }});
-    if (service.logging.stderr) |s| try w.print("StandardError=file:{f}\n", .{UnitPath{ .path = try supervise.resolvePath(arena, s, config.project_dir) }});
+    if (service.logging.stdout) |s| try w.print("StandardOutput=file:{f}\n", .{UnitPath{ .path = s }});
+    if (service.logging.stderr) |s| try w.print("StandardError=file:{f}\n", .{UnitPath{ .path = s }});
 
     try w.print("\n[Install]\nWantedBy={s}\n", .{target});
 }
@@ -469,20 +469,28 @@ test "every exec is bash with quotes escaped, and the unit carries env, limits a
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var s: Service = .{ .name = "app", .mode = .host, .run_command = "x", .workdir = "my app", .user = "svc" };
+    var s: Service = .{ .name = "app", .mode = .host, .run_command = "x", .workdir = "/srv/my app", .user = "svc" };
     try s.env.map.put(a, "B", "say \"hi\" 100%");
     try s.env.map.put(a, "A", "1");
-    s.env_files = &.{".env"};
+    s.env_files = &.{"/srv/.env"};
     s.restart = .{ .policy = .on_failure, .delay = "5s", .start_limit_burst = 3, .start_limit_interval = "60s" };
     s.timeouts = .{ .start = "30s", .stop = "10s" };
     s.resources = .{ .memory = "512M", .cpus = 1.5, .limit_nofile = 65536, .tasks_max = 10, .io_weight = 50 };
-    s.logging = .{ .stdout = "out.log" };
+    s.logging = .{ .stdout = "/srv/out.log" };
     const unit = try unitFor(a, s, .{ .start = "echo 'it''s'", .pre_start = "make", .stop = "kill", .reload = "kill -HUP $MAINPID", .post_stop = "rm x" }, &.{s});
     try testing.expect(has(unit, "StartLimitBurst=3\nStartLimitIntervalSec=60s\n"));
     try testing.expect(has(unit, "ExecStartPre=/bin/bash -c 'make'\nExecStart=/bin/bash -c 'echo '\\''it'\\'''\\''s'\\'''\nExecStop=/bin/bash -c 'kill'\nExecReload=/bin/bash -c 'kill -HUP $MAINPID'\nExecStopPost=/bin/bash -c 'rm x'\n"));
-    try testing.expect(has(unit, "WorkingDirectory=/test/project/my\\ app\n"));
-    try testing.expect(has(unit, "Environment=\"A=1\"\nEnvironment=\"B=say \\\"hi\\\" 100%%\"\nEnvironmentFile=/test/project/.env\nUser=svc\n"));
-    try testing.expect(has(unit, "Restart=on-failure\nRestartSec=5s\nTimeoutStartSec=30s\nTimeoutStopSec=10s\nMemoryMax=512M\nCPUQuota=150%\nLimitNOFILE=65536\nTasksMax=10\nIOWeight=50\nStandardOutput=file:/test/project/out.log\n"));
+    try testing.expect(has(unit, "WorkingDirectory=/srv/my\\ app\n"));
+    try testing.expect(has(unit, "Environment=\"A=1\"\nEnvironment=\"B=say \\\"hi\\\" 100%%\"\nEnvironmentFile=/srv/.env\nUser=svc\n"));
+    try testing.expect(has(unit, "Restart=on-failure\nRestartSec=5s\nTimeoutStartSec=30s\nTimeoutStopSec=10s\nMemoryMax=512M\nCPUQuota=150%\nLimitNOFILE=65536\nTasksMax=10\nIOWeight=50\nStandardOutput=file:/srv/out.log\n"));
+}
+
+test "a container's WORKDIR is inside the container, so the unit runs it from nowhere in particular" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s: Service = .{ .name = "web", .mode = .container, .image = "nginx", .workdir = "/app" };
+    const unit = try unitFor(arena.allocator(), s, .{ .start = "x" }, &.{s});
+    try testing.expect(!has(unit, "WorkingDirectory="));
 }
 
 test "a oneshot remains after exit and never restarts" {

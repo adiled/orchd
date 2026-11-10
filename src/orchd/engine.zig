@@ -169,8 +169,7 @@ pub const Engine = struct {
                     if (supervise.needsKeeper(deps, set)) {
                         try e.hup(pid, service.name);
                     } else {
-                        const workdir = if (service.workdir) |w| try supervise.resolvePath(e.arena, w, e.config.project_dir) else null;
-                        keeper.runReload(e.arena, e.io, e.environ, cmd, pid, service.env, workdir, &why) catch |err| {
+                        keeper.runReload(e.arena, e.io, e.environ, cmd, pid, service.env, supervise.hostWorkdir(service), &why) catch |err| {
                             e.diag.set(e.arena, "{s}: {s}", .{ service.name, why.message });
                             return err;
                         };
@@ -329,7 +328,7 @@ pub const Engine = struct {
         var sources: std.ArrayList([]const u8) = .empty;
         try sources.append(e.arena, e.config.orchfile);
         try sources.appendSlice(e.arena, e.config.overlays);
-        for (spec.services) |s| for (s.env_files) |f| try sources.append(e.arena, try supervise.resolvePath(e.arena, f, e.config.project_dir));
+        for (spec.services) |s| try sources.appendSlice(e.arena, s.env_files);
         for (sources.items) |path| {
             const fp = e.fingerprint(path) orelse continue;
             for (inputs.items) |seen| {

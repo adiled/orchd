@@ -19,7 +19,7 @@ jobs:
       - uses: extractions/setup-just@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install orch, the parser orchd runs
-        run: cargo install the-orch --locked
+        run: cargo install the-orch --locked --version "~0.3"
       - name: Build orchd and its rootstocks
         run: just build
       - name: Install and start CRI-O
@@ -45,17 +45,18 @@ jobs:
           echo "published from the pod" > $T/proj/site/index.html
           cat > $T/proj/Orchfile <<'ORCH'
           ORCH_VERSION 1.0.0-rc
+          ARG ORCH_PROJECT=~/proj
 
           SERVICE hello
           FROM alpine:3.20
           CMD sh -c "echo hello from $GREETING; cat /data/note; sleep 600"
           ENV GREETING=cri
-          VOLUME ./note:/data
+          VOLUME ${ORCH_PROJECT}/note:/data
 
           SERVICE web
           FROM nginx:alpine
           PUBLISH 127.0.0.1:18080:80
-          VOLUME ./site:/usr/share/nginx/html
+          VOLUME ${ORCH_PROJECT}/site:/usr/share/nginx/html
           ORCH
           o() { sudo env PATH="$PATH" "$B/orchd" --project-dir $T/proj --state-dir $T/state --grove ci --rootstock cri --platform orchdi --system "$@"; }
           c() { sudo crictl --runtime-endpoint unix:///run/crio/crio.sock "$@"; }
