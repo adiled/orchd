@@ -30,6 +30,10 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     const configured = init.environ_map.get("ORCHD_CRI_ENDPOINT");
+    const network = plugin.Network.parse(init.environ_map.get("ORCHD_CRI_NETWORK")) orelse {
+        try plugin.explainEndpoint(error.UnknownNetwork, stderr);
+        return 1;
+    };
     switch (verb) {
         .contract => try stdout.print("{d} {d}\n", .{ contract.base, contract.removal }),
         .check => {
@@ -42,11 +46,17 @@ pub fn main(init: std.process.Init) !u8 {
                 return 1;
             };
             const v = health.version;
-            if (!health.readiness.ready) {
-                try stderr.print("{s} {s} at {s} is not ready: {s} {s}\n", .{ v.runtime_name, v.runtime_version, endpoint, health.readiness.reason, health.readiness.message });
+            const runtime = health.readiness.runtime;
+            if (!runtime.ready) {
+                try stderr.print("{s} {s} at {s} is not ready: {s} {s}\n", .{ v.runtime_name, v.runtime_version, endpoint, runtime.reason, runtime.message });
                 return 1;
             }
-            try stderr.print("{s} {s} (CRI {s}) at {s}\n", .{ v.runtime_name, v.runtime_version, v.runtime_api_version, endpoint });
+            const pod_network = health.readiness.network;
+            if (network == .pod and !pod_network.ready) {
+                try stderr.print("{s} {s} at {s} has no pod network ({s} {s}): give it a CNI network, or set ORCHD_CRI_NETWORK=host\n", .{ v.runtime_name, v.runtime_version, endpoint, pod_network.reason, pod_network.message });
+                return 1;
+            }
+            try stderr.print("{s} {s} (CRI {s}) at {s}, {t} network\n", .{ v.runtime_name, v.runtime_version, v.runtime_api_version, endpoint, network });
         },
         .prepare => {
             const envelope = try contract.readEnvelope(arena, io, name, stderr) orelse return 1;
@@ -59,7 +69,7 @@ pub fn main(init: std.process.Init) !u8 {
                 return 1;
             };
             const self = std.process.executablePathAlloc(io, arena) catch name;
-            const set = plugin.execSet(arena, envelope, self, endpoint, try envelope.envFiles(arena, io)) catch |err| {
+            const set = plugin.execSet(arena, envelope, self, endpoint, network, try envelope.envFiles(arena, io)) catch |err| {
                 try plugin.explain(err, envelope.service, stderr);
                 return 1;
             };

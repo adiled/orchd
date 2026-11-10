@@ -28,19 +28,21 @@ jobs:
           curl -fsSL "https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.$CRIO_VERSION.tar.gz.sha256sum" | sha256sum -c
           tar -xzf "cri-o.amd64.$CRIO_VERSION.tar.gz"
           (cd cri-o && sudo ./install)
+          sudo mv /etc/cni/net.d/10-crio-bridge.conflist.disabled /etc/cni/net.d/10-crio-bridge.conflist
           sudo systemctl daemon-reload
           sudo systemctl start crio
           sudo crictl --runtime-endpoint unix:///run/crio/crio.sock version
       - name: The rootstock finds CRI-O, past Docker's containerd
         run: sudo zig-out/bin/orchd-rootstock-cri check
-      - name: Grow a service on CRI-O, see it run, fell it, find nothing left
+      - name: Grow on CRI-O, see it run and publish, fell it, find nothing left
         run: |
           set -eu
           B=$PWD/zig-out/bin
           T=$(mktemp -d)
           echo "T=$T" >> "$GITHUB_ENV"
-          mkdir -p $T/proj/note
+          mkdir -p $T/proj/note $T/proj/site
           echo "mounted from the host" > $T/proj/note/note
+          echo "published from the pod" > $T/proj/site/index.html
           cat > $T/proj/Orchfile <<'ORCH'
           ORCH_VERSION 1.0.0-rc
 
@@ -49,6 +51,11 @@ jobs:
           CMD sh -c "echo hello from $GREETING; cat /data/note; sleep 600"
           ENV GREETING=cri
           VOLUME ./note:/data
+
+          SERVICE web
+          FROM nginx:alpine
+          PUBLISH 127.0.0.1:18080:80
+          VOLUME ./site:/usr/share/nginx/html
           ORCH
           o() { sudo env PATH="$PATH" "$B/orchd" --project-dir $T/proj --state-dir $T/state --grove ci --rootstock cri --platform orchdi --system "$@"; }
           c() { sudo crictl --runtime-endpoint unix:///run/crio/crio.sock "$@"; }
@@ -61,10 +68,13 @@ jobs:
           sudo cat $T/state/logs/ci.hello.log
           sudo grep -q "hello from cri" $T/state/logs/ci.hello.log
           sudo grep -q "mounted from the host" $T/state/logs/ci.hello.log
+          for i in $(seq 1 60); do curl -fsS -m 2 http://127.0.0.1:18080/ && break; sleep 1; done
+          test "$(curl -fsS -m 2 http://127.0.0.1:18080/)" = "published from the pod"
+          ! curl -fsS -m 2 "http://$(hostname -I | cut -d' ' -f1):18080/"
           o fell
           test -z "$(c pods --label orchd.grove=ci -q)"
           test -z "$(c ps -a --label orchd.grove=ci -q)"
-          echo "grown, seen running, felled, nothing left"
+          echo "grown, seen running, published on loopback only, felled, nothing left"
       - name: What CRI-O and the tree said
         if: failure()
         run: |

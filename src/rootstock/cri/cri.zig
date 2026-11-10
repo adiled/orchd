@@ -16,12 +16,18 @@ pub const method = struct {
     pub const start_container = runtime ++ "StartContainer";
     pub const stop_container = runtime ++ "StopContainer";
     pub const container_status = runtime ++ "ContainerStatus";
+    pub const pod_status = runtime ++ "PodSandboxStatus";
     pub const image_status = images ++ "ImageStatus";
     pub const pull_image = images ++ "PullImage";
 };
 
+const namespace_pod: u64 = 0;
 const namespace_container: u64 = 1;
 const namespace_node: u64 = 2;
+
+fn networkMode(host_network: bool) u64 {
+    return if (host_network) namespace_node else namespace_pod;
+}
 
 pub const ContainerState = enum(u64) { created = 0, running = 1, exited = 2, unknown = 3, _ };
 
@@ -35,6 +41,8 @@ pub const Pod = struct {
     name: []const u8,
     namespace: []const u8,
     log_directory: []const u8,
+    hostname: []const u8 = "",
+    host_network: bool = false,
     labels: []const [2][]const u8 = &.{},
     dns: Dns = .{},
 };
@@ -61,6 +69,7 @@ pub const User = struct {
 
 pub const Container = struct {
     name: []const u8,
+    host_network: bool = false,
     image: []const u8,
     command: []const []const u8 = &.{},
     args: []const []const u8 = &.{},
@@ -89,10 +98,15 @@ pub const Version = struct {
     runtime_api_version: []const u8 = "",
 };
 
-pub const Readiness = struct {
+pub const Condition = struct {
     ready: bool = false,
     reason: []const u8 = "",
     message: []const u8 = "",
+};
+
+pub const Readiness = struct {
+    runtime: Condition = .{},
+    network: Condition = .{},
 };
 
 fn strings(w: *pb.Writer, field: u32, values: []const []const u8) !void {
@@ -127,7 +141,7 @@ pub fn podSandboxConfig(arena: Allocator, pod: Pod) ![]const u8 {
     try strings(&dns, 3, pod.dns.options);
 
     var namespaces: pb.Writer = .init(arena);
-    try namespaces.uint(1, namespace_node);
+    try namespaces.uint(1, networkMode(pod.host_network));
     try namespaces.uint(2, namespace_container);
     var security: pb.Writer = .init(arena);
     try security.message(1, namespaces.bytes());
@@ -136,6 +150,7 @@ pub fn podSandboxConfig(arena: Allocator, pod: Pod) ![]const u8 {
 
     var config: pb.Writer = .init(arena);
     try config.message(1, metadata.bytes());
+    if (!pod.host_network) try config.string(2, pod.hostname);
     try config.string(3, pod.log_directory);
     if (dns.bytes().len > 0) try config.message(4, dns.bytes());
     try map(&config, 6, pod.labels);
@@ -172,7 +187,7 @@ pub fn createContainerRequest(arena: Allocator, pod_id: []const u8, c: Container
     try map(&resources, 9, c.unified);
 
     var namespaces: pb.Writer = .init(arena);
-    try namespaces.uint(1, namespace_node);
+    try namespaces.uint(1, networkMode(c.host_network));
     try namespaces.uint(2, namespace_container);
     var security: pb.Writer = .init(arena);
     try security.message(3, namespaces.bytes());
@@ -257,6 +272,10 @@ pub fn parsePodIds(arena: Allocator, bytes: []const u8) ![]const []const u8 {
     return ids.items;
 }
 
+pub fn parsePodIp(bytes: []const u8) ![]const u8 {
+    return stringField(sub(bytes, &.{ 1, 5 }) catch return "", 1);
+}
+
 pub fn imagePresent(bytes: []const u8) !bool {
     const image = try find(bytes, 1) orelse return false;
     return image.asBytes().len > 0;
@@ -286,15 +305,27 @@ pub fn parseVersion(bytes: []const u8) !Version {
 
 pub fn parseReadiness(bytes: []const u8) !Readiness {
     const status = (try find(bytes, 1) orelse return .{}).asBytes();
+    var out: Readiness = .{};
     var r: pb.Reader = .init(status);
     while (try r.next()) |f| {
         if (f.number != 1) continue;
         const condition = f.asBytes();
-        if (!std.mem.eql(u8, try stringField(condition, 1), "RuntimeReady")) continue;
-        const ready = if (try find(condition, 2)) |b| b.asUint() != 0 else false;
-        return .{ .ready = ready, .reason = try stringField(condition, 3), .message = try stringField(condition, 4) };
+        const kind = try stringField(condition, 1);
+        const into = if (std.mem.eql(u8, kind, "RuntimeReady")) &out.runtime else if (std.mem.eql(u8, kind, "NetworkReady")) &out.network else continue;
+        into.* = .{
+            .ready = if (try find(condition, 2)) |b| b.asUint() != 0 else false,
+            .reason = try stringField(condition, 3),
+            .message = try stringField(condition, 4),
+        };
     }
-    return .{};
+    return out;
+}
+
+pub fn onlyLoopback(dns: Dns) bool {
+    for (dns.servers) |server| {
+        if (!std.mem.startsWith(u8, server, "127.") and !std.mem.eql(u8, server, "::1")) return false;
+    }
+    return dns.servers.len > 0;
 }
 
 pub fn parseResolvConf(arena: Allocator, content: []const u8) !Dns {
@@ -328,7 +359,7 @@ fn uintAt(bytes: []const u8, number: u32) !u64 {
     return (try find(bytes, number) orelse return error.Missing).asUint();
 }
 
-test "a pod shares the host network, keeps its own pid namespace, and carries its labels and dns" {
+test "a pod gets its own network and hostname, or shares the host's when asked" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -336,20 +367,48 @@ test "a pod shares the host network, keeps its own pid namespace, and carries it
         .name = "hum-web",
         .namespace = "hum",
         .log_directory = "/state/cri/hum-web",
+        .hostname = "web",
         .labels = &.{.{ "orchd.grove", "hum" }},
         .dns = .{ .servers = &.{"1.1.1.1"}, .searches = &.{"lan"} },
     });
     try testing.expectEqualStrings("hum-web", try stringField(try sub(config, &.{1}), 1));
     try testing.expectEqualStrings("hum", try stringField(try sub(config, &.{1}), 3));
+    try testing.expectEqualStrings("web", try stringField(config, 2));
     try testing.expectEqualStrings("/state/cri/hum-web", try stringField(config, 3));
     try testing.expectEqualStrings("1.1.1.1", try stringField(try sub(config, &.{4}), 1));
     try testing.expectEqualStrings("lan", try stringField(try sub(config, &.{4}), 2));
+    try testing.expectEqual(null, try find(config, 5));
     const label = try sub(config, &.{6});
     try testing.expectEqualStrings("orchd.grove", try stringField(label, 1));
     try testing.expectEqualStrings("hum", try stringField(label, 2));
     const namespaces = try sub(config, &.{ 8, 2, 1 });
-    try testing.expectEqual(namespace_node, try uintAt(namespaces, 1));
+    try testing.expectEqual(null, try find(namespaces, 1));
     try testing.expectEqual(namespace_container, try uintAt(namespaces, 2));
+
+    const shared = try podSandboxConfig(a, .{ .name = "hum-web", .namespace = "hum", .log_directory = "/l", .hostname = "web", .host_network = true });
+    try testing.expectEqual(namespace_node, try uintAt(try sub(shared, &.{ 8, 2, 1 }), 1));
+    try testing.expectEqual(null, try find(shared, 2));
+}
+
+test "a pod's status gives its IP on the pod network" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var network: pb.Writer = .init(a);
+    try network.string(1, "10.85.0.7");
+    var status: pb.Writer = .init(a);
+    try status.string(1, "pod-1");
+    try status.message(5, network.bytes());
+    var response: pb.Writer = .init(a);
+    try response.message(1, status.bytes());
+    try testing.expectEqualStrings("10.85.0.7", try parsePodIp(response.bytes()));
+    try testing.expectEqualStrings("", try parsePodIp(""));
+}
+
+test "a host that resolves through a loopback stub is spotted" {
+    try testing.expect(onlyLoopback(.{ .servers = &.{"127.0.0.53"} }));
+    try testing.expect(!onlyLoopback(.{ .servers = &.{ "127.0.0.53", "10.0.0.2" } }));
+    try testing.expect(!onlyLoopback(.{}));
 }
 
 test "a container carries its argv, env, mounts, log, user and limits where CRI looks for them" {
@@ -402,6 +461,7 @@ test "a container carries its argv, env, mounts, log, user and limits where CRI 
     try testing.expectEqual(0, (try sub(security, &.{5})).len);
     try testing.expectEqual(101, try uintAt(try sub(security, &.{12}), 1));
     try testing.expectEqual(namespace_container, try uintAt(try sub(security, &.{3}), 2));
+    try testing.expectEqual(null, try find(try sub(security, &.{3}), 1));
 }
 
 test "a user is a uid, a uid and gid, or a name" {
@@ -430,7 +490,7 @@ test "a container status gives its state, exit code and why" {
     try testing.expectEqual(ContainerState.unknown, (try parseContainerStatus("")).state);
 }
 
-test "the runtime is ready when its RuntimeReady condition says so" {
+test "readiness reads the runtime and network conditions apart" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -445,8 +505,11 @@ test "the runtime is ready when its RuntimeReady condition says so" {
     try conditions.message(1, runtime.bytes());
     var response: pb.Writer = .init(a);
     try response.message(1, conditions.bytes());
-    try testing.expect((try parseReadiness(response.bytes())).ready);
-    try testing.expect(!(try parseReadiness("")).ready);
+    const readiness = try parseReadiness(response.bytes());
+    try testing.expect(readiness.runtime.ready);
+    try testing.expect(!readiness.network.ready);
+    try testing.expectEqualStrings("NetworkPluginNotReady", readiness.network.reason);
+    try testing.expect(!(try parseReadiness("")).runtime.ready);
 }
 
 test "pods listed by label come back as their ids, and a missing image reads as absent" {
