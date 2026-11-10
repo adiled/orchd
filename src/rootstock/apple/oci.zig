@@ -10,6 +10,7 @@
 const std = @import("std");
 const client = @import("client.zig");
 const contract = @import("contract");
+const prepare = @import("prepare.zig");
 
 extern "c" fn close(fd: c_int) c_int;
 
@@ -251,6 +252,44 @@ const Network = struct {
     options: AttachmentOptions,
 };
 const AttachmentOptions = struct { hostname: []const u8 };
+const PublishedPort = struct {
+    hostAddress: []const u8,
+    hostPort: u16,
+    containerPort: u16,
+    proto: []const u8 = "tcp",
+    count: u32 = 1,
+};
+const VolumeType = struct {
+    name: []const u8,
+    format: []const u8 = "ext4",
+    cache: struct { on: Empty = .{} } = .{},
+    sync: struct { fsync: Empty = .{} } = .{},
+};
+const MountType = union(enum) { virtiofs: Empty, volume: VolumeType };
+const Mount = struct {
+    type: MountType,
+    source: []const u8,
+    destination: []const u8,
+    options: []const []const u8 = &.{},
+};
+
+pub fn publishedPorts(arena: std.mem.Allocator, publish: []const contract.PortMapping) ![]const PublishedPort {
+    const ports = try arena.alloc(PublishedPort, publish.len);
+    for (publish, ports) |p, *port| port.* = .{ .hostAddress = p.address orelse "0.0.0.0", .hostPort = p.host, .containerPort = p.container };
+    return ports;
+}
+
+pub fn mountFor(volume: contract.VolumeMount, source: []const u8) Mount {
+    if (volume.is_named) return .{ .type = .{ .volume = .{ .name = volume.source } }, .source = source, .destination = volume.destination };
+    return .{ .type = .{ .virtiofs = .{} }, .source = source, .destination = volume.destination };
+}
+
+fn mountsFor(arena: std.mem.Allocator, io: std.Io, volumes: []const contract.VolumeMount) ![]const Mount {
+    const mounts = try arena.alloc(Mount, volumes.len);
+    for (volumes, mounts) |v, *m| m.* = mountFor(v, if (v.is_named) try prepare.volume(arena, io, v.source) else v.source);
+    return mounts;
+}
+
 const Config = struct {
     id: []const u8,
     image: Image,
@@ -258,8 +297,8 @@ const Config = struct {
     resources: Resources,
     platform: Platform = .{},
     dns: Dns = .{},
-    mounts: []const Empty = &.{},
-    publishedPorts: []const Empty = &.{},
+    mounts: []const Mount = &.{},
+    publishedPorts: []const PublishedPort = &.{},
     publishedSockets: []const Empty = &.{},
     networks: []const Network,
     labels: std.json.ArrayHashMap([]const u8) = .{},
@@ -390,10 +429,8 @@ pub fn run(
         // neither set -> keep image defaults (executable/arguments unchanged).
     }
 
-    // TODO: publish ports and volumes are deliberately skipped here. The
-    // daemon's PublishPort/Filesystem encodings at 0.12.3 are unverified, and
-    // Apple gives each container a dedicated IP, so port mapping is not needed
-    // for reachability. Wire these once the 0.12.3 shapes are confirmed.
+    const ports: []const PublishedPort = if (overrides) |svc| try publishedPorts(arena, svc.publish) else &.{};
+    const mounts: []const Mount = if (overrides) |svc| try mountsFor(arena, io, svc.volumes) else &.{};
 
     const cfg = Config{
         .id = id,
@@ -408,6 +445,8 @@ pub fn run(
             .workingDirectory = working_directory,
         },
         .resources = .{ .cpus = cpus, .memoryInBytes = memory_bytes },
+        .mounts = mounts,
+        .publishedPorts = ports,
         .networks = &.{.{ .options = .{ .hostname = id } }},
         .labels = try labelsFor(arena, definition),
     };
@@ -515,4 +554,21 @@ test "splitArgs reads quotes like a shell" {
     try std.testing.expectEqualStrings("a b", argv[3]);
     try std.testing.expectEqualStrings("c d", argv[4]);
     try std.testing.expectError(error.UnterminatedQuote, splitArgs(arena, "sh -c 'half"));
+}
+
+test "ports and mounts take the shapes the daemon stores" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ports = try publishedPorts(a, &.{ .{ .address = "127.0.0.1", .host = 18080, .container = 80 }, .{ .host = 5433, .container = 5432 } });
+    try std.testing.expectEqualStrings(
+        \\[{"hostAddress":"127.0.0.1","hostPort":18080,"containerPort":80,"proto":"tcp","count":1},{"hostAddress":"0.0.0.0","hostPort":5433,"containerPort":5432,"proto":"tcp","count":1}]
+    , try std.json.Stringify.valueAlloc(a, ports, .{}));
+    const mounts = [_]Mount{
+        mountFor(.{ .source = "/proj/site", .destination = "/srv" }, "/proj/site"),
+        mountFor(.{ .source = "pgdata", .destination = "/data", .is_named = true }, "/v/pgdata/volume.img"),
+    };
+    try std.testing.expectEqualStrings(
+        \\[{"type":{"virtiofs":{}},"source":"/proj/site","destination":"/srv","options":[]},{"type":{"volume":{"name":"pgdata","format":"ext4","cache":{"on":{}},"sync":{"fsync":{}}}},"source":"/v/pgdata/volume.img","destination":"/data","options":[]}]
+    , try std.json.Stringify.valueAlloc(a, mounts, .{}));
 }
