@@ -46,7 +46,7 @@ rootstock=apple
 ```
 
 (Services with `RUN` are plain programs and need no setup. On Linux, containers
-use `podman` or `containerd` instead.)
+use `containerd` or `cri` instead.)
 
 ## Use it
 
@@ -87,7 +87,8 @@ orchd has no opinion about how you compose; that part is yours. Full reference:
 [`ORCHARD.md`](ORCHARD.md).
 
 A rootstock is what runs each service, and each is its own small program
-beside orchd: `bare` (a plain process), on Linux `containerd`, and on a Mac
+beside orchd: `bare` (a plain process), on Linux `containerd` and `cri` (CRI-O,
+or any runtime that speaks Kubernetes' CRI), and on a Mac
 `apple` (Apple's `container`) and `applz`. Any `orchd-rootstock-<name>` beside orchd or on your
 `PATH` is one more. Bring your own: the contract is a few verbs and some JSON, in
 [`ORCHARD.md`](ORCHARD.md#bring-your-own-rootstock).

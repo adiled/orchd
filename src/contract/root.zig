@@ -34,6 +34,36 @@ pub const ResourceLimits = struct {
     limit_nproc: ?u64 = null,
     tasks_max: ?u64 = null,
     io_weight: ?u32 = null,
+
+    pub const Cpu = struct { quota_us: u64, period_us: u64 };
+
+    pub fn memoryBytes(r: ResourceLimits) ?u64 {
+        const t = std.mem.trim(u8, r.memory orelse return null, " ");
+        if (t.len < 2) return null;
+        const unit: u64 = switch (t[t.len - 1]) {
+            'K' => 1 << 10,
+            'M' => 1 << 20,
+            'G' => 1 << 30,
+            else => return null,
+        };
+        const n = std.fmt.parseInt(u64, t[0 .. t.len - 1], 10) catch return null;
+        return std.math.mul(u64, n, unit) catch null;
+    }
+
+    pub fn cpu(r: ResourceLimits) ?Cpu {
+        const period: u64 = 100_000;
+        if (r.cpus) |cpus| {
+            if (cpus <= 0) return null;
+            return .{ .quota_us = @intFromFloat(cpus * @as(f64, @floatFromInt(period))), .period_us = period };
+        }
+        const pct = std.fmt.parseInt(u64, std.mem.trim(u8, r.cpu_quota orelse return null, " %"), 10) catch return null;
+        if (pct == 0) return null;
+        return .{ .quota_us = pct * 1000, .period_us = period };
+    }
+
+    pub fn pidsMax(r: ResourceLimits) ?u64 {
+        return r.tasks_max orelse r.limit_nproc;
+    }
 };
 
 pub const RestartConfig = struct {
@@ -341,4 +371,17 @@ test "a FROM reads as Docker reads it: docker.io, library and latest when left o
     try testing.expectEqualStrings("ghcr.io/apple/x:1", try normalizeImage(a, "ghcr.io/apple/x:1"));
     try testing.expectEqualStrings("localhost:5000/app:latest", try normalizeImage(a, "localhost:5000/app"));
     try testing.expectEqualStrings("docker.io/library/alpine@sha256:abc", try normalizeImage(a, "alpine@sha256:abc"));
+}
+
+test "limits read MEMORY with its unit, CPUS before CPU_QUOTA, and TASKS_MAX before LIMIT_NPROC" {
+    try testing.expectEqual(256 << 20, (ResourceLimits{ .memory = "256M" }).memoryBytes().?);
+    try testing.expectEqual(2 << 30, (ResourceLimits{ .memory = " 2G" }).memoryBytes().?);
+    try testing.expectEqual(null, (ResourceLimits{ .memory = "512" }).memoryBytes());
+    try testing.expectEqual(null, (ResourceLimits{}).memoryBytes());
+    try testing.expectEqual(ResourceLimits.Cpu{ .quota_us = 150_000, .period_us = 100_000 }, (ResourceLimits{ .cpus = 1.5, .cpu_quota = "20%" }).cpu().?);
+    try testing.expectEqual(ResourceLimits.Cpu{ .quota_us = 50_000, .period_us = 100_000 }, (ResourceLimits{ .cpu_quota = "50%" }).cpu().?);
+    try testing.expectEqual(null, (ResourceLimits{ .cpu_quota = "0%" }).cpu());
+    try testing.expectEqual(null, (ResourceLimits{}).cpu());
+    try testing.expectEqual(64, (ResourceLimits{ .tasks_max = 64, .limit_nproc = 9 }).pidsMax().?);
+    try testing.expectEqual(9, (ResourceLimits{ .limit_nproc = 9 }).pidsMax().?);
 }

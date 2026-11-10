@@ -62,7 +62,7 @@ flags:   --rootstock {bare|apple|<name>}
 #### Bring your own rootstock
 
 Every rootstock is an executable named `orchd-rootstock-<name>`, beside orchd or
-on `PATH`; none is built in. orchd ships `bare`, `containerd`, `apple` and `applz` this way, and
+on `PATH`; none is built in. orchd ships `bare`, `containerd`, `cri`, `apple` and `applz` this way, and
 `orchd-rootstock-bare` (`src/rootstock/bare/`) is the smallest whole example of the
 contract. A rootstock in Zig can take the `contract` module orchd publishes
 (`src/contract/`; see [Take the parts](README.md#take-the-parts)), which holds the
