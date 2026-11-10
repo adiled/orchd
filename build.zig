@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
 
-    const contract = b.createModule(.{
+    const contract = b.addModule("contract", .{
         .root_source_file = b.path("src/contract/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -115,7 +115,7 @@ fn grpcModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
     header.addIncludePath(upstream.path("lib/includes"));
     header.defineCMacro("NGHTTP2_STATICLIB", null);
 
-    const grpc = b.createModule(.{
+    const grpc = b.addModule("grpc", .{
         .root_source_file = b.path("src/grpc/root.zig"),
         .target = target,
         .optimize = optimize,

@@ -97,6 +97,21 @@ Docker and no background daemon at all, using only macOS itself. Install it and
 grow with `--rootstock applz`; orchd ships the `orchd-rootstock-applz` that
 speaks to it.
 
+## Take the parts
+
+orchd is one Zig package that publishes two modules: `contract` (the envelope,
+service and exec set a rootstock speaks) and `grpc` (a small gRPC client over
+nghttp2 on a unix socket, with protobuf as `grpc.pb`).
+
+```sh
+zig fetch --save git+https://github.com/adiled/orchd
+```
+
+```zig
+const orchd = b.dependency("orchd", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("grpc", orchd.module("grpc"));
+```
+
 ## License
 
 Licensed under the Apache License, Version 2.0. See [`LICENSE`](LICENSE).
