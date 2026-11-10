@@ -5,7 +5,7 @@ const lib = @import("orchd_rootstock_containerd");
 const plugin = lib.plugin;
 const run = lib.run;
 
-const usage = "usage: orchd-rootstock-containerd contract | check | prepare | exec-set | run --spec-base64 <data>\n";
+const usage = "usage: orchd-rootstock-containerd contract | check | prepare | exec-set | remove | run --spec-base64 <data>\n";
 
 pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !u8 {
     const verb = args[1];
 
     if (std.mem.eql(u8, verb, "contract")) {
-        try stdout.print("{d}\n", .{plugin.contract});
+        try stdout.print("{d} {d}\n", .{ plugin.contract, plugin.removal_contract });
     } else if (std.mem.eql(u8, verb, "check")) {
         const v = run.version(arena, io, socket) catch |err| {
             try stderr.print("containerd not reachable at {s}: {t}\n", .{ socket, err });
@@ -49,6 +49,9 @@ pub fn main(init: std.process.Init) !u8 {
         };
         try std.json.Stringify.value(set, .{}, stdout);
         try stdout.writeAll("\n");
+    } else if (std.mem.eql(u8, verb, "remove")) {
+        const envelope = try readEnvelope(arena, io, stderr) orelse return 1;
+        if (envelope.service.mode == .container) run.remove(arena, io, try plugin.removalSpec(arena, envelope, socket), stderr);
     } else if (std.mem.eql(u8, verb, "run")) {
         if (args.len != 4 or !std.mem.eql(u8, args[2], "--spec-base64")) {
             try stderr.writeAll(usage);

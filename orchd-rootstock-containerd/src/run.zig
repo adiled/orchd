@@ -103,14 +103,41 @@ const Runner = struct {
         return paths;
     }
 
-    fn create(r: Runner, conn: *grpc.Conn) !void {
+    const definition_label = "orchd.definition";
+
+    fn plant(r: Runner, conn: *grpc.Conn) ![]const cd.Mount {
         const a = r.arena;
         const id = r.spec.container_id;
+        _ = try r.call(conn, "pull", cd.method.transfer, try cd.transferRequest(a, r.spec.image, image.arch, r.spec.snapshotter), .{ .interrupt = &stop_requested });
         const config = try r.readImage(conn);
         const chain = try image.chainId(a, config.diff_ids);
         const mounts = try cd.parsePrepareSnapshotResponse(a, try r.call(conn, "snapshots.prepare", cd.method.prepare_snapshot, try cd.prepareSnapshotRequest(a, r.spec.snapshotter, id, chain), .{}));
         const spec_json = try oci.json(a, id, try r.processFor(config), r.spec.mounts, r.spec.resources);
-        _ = try r.call(conn, "containers.create", cd.method.create_container, try cd.createContainerRequest(a, id, r.spec.image, spec_json, r.spec.snapshotter, r.spec.no_pivot_root), .{});
+        const labels: []const [2][]const u8 = &.{.{ definition_label, r.spec.definition }};
+        _ = try r.call(conn, "containers.create", cd.method.create_container, try cd.createContainerRequest(a, id, r.spec.image, spec_json, r.spec.snapshotter, r.spec.no_pivot_root, labels), .{});
+        return mounts;
+    }
+
+    fn kept(r: Runner, conn: *grpc.Conn) !?[]const cd.Mount {
+        const a = r.arena;
+        const id = r.spec.container_id;
+        const found = conn.unary(cd.method.get_container, try cd.getContainerRequest(a, id), .{ .timeout = .fromSeconds(10) }) catch |err| {
+            if (err == error.GrpcStatus and conn.status.code == 5) return null;
+            return err;
+        };
+        const container = try cd.parseGetContainerResponse(a, found);
+        const definition = container.label(definition_label) orelse return null;
+        if (!std.mem.eql(u8, definition, r.spec.definition)) {
+            r.say("its definition changed; replanting", .{});
+            return null;
+        }
+        const mounts = conn.unary(cd.method.snapshot_mounts, try cd.snapshotMountsRequest(a, r.spec.snapshotter, id), .{ .timeout = .fromSeconds(10) }) catch return null;
+        return try cd.parsePrepareSnapshotResponse(a, mounts);
+    }
+
+    fn startTask(r: Runner, conn: *grpc.Conn, mounts: []const cd.Mount) !void {
+        const a = r.arena;
+        const id = r.spec.container_id;
         const out, const err = r.stdio() catch |e| blk: {
             r.say("no container output: {t}", .{e});
             break :blk .{ "", "" };
@@ -123,35 +150,68 @@ const Runner = struct {
         const a = r.arena;
         const conn = try r.connect();
         defer conn.close();
-        _ = try r.call(conn, "pull", cd.method.transfer, try cd.transferRequest(a, r.spec.image, image.arch, r.spec.snapshotter), .{ .interrupt = &stop_requested });
-        try r.create(conn);
+        const mounts = switch (r.spec.recreate) {
+            .never => if (try r.kept(conn)) |m| blk: {
+                r.clearTask();
+                r.say("woke {s}, kept from its last run", .{r.spec.image});
+                break :blk m;
+            } else blk: {
+                r.clearAll();
+                break :blk try r.plant(conn);
+            },
+            .always => blk: {
+                r.clearAll();
+                break :blk try r.plant(conn);
+            },
+        };
+        try r.startTask(conn, mounts);
         r.say("started {s}", .{r.spec.image});
         const waited = try r.call(conn, "tasks.wait", cd.method.wait_task, try cd.waitRequest(a, r.spec.container_id), .{ .interrupt = &stop_requested });
         return @truncate(try cd.parseWaitResponse(waited));
     }
 
-    fn teardown(r: Runner) void {
-        const a = r.arena;
-        const id = r.spec.container_id;
+    fn settle(r: Runner) void {
+        switch (r.spec.recreate) {
+            .never => r.clearTask(),
+            .always => r.clearAll(),
+        }
+    }
+
+    fn clearTask(r: Runner) void {
         var conn = r.connect() catch return;
         defer conn.close();
+        r.clearTaskOn(&conn);
+        Io.Dir.cwd().deleteTree(r.io, r.spec.fifo_dir) catch {};
+    }
+
+    fn clearTaskOn(r: Runner, conn: **grpc.Conn) void {
+        const a = r.arena;
+        const id = r.spec.container_id;
         const had_task = if (cd.killRequest(a, id, sigterm)) |req| blk: {
-            _ = conn.unary(cd.method.kill_task, req, .{ .timeout = .fromSeconds(5) }) catch break :blk false;
+            _ = conn.*.unary(cd.method.kill_task, req, .{ .timeout = .fromSeconds(5) }) catch break :blk false;
             break :blk true;
         } else |_| false;
         if (had_task) {
             const wait = cd.waitRequest(a, id) catch return;
-            if (conn.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(5) })) |_| {} else |_| {
-                conn.close();
-                conn = r.connect() catch return;
-                if (cd.killRequest(a, id, sigkill)) |req| _ = conn.unary(cd.method.kill_task, req, .{ .timeout = .fromSeconds(5) }) catch {} else |_| {}
-                if (conn.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(2) })) |_| {} else |_| {
-                    conn.close();
-                    conn = r.connect() catch return;
+            if (conn.*.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(5) })) |_| {} else |_| {
+                conn.*.close();
+                conn.* = r.connect() catch return;
+                if (cd.killRequest(a, id, sigkill)) |req| _ = conn.*.unary(cd.method.kill_task, req, .{ .timeout = .fromSeconds(5) }) catch {} else |_| {}
+                if (conn.*.unary(cd.method.wait_task, wait, .{ .timeout = .fromSeconds(2) })) |_| {} else |_| {
+                    conn.*.close();
+                    conn.* = r.connect() catch return;
                 }
             }
         }
-        if (cd.deleteTaskRequest(a, id)) |req| _ = conn.unary(cd.method.delete_task, req, .{ .timeout = .fromSeconds(10) }) catch {} else |_| {}
+        if (cd.deleteTaskRequest(a, id)) |req| _ = conn.*.unary(cd.method.delete_task, req, .{ .timeout = .fromSeconds(10) }) catch {} else |_| {}
+    }
+
+    fn clearAll(r: Runner) void {
+        const a = r.arena;
+        const id = r.spec.container_id;
+        var conn = r.connect() catch return;
+        defer conn.close();
+        r.clearTaskOn(&conn);
         if (cd.deleteContainerRequest(a, id)) |req| _ = conn.unary(cd.method.delete_container, req, .{ .timeout = .fromSeconds(10) }) catch {} else |_| {}
         if (cd.removeSnapshotRequest(a, r.spec.snapshotter, id)) |req| _ = conn.unary(cd.method.remove_snapshot, req, .{ .timeout = .fromSeconds(10) }) catch {} else |_| {}
         Io.Dir.cwd().deleteTree(r.io, r.spec.fifo_dir) catch {};
@@ -177,19 +237,23 @@ fn copy(path: [:0]const u8, to: posix.fd_t) void {
 pub fn run(arena: Allocator, io: Io, spec: plugin.RunSpec, log: *Io.Writer) u8 {
     listen();
     const r: Runner = .{ .arena = arena, .io = io, .spec = spec, .log = log };
-    r.teardown();
     const code = r.keep() catch |err| {
         if (err == error.Interrupted) {
             const sig = stop_signal.load(.seq_cst);
             r.say("signal {d}, stopping", .{sig});
-            r.teardown();
+            r.settle();
             return 128 +| sig;
         }
-        r.teardown();
+        r.settle();
         return 1;
     };
-    r.teardown();
+    r.settle();
     return code;
+}
+
+pub fn remove(arena: Allocator, io: Io, spec: plugin.RunSpec, log: *Io.Writer) void {
+    const r: Runner = .{ .arena = arena, .io = io, .spec = spec, .log = log };
+    r.clearAll();
 }
 
 pub fn version(arena: Allocator, io: Io, socket: []const u8) !cd.Version {
