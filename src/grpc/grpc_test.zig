@@ -163,11 +163,11 @@ const Fixture = struct {
     }
 };
 
-test "a unary call carries its path, namespace and message, and returns the reply" {
+test "a unary call carries its path, metadata and message, and returns the reply" {
     var f: Fixture = undefined;
     try f.start(.{ .messages = &.{"pong"} });
     defer f.stop();
-    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, "hum");
+    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, &.{.{ "containerd-namespace", "hum" }});
     const reply = try conn.unary("/containerd.services.version.v1.Version/Version", "ping", .{});
     conn.close();
     try testing.expectEqualStrings("pong", reply);
@@ -181,7 +181,7 @@ test "a server stream returns every message in order" {
     var f: Fixture = undefined;
     try f.start(.{ .messages = &.{ "one", "", "three" } });
     defer f.stop();
-    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, "hum");
+    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, &.{.{ "containerd-namespace", "hum" }});
     defer conn.close();
     const messages = try conn.serverStream("/containerd.services.content.v1.Content/Read", "x", .{});
     try testing.expectEqual(3, messages.len);
@@ -192,7 +192,7 @@ test "a failing call reports its gRPC status and message" {
     var f: Fixture = undefined;
     try f.start(.{ .status = "5", .message = "image not found" });
     defer f.stop();
-    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, "hum");
+    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, &.{.{ "containerd-namespace", "hum" }});
     defer conn.close();
     try testing.expectError(error.GrpcStatus, conn.unary("/x/Y", "", .{}));
     try testing.expectEqual(5, conn.status.code);
@@ -203,7 +203,7 @@ test "a call that never answers gives way to an interrupt and to a timeout" {
     var f: Fixture = undefined;
     try f.start(.{ .hang = true });
     defer f.stop();
-    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, "hum");
+    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, &.{.{ "containerd-namespace", "hum" }});
     defer conn.close();
     var flag: std.atomic.Value(bool) = .init(true);
     try testing.expectError(error.Interrupted, conn.unary("/x/Wait", "", .{ .interrupt = &flag }));

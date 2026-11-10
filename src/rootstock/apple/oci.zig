@@ -45,35 +45,11 @@ fn str(v: ?std.json.Value) []const u8 {
 
 /// Resolve `reference` to its descriptor + initProcess fields. Allocations come
 /// from `arena` (caller owns; free the whole arena).
-pub fn normalize(arena: std.mem.Allocator, reference: []const u8) ![]const u8 {
-    const slash = std.mem.indexOfScalar(u8, reference, '/');
-    const named = if (slash) |i| blk: {
-        const first = reference[0..i];
-        const is_registry = std.mem.indexOfAny(u8, first, ".:") != null or std.mem.eql(u8, first, "localhost");
-        break :blk if (is_registry) reference else try std.fmt.allocPrint(arena, "docker.io/{s}", .{reference});
-    } else try std.fmt.allocPrint(arena, "docker.io/library/{s}", .{reference});
-    const last = named[(std.mem.lastIndexOfScalar(u8, named, '/') orelse 0)..];
-    if (std.mem.indexOfAny(u8, last, ":@") != null) return named;
-    return std.fmt.allocPrint(arena, "{s}:latest", .{named});
-}
-
-test "image references are normalized the way the daemon stores them" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    try std.testing.expectEqualStrings("docker.io/library/alpine:3.20", try normalize(a, "alpine:3.20"));
-    try std.testing.expectEqualStrings("docker.io/library/alpine:latest", try normalize(a, "alpine"));
-    try std.testing.expectEqualStrings("docker.io/bitnami/redis:7", try normalize(a, "bitnami/redis:7"));
-    try std.testing.expectEqualStrings("ghcr.io/apple/x:1", try normalize(a, "ghcr.io/apple/x:1"));
-    try std.testing.expectEqualStrings("localhost:5000/app:latest", try normalize(a, "localhost:5000/app"));
-    try std.testing.expectEqualStrings("docker.io/library/alpine@sha256:abc", try normalize(a, "alpine@sha256:abc"));
-}
-
 pub fn resolve(arena: std.mem.Allocator, io: std.Io, reference: []const u8) !Resolved {
     // 1. imageList -> descriptor for `reference`
     const images_json = try client.imageList(arena);
     const images = try std.json.parseFromSliceLeaky(std.json.Value, arena, images_json, .{});
-    const wanted = try normalize(arena, reference);
+    const wanted = try contract.normalizeImage(arena, reference);
     var index_digest: []const u8 = "";
     var img_size: i64 = 0;
     var img_media: []const u8 = "";
@@ -423,7 +399,7 @@ pub fn run(
         .id = id,
         .image = .{
             .descriptor = .{ .digest = r.image_digest, .size = r.image_size, .mediaType = r.image_media_type },
-            .reference = try normalize(arena, reference),
+            .reference = try contract.normalizeImage(arena, reference),
         },
         .initProcess = .{
             .executable = executable,

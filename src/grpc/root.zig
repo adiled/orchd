@@ -34,17 +34,17 @@ pub const Conn = struct {
     io: Io,
     stream: Io.net.Stream,
     session: *c.nghttp2_session,
-    namespace: []const u8,
+    metadata: []const [2][]const u8,
     call: Call = .{},
     status: Status = .{},
 
-    pub fn open(arena: Allocator, io: Io, socket_path: []const u8, namespace: []const u8) !*Conn {
+    pub fn open(arena: Allocator, io: Io, socket_path: []const u8, metadata: []const [2][]const u8) !*Conn {
         const address = try Io.net.UnixAddress.init(socket_path);
         const stream = try address.connect(io);
         errdefer stream.close(io);
 
         const conn = try arena.create(Conn);
-        conn.* = .{ .arena = arena, .io = io, .stream = stream, .session = undefined, .namespace = namespace };
+        conn.* = .{ .arena = arena, .io = io, .stream = stream, .session = undefined, .metadata = metadata };
 
         var callbacks: ?*c.nghttp2_session_callbacks = null;
         if (c.nghttp2_session_callbacks_new(&callbacks) != 0) return error.OutOfMemory;
@@ -86,18 +86,19 @@ pub const Conn = struct {
     fn invoke(conn: *Conn, path: []const u8, request: []const u8, options: Options) ![]const []const u8 {
         conn.call = .{ .body = try frame(conn.arena, request) };
         conn.status = .{};
-        const headers = [_]c.nghttp2_nv{
+        const fixed = [_]c.nghttp2_nv{
             header(":method", "POST"),
             header(":scheme", "http"),
             header(":path", path),
             header(":authority", "localhost"),
             header("content-type", "application/grpc"),
             header("te", "trailers"),
-            header("containerd-namespace", conn.namespace),
-            header("user-agent", "orchd-rootstock-containerd"),
         };
+        const headers = try conn.arena.alloc(c.nghttp2_nv, fixed.len + conn.metadata.len);
+        @memcpy(headers[0..fixed.len], &fixed);
+        for (conn.metadata, headers[fixed.len..]) |kv, *nv| nv.* = header(kv[0], kv[1]);
         const provider: c.nghttp2_data_provider2 = .{ .source = .{ .ptr = conn }, .read_callback = readBody };
-        const id = c.nghttp2_submit_request2(conn.session, null, &headers, headers.len, &provider, null);
+        const id = c.nghttp2_submit_request2(conn.session, null, headers.ptr, headers.len, &provider, null);
         if (id < 0) return error.Http2;
         conn.call.stream_id = id;
 

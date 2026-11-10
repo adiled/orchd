@@ -2,7 +2,6 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
-const image = @import("image.zig");
 const oci = @import("oci.zig");
 const contract = @import("contract");
 const Env = contract.Env;
@@ -84,7 +83,7 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, socket: []const u8, from_fi
     return .{
         .socket = socket,
         .namespace = envelope.grove,
-        .image = try image.normalize(arena, s.image orelse return error.NoImage),
+        .image = try contract.normalizeImage(arena, s.image orelse return error.NoImage),
         .container_id = id,
         .fifo_dir = try std.fs.path.join(arena, &.{ envelope.state_dir, "containerd", id }),
         .entrypoint = if (s.entrypoint) |e| try words(arena, e) else null,
