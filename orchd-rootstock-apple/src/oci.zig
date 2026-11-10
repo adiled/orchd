@@ -294,7 +294,7 @@ const Config = struct {
     publishedPorts: []const Empty = &.{},
     publishedSockets: []const Empty = &.{},
     networks: []const Network,
-    labels: Empty = .{},
+    labels: std.json.ArrayHashMap([]const u8) = .{},
     sysctls: Empty = .{},
     runtimeHandler: []const u8 = "container-runtime-linux",
     virtualization: bool = false,
@@ -354,11 +354,21 @@ pub fn run(
     id: []const u8,
     reference: []const u8,
     overrides: ?types.Service,
+    definition: []const u8,
+    keep: bool,
 ) !void {
-    const r = try resolve(arena, io, reference);
-
     const c = client.Client.init();
     defer c.deinit();
+
+    if (try existingDefinition(arena, c, id)) |found| {
+        if (keep and definition.len > 0 and std.mem.eql(u8, found, definition)) {
+            std.debug.print("woke {s}, kept from its last run\n", .{id});
+            return bootAndStart(allocator, c, id);
+        }
+        c.containerDelete(allocator, id, true) catch {};
+    }
+
+    const r = try resolve(arena, io, reference);
 
     const kernel_json = try c.getDefaultKernel(arena, "{\"os\":\"linux\",\"architecture\":\"arm64\"}");
 
@@ -431,18 +441,58 @@ pub fn run(
         },
         .resources = .{ .cpus = cpus, .memoryInBytes = memory_bytes },
         .networks = &.{.{ .options = .{ .hostname = id } }},
+        .labels = try labelsFor(arena, definition),
     };
     const config_json = try std.json.Stringify.valueAlloc(arena, cfg, .{});
 
     const options_json = "{\"autoRemove\":false,\"rootFsOverride\":null}";
 
     try c.containerCreate(allocator, config_json, kernel_json, options_json, try initImage(arena));
+    try bootAndStart(allocator, c, id);
+}
 
+fn bootAndStart(allocator: std.mem.Allocator, c: client.Client, id: []const u8) !void {
     const fd = try std.posix.openatZ(std.posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR }, 0);
     defer _ = close(fd);
-
     try c.containerBootstrap(allocator, id, fd);
     try c.containerStartProcess(allocator, id);
+}
+
+fn labelsFor(arena: std.mem.Allocator, definition: []const u8) !std.json.ArrayHashMap([]const u8) {
+    var labels: std.json.ArrayHashMap([]const u8) = .{};
+    if (definition.len > 0) try labels.map.put(arena, "orchd.definition", definition);
+    return labels;
+}
+
+fn existingDefinition(arena: std.mem.Allocator, c: client.Client, id: []const u8) !?[]const u8 {
+    const json = c.containerList(arena) catch return null;
+    return definitionIn(arena, json, id);
+}
+
+pub fn definitionIn(arena: std.mem.Allocator, list_json: []const u8, id: []const u8) !?[]const u8 {
+    const list = std.json.parseFromSliceLeaky(std.json.Value, arena, list_json, .{}) catch return null;
+    if (list != .array) return null;
+    for (list.array.items) |item| {
+        const config = find(item, "configuration") orelse continue;
+        if (!std.mem.eql(u8, str(find(config, "id")), id)) continue;
+        return str(if (find(config, "labels")) |l| find(l, "orchd.definition") else null);
+    }
+    return null;
+}
+
+test "an existing container is found by id with its definition, or not at all" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const list =
+        \\[{"configuration":{"id":"other","labels":{}},"status":"stopped"},
+        \\ {"configuration":{"id":"orch-db","labels":{"orchd.definition":"abc"}},"status":"stopped"},
+        \\ {"configuration":{"id":"orch-bare","labels":{}},"status":"running"}]
+    ;
+    try std.testing.expectEqualStrings("abc", (try definitionIn(a, list, "orch-db")).?);
+    try std.testing.expectEqualStrings("", (try definitionIn(a, list, "orch-bare")).?);
+    try std.testing.expectEqual(null, try definitionIn(a, list, "orch-gone"));
+    try std.testing.expectEqual(null, try definitionIn(a, "not json", "orch-db"));
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

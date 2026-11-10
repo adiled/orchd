@@ -16,14 +16,20 @@ orchd's rootstock contract 1 and ships beside orchd; `--rootstock apple` picks i
 Either way the image is pulled with `container image pull`, and the container is
 named `<grove>-<service>`. A host service (RUN, not FROM) runs as it would bare.
 
+`RECREATE never`, the default, keeps a stopped container and wakes it on the next
+grow if its definition (image, command, env, mounts, limits) is unchanged; a
+changed definition replaces it. `RECREATE always` replaces it on every grow and
+deletes it on stop.
+
 ## The contract
 
 | Verb | stdin | stdout | Does |
 |---|---|---|---|
-| `contract` | | `1` | |
+| `contract` | | `1 2` | |
 | `check` | | | XPC ping (`xpc`) or `container ls` (`cli`); exit 0 if the daemon is reachable |
 | `prepare` | envelope | | `container image pull <image>`; a host service gets its data dir |
 | `exec-set` | envelope | ExecSet | the service as commands, per mode |
+| `remove` | envelope | | delete the service's kept container |
 
 ## Why XPC from Zig
 
