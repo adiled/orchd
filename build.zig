@@ -70,6 +70,7 @@ pub fn build(b: *std.Build) void {
     const rootstocks = [_]Rootstock{
         .{ .name = "bare", .installs = true },
         .{ .name = "containerd", .installs = os == .linux, .grpc = true, .libc = true },
+        .{ .name = "cri", .installs = os == .linux, .grpc = true, .libc = true },
         .{ .name = "apple", .installs = os == .macos, .tests = os == .macos },
         .{ .name = "applz", .installs = os == .macos },
     };

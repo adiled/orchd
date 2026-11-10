@@ -44,24 +44,6 @@ pub fn definitionOf(arena: Allocator, spec: RunSpec) ![]const u8 {
 
 pub const Refusal = error{ NoRunCommand, NoImage, UnterminatedQuote };
 
-fn memoryBytes(s: []const u8) ?u64 {
-    const t = std.mem.trim(u8, s, " ");
-    if (t.len < 2) return null;
-    const mult: u64 = switch (t[t.len - 1]) {
-        'K' => 1 << 10,
-        'M' => 1 << 20,
-        'G' => 1 << 30,
-        else => return null,
-    };
-    const n = std.fmt.parseInt(u64, t[0 .. t.len - 1], 10) catch return null;
-    return std.math.mul(u64, n, mult) catch null;
-}
-
-fn quotaPercent(s: []const u8) ?u64 {
-    const pct = std.fmt.parseInt(u64, std.mem.trim(u8, s, " %"), 10) catch return null;
-    return if (pct == 0) null else pct * 1000;
-}
-
 pub fn runSpec(arena: Allocator, envelope: Envelope, socket: []const u8, from_files: Env) !RunSpec {
     const s = envelope.service;
     const id = try envelope.containerName(arena);
@@ -76,9 +58,7 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, socket: []const u8, from_fi
     for (s.volumes, mounts) |v, *m| m.* = .{ .source = try envelope.mountSource(arena, v), .destination = v.destination };
 
     const r = s.resources;
-    const quota: ?u64 = if (r.cpus) |cpus|
-        (if (cpus > 0) @as(u64, @intFromFloat(cpus * 100_000)) else null)
-    else if (r.cpu_quota) |q| quotaPercent(q) else null;
+    const cpu = r.cpu();
 
     return .{
         .socket = socket,
@@ -93,10 +73,10 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, socket: []const u8, from_fi
         .user = s.user orelse "",
         .mounts = mounts,
         .resources = .{
-            .memory_bytes = if (r.memory) |m| memoryBytes(m) else null,
-            .cpu_quota_us = quota,
-            .cpu_period_us = if (quota != null) 100_000 else null,
-            .pids_max = r.tasks_max orelse r.limit_nproc,
+            .memory_bytes = r.memoryBytes(),
+            .cpu_quota_us = if (cpu) |c| c.quota_us else null,
+            .cpu_period_us = if (cpu) |c| c.period_us else null,
+            .pids_max = r.pidsMax(),
             .nofile = r.limit_nofile,
             .nproc = r.limit_nproc,
             .io_weight = r.io_weight,

@@ -1,7 +1,7 @@
 # orchd build + packaging. Run `just` (or `just --list`) to see recipes.
 #
 # One zig build makes orchd and the rootstocks this platform runs: bare
-# everywhere, containerd on Linux, apple and applz on macOS.
+# everywhere, containerd and cri on Linux, apple and applz on macOS.
 # Requires zig 0.17.1, and orch on PATH to bundle the parser. Install just with
 # `brew install just`.
 
