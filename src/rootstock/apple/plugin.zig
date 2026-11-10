@@ -88,7 +88,7 @@ pub fn cliExecSet(arena: Allocator, envelope: Envelope, self: []const u8) (Refus
     std.mem.sort([]const u8, keys, {}, lessThan);
     for (keys) |k| try w.print(" --env {s}={s}", .{ k, s.env.map.get(k).? });
     for (s.env_files) |ef| try w.print(" --env-file {s}", .{ef});
-    for (s.volumes) |vol| try w.print(" --volume {s}:{s}", .{ vol.source, vol.destination });
+    for (s.volumes) |vol| try w.print(" --volume {s}:{s}{s}", .{ vol.source, vol.destination, if (vol.read_only) ":ro" else "" });
     for (s.publish) |p| {
         if (p.address) |addr| {
             try w.print(" --publish {s}:{d}:{d}", .{ addr, p.host, p.container });
@@ -158,7 +158,7 @@ test "the cli mode spells out the whole container" {
     const e = try envelopeFor(a,
         \\{"name":"postgres","mode":"container","image":"postgres:15","env":{"FOO":"bar","ALPHA":"1"},
         \\ "publish":[{"host":8080,"container":80},{"address":"127.0.0.1","host":5432,"container":5432}],
-        \\ "volumes":[{"source":"/proj/pgdata","destination":"/data","is_named":false},{"source":"named-vol","destination":"/v","is_named":true}],
+        \\ "volumes":[{"source":"/proj/pgdata","destination":"/data","is_named":false},{"source":"named-vol","destination":"/v","is_named":true,"read_only":true}],
         \\ "resources":{"memory":"512M","cpus":2.0}}
     );
     var always = e;
@@ -166,7 +166,7 @@ test "the cli mode spells out the whole container" {
     const set = try cliExecSet(a, always, "/x/self");
     try testing.expectEqualStrings(
         "container run --name orch-postgres --init --env ALPHA=1 --env FOO=bar" ++
-            " --volume /proj/pgdata:/data --volume named-vol:/v" ++
+            " --volume /proj/pgdata:/data --volume named-vol:/v:ro" ++
             " --publish 8080:80 --publish 127.0.0.1:5432:5432 --memory 512M --cpus 2 postgres:15",
         set.start,
     );

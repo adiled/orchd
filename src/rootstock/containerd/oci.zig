@@ -15,6 +15,7 @@ pub const Resources = struct {
 pub const BindMount = struct {
     source: []const u8,
     destination: []const u8,
+    read_only: bool = false,
 };
 
 pub const Process = struct {
@@ -92,7 +93,7 @@ pub fn json(arena: Allocator, id: []const u8, process: Process, mounts: []const 
     var namespaces: std.ArrayList(Namespace) = .empty;
     try namespaces.appendSlice(arena, &.{ .{ .type = "pid" }, .{ .type = "ipc" }, .{ .type = "uts" }, .{ .type = "mount" } });
     if (net.netns) |path| try namespaces.append(arena, .{ .type = "network", .path = path });
-    for (mounts) |m| try all_mounts.append(arena, .{ .destination = m.destination, .type = "bind", .source = m.source, .options = &.{ "rbind", "rw" } });
+    for (mounts) |m| try all_mounts.append(arena, .{ .destination = m.destination, .type = "bind", .source = m.source, .options = if (m.read_only) &.{ "rbind", "ro" } else &.{ "rbind", "rw" } });
 
     var spec: Spec = .{
         .process = .{
@@ -142,6 +143,22 @@ test "with no network given, the spec runs the process in the host network, with
     try testing.expect(resources.get("pids") == null);
     const mounts = doc.object.get("mounts").?.array.items;
     try testing.expectEqualStrings("/srv", mounts[mounts.len - 1].object.get("destination").?.string);
+}
+
+test "a read-only volume binds ro, and the others rw" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const text = try json(a, "hum-web", .{ .args = &.{"nginx"}, .env = &.{}, .cwd = "" }, &.{
+        .{ .source = "/proj/site", .destination = "/usr/share/nginx/html", .read_only = true },
+        .{ .source = "/data/cache", .destination = "/var/cache/nginx" },
+    }, .{}, .{});
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, a, text, .{});
+    const mounts = doc.object.get("mounts").?.array.items;
+    const site = mounts[mounts.len - 2].object.get("options").?.array.items;
+    const cache = mounts[mounts.len - 1].object.get("options").?.array.items;
+    try testing.expectEqualStrings("ro", site[1].string);
+    try testing.expectEqualStrings("rw", cache[1].string);
 }
 
 test "with no limits there is no resources block" {

@@ -69,7 +69,7 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, host: Host, from_files: Env
     for (env.map.keys(), env.map.values(), pairs) |k, v, *pair| pair.* = try std.fmt.allocPrint(arena, "{s}={s}", .{ k, v });
 
     const mounts = try arena.alloc(oci.BindMount, s.volumes.len);
-    for (s.volumes, mounts) |v, *m| m.* = .{ .source = try envelope.mountSource(arena, v), .destination = v.destination };
+    for (s.volumes, mounts) |v, *m| m.* = .{ .source = try envelope.mountSource(arena, v), .destination = v.destination, .read_only = v.read_only };
 
     const r = s.resources;
     const cpu = r.cpu();
