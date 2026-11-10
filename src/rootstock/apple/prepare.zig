@@ -26,3 +26,40 @@ pub fn pullImage(io: std.Io, image: []const u8) PullError!void {
         else => return PullError.PullFailed,
     }
 }
+
+/// The backing file of the named volume `name`, made first if it is missing.
+/// Like image pull, volume create goes through the `container` binary.
+pub fn volume(arena: std.mem.Allocator, io: std.Io, name: []const u8) ![]const u8 {
+    if (try volumeSource(arena, io, name)) |source| return source;
+    const made = std.process.run(arena, io, .{ .argv = &.{ "container", "volume", "create", name } }) catch return error.VolumeCreateFailed;
+    if (!made.term.success()) return error.VolumeCreateFailed;
+    return try volumeSource(arena, io, name) orelse error.VolumeCreateFailed;
+}
+
+fn volumeSource(arena: std.mem.Allocator, io: std.Io, name: []const u8) !?[]const u8 {
+    const out = std.process.run(arena, io, .{ .argv = &.{ "container", "volume", "inspect", name } }) catch return null;
+    if (!out.term.success()) return null;
+    return sourceIn(arena, out.stdout);
+}
+
+pub fn sourceIn(arena: std.mem.Allocator, inspect_json: []const u8) ?[]const u8 {
+    const doc = std.json.parseFromSliceLeaky(std.json.Value, arena, inspect_json, .{}) catch return null;
+    if (doc != .array or doc.array.items.len == 0) return null;
+    const first = doc.array.items[0];
+    if (first != .object) return null;
+    const config = first.object.get("configuration") orelse return null;
+    if (config != .object) return null;
+    const source = config.object.get("source") orelse return null;
+    return if (source == .string) source.string else null;
+}
+
+test "a volume's backing file is read from what inspect prints" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("/Users/a/volumes/pg/volume.img", sourceIn(a,
+        \\[{"configuration":{"format":"ext4","name":"pg","source":"\/Users\/a\/volumes\/pg\/volume.img"},"id":"pg"}]
+    ).?);
+    try std.testing.expectEqual(null, sourceIn(a, "[]"));
+    try std.testing.expectEqual(null, sourceIn(a, "not json"));
+}

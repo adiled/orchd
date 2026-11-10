@@ -126,7 +126,15 @@ pub fn cliExecSet(arena: Allocator, envelope: Envelope, self: []const u8) (Refus
 
 pub fn xpcExecSet(arena: Allocator, io: Io, envelope: Envelope) !ExecSet {
     if (envelope.service.image == null) return error.NoImage;
-    return exec_set.build(arena, io, envelope.service, envelope.grove, try definitionOf(arena, envelope), keeps(envelope.service));
+    var service = envelope.service;
+    const volumes = try arena.alloc(contract.VolumeMount, service.volumes.len);
+    for (service.volumes, volumes) |v, *resolved| resolved.* = .{
+        .source = try volumeSource(arena, envelope.project_dir, v),
+        .destination = v.destination,
+        .is_named = v.is_named,
+    };
+    service.volumes = volumes;
+    return exec_set.build(arena, io, service, envelope.grove, try definitionOf(arena, envelope), keeps(envelope.service));
 }
 
 pub fn explain(refusal: Refusal, service: Service, w: *Io.Writer) Io.Writer.Error!void {
@@ -263,4 +271,22 @@ test "the definition hashes what it hashed before, so a kept container still mat
         \\{"contract":1,"grove":"orch","project_dir":"/proj","data_dir":"/d","state_dir":"/s","service":{"name":"web","mode":"container","image":"nginx:alpine","env":{}}}
     );
     try testing.expectEqualStrings("5ed4a750c174fed6f46bb5b366222a6d6f2c6c4dafac3b351ec9d0014d4ee34e", try definitionOf(a, least));
+}
+
+test "the xpc mode carries ports, and volume sources resolved against the project" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const set = try xpcExecSet(a, testing.io, try envelopeFor(a,
+        \\{"name":"web","mode":"container","image":"nginx:alpine","publish":[{"address":"127.0.0.1","host":18081,"container":80}],
+        \\ "volumes":[{"source":"./site","destination":"/srv","is_named":false},{"source":"store","destination":"/data","is_named":true}]}
+    ));
+    const at = std.mem.indexOf(u8, set.start, " --spec ").? + " --spec ".len;
+    const b64 = set.start[at .. std.mem.indexOfScalarPos(u8, set.start, at, ' ') orelse set.start.len];
+    const json = try a.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(b64));
+    try std.base64.standard.Decoder.decode(json, b64);
+    const spec = try std.json.parseFromSliceLeaky(Service, a, json, .{ .ignore_unknown_fields = true });
+    try testing.expectEqualStrings("/proj/./site", spec.volumes[0].source);
+    try testing.expectEqualStrings("store", spec.volumes[1].source);
+    try testing.expectEqual(18081, spec.publish[0].host);
 }
