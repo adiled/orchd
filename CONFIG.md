@@ -22,6 +22,10 @@ CLI flag   >   env var   >   .orchrc   >   default
 Project dir has no `.orchrc` layer because `.orchrc` itself is found inside the
 project dir.
 
+A path setting (project dir, Orchfile, overlays, state dir, data dir) may start
+with `~`, read as `$HOME`, in any layer: `state_dir=~/.orch/g/shop` in `.orchrc`
+means the same as `--state-dir ~/.orch/g/shop` in a shell.
+
 ## What they mean
 
 - **Grove**: the prefix stamped on every generated name (`orch-web.service`,
