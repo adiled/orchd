@@ -24,6 +24,8 @@ fn listen() void {
     posix.sigaction(.INT, &act, null);
 }
 
+const user_agent: [2][]const u8 = .{ "user-agent", "orchd-rootstock-containerd" };
+
 const sigterm: u32 = 15;
 const sigkill: u32 = 9;
 
@@ -39,7 +41,7 @@ const Runner = struct {
     }
 
     fn connect(r: Runner) !*grpc.Conn {
-        return grpc.Conn.open(r.arena, r.io, r.spec.socket, r.spec.namespace);
+        return grpc.Conn.open(r.arena, r.io, r.spec.socket, &.{ .{ "containerd-namespace", r.spec.namespace }, user_agent });
     }
 
     fn call(r: Runner, conn: *grpc.Conn, step: []const u8, path: []const u8, request: []const u8, options: grpc.Options) ![]const u8 {
@@ -257,7 +259,7 @@ pub fn remove(arena: Allocator, io: Io, spec: plugin.RunSpec, log: *Io.Writer) v
 }
 
 pub fn version(arena: Allocator, io: Io, socket: []const u8) !cd.Version {
-    const conn = try grpc.Conn.open(arena, io, socket, "default");
+    const conn = try grpc.Conn.open(arena, io, socket, &.{ .{ "containerd-namespace", "default" }, user_agent });
     defer conn.close();
     return cd.parseVersionResponse(try conn.unary(cd.method.version, "", .{ .timeout = .fromSeconds(5) }));
 }

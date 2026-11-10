@@ -210,6 +210,17 @@ pub fn words(arena: Allocator, s: []const u8) error{ UnterminatedQuote, OutOfMem
     return out.items;
 }
 
+pub fn normalizeImage(arena: Allocator, reference: []const u8) ![]const u8 {
+    const named = if (std.mem.indexOfScalar(u8, reference, '/')) |i| blk: {
+        const first = reference[0..i];
+        const is_registry = std.mem.indexOfAny(u8, first, ".:") != null or std.mem.eql(u8, first, "localhost");
+        break :blk if (is_registry) reference else try std.fmt.allocPrint(arena, "docker.io/{s}", .{reference});
+    } else try std.fmt.allocPrint(arena, "docker.io/library/{s}", .{reference});
+    const last = named[(std.mem.lastIndexOfScalar(u8, named, '/') orelse 0)..];
+    if (std.mem.indexOfAny(u8, last, ":@") != null) return named;
+    return std.fmt.allocPrint(arena, "{s}:latest", .{named});
+}
+
 pub const Quoted = struct {
     text: []const u8,
 
@@ -318,4 +329,16 @@ test "a quoted word survives the shell, single quotes and all" {
     defer out.deinit();
     try out.writer.print("{f}", .{quoted("/opt/it's here")});
     try testing.expectEqualStrings("'/opt/it'\\''s here'", out.written());
+}
+
+test "a FROM reads as Docker reads it: docker.io, library and latest when left out" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("docker.io/library/alpine:3.20", try normalizeImage(a, "alpine:3.20"));
+    try testing.expectEqualStrings("docker.io/library/alpine:latest", try normalizeImage(a, "alpine"));
+    try testing.expectEqualStrings("docker.io/bitnami/redis:7", try normalizeImage(a, "bitnami/redis:7"));
+    try testing.expectEqualStrings("ghcr.io/apple/x:1", try normalizeImage(a, "ghcr.io/apple/x:1"));
+    try testing.expectEqualStrings("localhost:5000/app:latest", try normalizeImage(a, "localhost:5000/app"));
+    try testing.expectEqualStrings("docker.io/library/alpine@sha256:abc", try normalizeImage(a, "alpine@sha256:abc"));
 }

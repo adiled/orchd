@@ -43,17 +43,6 @@ fn strings(arena: Allocator, v: ?Value) ![]const []const u8 {
     return out.items;
 }
 
-pub fn normalize(arena: Allocator, reference: []const u8) ![]const u8 {
-    const named = if (std.mem.indexOfScalar(u8, reference, '/')) |i| blk: {
-        const first = reference[0..i];
-        const is_registry = std.mem.indexOfAny(u8, first, ".:") != null or std.mem.eql(u8, first, "localhost");
-        break :blk if (is_registry) reference else try std.fmt.allocPrint(arena, "docker.io/{s}", .{reference});
-    } else try std.fmt.allocPrint(arena, "docker.io/library/{s}", .{reference});
-    const last = named[(std.mem.lastIndexOfScalar(u8, named, '/') orelse 0)..];
-    if (std.mem.indexOfAny(u8, last, ":@") != null) return named;
-    return std.fmt.allocPrint(arena, "{s}:latest", .{named});
-}
-
 pub fn parse(arena: Allocator, json: []const u8) !Value {
     return std.json.parseFromSliceLeaky(Value, arena, json, .{});
 }
@@ -206,13 +195,4 @@ test "a user is uid[:gid]; a name cannot be resolved and runs as root" {
     try testing.expectEqual(User{ .uid = 101, .gid = 5 }, parseUser("101:5"));
     try testing.expectEqual(User{ .named = true }, parseUser("nginx"));
     try testing.expectEqual(User{}, parseUser(""));
-}
-
-test "references are normalized the way containerd's resolver wants them" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    try testing.expectEqualStrings("docker.io/library/alpine:3.20", try normalize(a, "alpine:3.20"));
-    try testing.expectEqualStrings("docker.io/library/alpine:latest", try normalize(a, "alpine"));
-    try testing.expectEqualStrings("ghcr.io/x/y:1", try normalize(a, "ghcr.io/x/y:1"));
 }
