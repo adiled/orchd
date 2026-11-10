@@ -209,3 +209,18 @@ test "a call that never answers gives way to an interrupt and to a timeout" {
     try testing.expectError(error.Interrupted, conn.unary("/x/Wait", "", .{ .interrupt = &flag }));
     try testing.expectError(error.Timeout, conn.unary("/x/Wait", "", .{ .timeout = .fromMilliseconds(200) }));
 }
+
+test "the connection keeps its own copy of the metadata it was opened with" {
+    var f: Fixture = undefined;
+    try f.start(.{ .messages = &.{"pong"} });
+    defer f.stop();
+    const metadata = try testing.allocator.alloc([2][]const u8, 1);
+    metadata[0] = .{ "containerd-namespace", "hum" };
+    const conn = try grpc.Conn.open(f.arena.allocator(), testing.io, f.path, metadata);
+    metadata[0] = .{ "x-gone", "gone" };
+    testing.allocator.free(metadata);
+    _ = try conn.unary("/x/Y", "", .{});
+    conn.close();
+    f.served();
+    try testing.expectEqualStrings("hum", f.server.namespace.items);
+}

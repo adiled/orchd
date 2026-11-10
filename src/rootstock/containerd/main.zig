@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const contract = @import("contract");
 const plugin = @import("plugin.zig");
 const run = @import("run.zig");
+const network = @import("network");
 
 const name = "orchd-rootstock-containerd";
 const usage = "usage: " ++ name ++ " contract | check | prepare | exec-set | remove | run --spec-base64 <data>\n";
@@ -23,6 +24,16 @@ pub fn main(init: std.process.Init) !u8 {
     defer stderr.flush() catch {};
 
     const socket = init.environ_map.get("ORCHD_CONTAINERD_SOCKET") orelse plugin.default_socket;
+    const mode = network.Mode.parse(init.environ_map.get("ORCHD_CONTAINERD_NETWORK")) orelse {
+        try stderr.writeAll("ORCHD_CONTAINERD_NETWORK is pod (the default) or host\n");
+        return 1;
+    };
+    const host: plugin.Host = .{
+        .socket = socket,
+        .no_pivot_root = std.mem.eql(u8, init.environ_map.get("ORCHD_CONTAINERD_NO_PIVOT_ROOT") orelse "", "1"),
+        .network = mode,
+        .cni_dirs = init.environ_map.get("ORCHD_CNI_PATH") orelse network.cni.default_dirs,
+    };
     if (args.len < 2) {
         try stderr.writeAll(usage);
         return 2;
@@ -36,22 +47,25 @@ pub fn main(init: std.process.Init) !u8 {
             try stderr.print("containerd not reachable at {s}: {t}\n", .{ socket, err });
             return 1;
         };
-        try stderr.print("containerd {s} ({s}) at {s}\n", .{ v.version, v.revision, socket });
+        if (mode == .pod) if (try network.cni.missing(arena, io, host.cni_dirs)) |plugin_name| {
+            try stderr.print("CNI plugin '{s}' not found in {s}: install the CNI plugins (bridge, host-local, loopback), set ORCHD_CNI_PATH, or set ORCHD_CONTAINERD_NETWORK=host\n", .{ plugin_name, host.cni_dirs });
+            return 1;
+        };
+        try stderr.print("containerd {s} ({s}) at {s}, {t} network\n", .{ v.version, v.revision, socket, mode });
     } else if (std.mem.eql(u8, verb, "prepare")) {
         const envelope = try contract.readEnvelope(arena, io, name, stderr) orelse return 1;
         return prepare(arena, io, envelope, stderr);
     } else if (std.mem.eql(u8, verb, "exec-set")) {
         const envelope = try contract.readEnvelope(arena, io, name, stderr) orelse return 1;
         const self = std.process.executablePathAlloc(io, arena) catch name;
-        const no_pivot_root = std.mem.eql(u8, init.environ_map.get("ORCHD_CONTAINERD_NO_PIVOT_ROOT") orelse "", "1");
-        const set = plugin.execSet(arena, envelope, self, socket, no_pivot_root, try envelope.envFiles(arena, io)) catch |err| {
+        const set = plugin.execSet(arena, envelope, self, host, try envelope.envFiles(arena, io)) catch |err| {
             try plugin.explain(err, envelope.service, stderr);
             return 1;
         };
         try set.write(stdout);
     } else if (std.mem.eql(u8, verb, "remove")) {
         const envelope = try contract.readEnvelope(arena, io, name, stderr) orelse return 1;
-        if (envelope.service.mode == .container) run.remove(arena, io, try plugin.removalSpec(arena, envelope, socket), stderr);
+        if (envelope.service.mode == .container) run.remove(arena, io, init.environ_map, try plugin.removalSpec(arena, envelope, host), stderr);
     } else if (std.mem.eql(u8, verb, "run")) {
         if (args.len != 4 or !std.mem.eql(u8, args[2], "--spec-base64")) {
             try stderr.writeAll(usage);
@@ -61,7 +75,7 @@ pub fn main(init: std.process.Init) !u8 {
             try stderr.print("containerd-run: bad --spec-base64: {t}\n", .{err});
             return 1;
         };
-        return run.run(arena, io, spec, stderr);
+        return run.run(arena, io, init.environ_map, spec, stderr);
     } else {
         try stderr.writeAll(usage);
         return 2;

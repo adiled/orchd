@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const contract = @import("contract");
 const cri = @import("cri.zig");
-const publish = @import("publish");
+const network = @import("network");
 const Env = contract.Env;
 const Service = contract.Service;
 const ExecSet = contract.ExecSet;
@@ -18,16 +18,7 @@ pub const default_endpoints = [_][]const u8{
 
 pub const stop_timeout_s: u64 = 5;
 
-pub const Network = enum {
-    pod,
-    host,
-
-    pub fn parse(value: ?[]const u8) ?Network {
-        const v = value orelse return .pod;
-        if (v.len == 0) return .pod;
-        return std.meta.stringToEnum(Network, v);
-    }
-};
+pub const Network = network.Mode;
 
 pub const RunSpec = struct {
     endpoint: []const u8,
@@ -36,7 +27,7 @@ pub const RunSpec = struct {
     pod: []const u8,
     image: []const u8,
     host_network: bool = false,
-    ports: []const publish.Port = &.{},
+    ports: []const network.Port = &.{},
     command: []const []const u8 = &.{},
     args: []const []const u8 = &.{},
     env: []const [2][]const u8 = &.{},
@@ -88,20 +79,11 @@ pub fn endpointPath(value: []const u8) error{UnsupportedEndpoint}![]const u8 {
     return value;
 }
 
-fn allInterfaces(address: ?[]const u8) bool {
-    const a = address orelse return true;
-    return a.len == 0 or std.mem.eql(u8, a, "0.0.0.0") or std.mem.eql(u8, a, "::");
-}
-
-pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, network: Network, from_files: Env) !RunSpec {
+pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, mode: Network, from_files: Env) !RunSpec {
     const s = envelope.service;
     const pod = try envelope.containerName(arena);
 
-    const ports = try arena.alloc(publish.Port, s.publish.len);
-    for (s.publish, ports) |p, *port| {
-        if (network == .host and (p.host != p.container or !allInterfaces(p.address))) return error.PublishNeedsPodNetwork;
-        port.* = .{ .address = p.address orelse "", .host = p.host, .container = p.container };
-    }
+    const ports = try network.ports(arena, s.publish, mode);
 
     var env: Env = .{};
     for (from_files.map.keys(), from_files.map.values()) |k, v| try env.map.put(arena, k, v);
@@ -120,8 +102,8 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, netwo
         .service = s.name,
         .pod = pod,
         .image = try contract.normalizeImage(arena, s.image orelse return error.NoImage),
-        .host_network = network == .host,
-        .ports = if (network == .host) &.{} else ports,
+        .host_network = mode == .host,
+        .ports = ports,
         .command = if (s.entrypoint) |e| try contract.words(arena, e) else &.{},
         .args = if (s.cmd) |c| try contract.words(arena, c) else &.{},
         .env = pairs,
@@ -136,14 +118,14 @@ pub fn runSpec(arena: Allocator, envelope: Envelope, endpoint: []const u8, netwo
     };
 }
 
-pub fn execSet(arena: Allocator, envelope: Envelope, self: []const u8, endpoint: []const u8, network: Network, from_files: Env) !ExecSet {
+pub fn execSet(arena: Allocator, envelope: Envelope, self: []const u8, endpoint: []const u8, mode: Network, from_files: Env) !ExecSet {
     const s = envelope.service;
     if (s.mode == .host) return .{
         .start = s.run_command orelse return error.NoRunCommand,
         .stop = s.stop_command,
         .reload = s.reload_command,
     };
-    const spec = try std.json.Stringify.valueAlloc(arena, try runSpec(arena, envelope, endpoint, network, from_files), .{ .emit_null_optional_fields = false });
+    const spec = try std.json.Stringify.valueAlloc(arena, try runSpec(arena, envelope, endpoint, mode, from_files), .{ .emit_null_optional_fields = false });
     const encoded = try arena.alloc(u8, std.base64.standard.Encoder.calcSize(spec.len));
     _ = std.base64.standard.Encoder.encode(encoded, spec);
     return .{ .start = try std.fmt.allocPrint(arena, "{f} run --spec-base64 {s}", .{ contract.quoted(self), encoded }) };
@@ -278,8 +260,4 @@ test "PUBLISH forwards into the pod network, and the host network takes only por
     try testing.expect(shared.host_network);
     try testing.expectEqual(0, shared.ports.len);
     try testing.expect((try shared.container(a)).host_network);
-
-    try testing.expectEqual(Network.pod, Network.parse(null).?);
-    try testing.expectEqual(Network.host, Network.parse("host").?);
-    try testing.expectEqual(null, Network.parse("bridge"));
 }

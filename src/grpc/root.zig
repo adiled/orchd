@@ -44,7 +44,7 @@ pub const Conn = struct {
         errdefer stream.close(io);
 
         const conn = try arena.create(Conn);
-        conn.* = .{ .arena = arena, .io = io, .stream = stream, .session = undefined, .metadata = metadata };
+        conn.* = .{ .arena = arena, .io = io, .stream = stream, .session = undefined, .metadata = try arena.dupe([2][]const u8, metadata) };
 
         var callbacks: ?*c.nghttp2_session_callbacks = null;
         if (c.nghttp2_session_callbacks_new(&callbacks) != 0) return error.OutOfMemory;

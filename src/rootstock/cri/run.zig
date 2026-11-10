@@ -3,7 +3,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const grpc = @import("grpc");
-const publish = @import("publish");
+const network = @import("network");
 const cri = @import("cri.zig");
 const log = @import("log.zig");
 const plugin = @import("plugin.zig");
@@ -33,7 +33,7 @@ const Runner = struct {
     spec: plugin.RunSpec,
     err: *Io.Writer,
     scratch: std.heap.ArenaAllocator,
-    publisher: ?publish.Publisher = null,
+    publisher: ?network.Publisher = null,
 
     fn say(r: *Runner, comptime fmt: []const u8, args: anytype) void {
         r.err.print("cri-run[{s}]: " ++ fmt ++ "\n", .{r.spec.pod} ++ args) catch {};
@@ -78,8 +78,8 @@ const Runner = struct {
         }
 
         if (spec.ports.len > 0) {
-            var failure: ?publish.Publisher.Failure = null;
-            r.publisher = publish.Publisher.bind(a, r.io, spec.ports, &failure) catch |err| {
+            var failure: ?network.Publisher.Failure = null;
+            r.publisher = network.Publisher.bind(a, r.io, spec.ports, &failure) catch |err| {
                 if (failure) |f| r.say("PUBLISH {s}{s}{d}:{d}: {t}", .{ f.port.address, if (f.port.address.len > 0) ":" else "", f.port.host, f.port.container, f.err }) else r.say("PUBLISH: {t}", .{err});
                 return err;
             };
@@ -111,15 +111,8 @@ const Runner = struct {
     }
 
     fn dns(r: *Runner) !cri.Dns {
-        const read = struct {
-            fn read(io: Io, arena: Allocator, path: []const u8) !cri.Dns {
-                return cri.parseResolvConf(arena, Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(64 << 10)) catch "");
-            }
-        }.read;
-        const host = try read(r.io, r.arena, "/etc/resolv.conf");
-        if (r.spec.host_network or !cri.onlyLoopback(host)) return host;
-        const upstream = try read(r.io, r.arena, "/run/systemd/resolve/resolv.conf");
-        return if (upstream.servers.len > 0 and !cri.onlyLoopback(upstream)) upstream else host;
+        const choice = if (r.spec.host_network) try network.resolv.forHostNetwork(r.arena, r.io) else try network.resolv.forOwnNetwork(r.arena, r.io);
+        return choice.dns;
     }
 
     fn follow(r: *Runner, container_id: []const u8) !u8 {
