@@ -71,7 +71,7 @@ precedence: [`CONFIG.md`](CONFIG.md).
 your own logic in the middle:
 
 ```sh
-orch parse Orchfile \
+orch resolve --json Orchfile \
   | orchd sow --rootstock apple \        # services -> run commands
   | orchd plant --platform launchd \     # -> native service files
   | orchd tend                           # -> running

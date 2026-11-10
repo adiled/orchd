@@ -54,7 +54,7 @@ execution commands for the chosen rootstock. Pure: no image pulls, no I/O. (Pull
 become a `pre_start` command, run later at tend time.)
 
 ```
-stdin:   Spec        (the `orch parse` JSON)
+stdin:   Spec        (the `orch resolve --json` JSON)
 stdout:  Cuttings
 flags:   --rootstock {bare|apple|<name>}
 ```
@@ -125,11 +125,13 @@ internal types. Splice freely.
 
 ### Spec (graft to sow)
 
-The merged Orchfile, emitted by `orch parse`. Abbreviated:
+The merged Orchfile, emitted by `orch resolve --json` (orch 0.3 or newer). orchd
+reads `schema_version` 1 and refuses any other. Abbreviated:
 
 ```json
 {
-  "version": "0.2.1",
+  "schema_version": 1,
+  "version": "1.0.0-rc",
   "args": { "app_port": "8000" },
   "services": [
     {
@@ -155,7 +157,7 @@ rootstock ran.
 
 ```json
 {
-  "version": "0.2.1",
+  "version": "1.0.0-rc",
   "rootstock": "apple",
   "cuttings": [
     {
@@ -206,7 +208,7 @@ Convenience commands are nothing but pre-composed walks over the rows. They exis
 for the common path; they are never the only path.
 
 ```
-orchd grow             ==  orch parse $files | orchd sow | orchd plant | orchd tend
+orchd grow             ==  orch resolve --json $files | orchd sow | orchd plant | orchd tend
 orchd grow t --reload  ==  re-plant, then run tree t's RELOAD with MAINPID set to it
 orchd survey           ==  status of a grove (walk it, query the init system, report health)
 orchd fell             ==  cut the grove down, then clear its beds
@@ -233,7 +235,7 @@ prescribe a manifest format; it emits the material a manifest would be made of.
 A consuming project inserts its own intelligence between any two rows:
 
 ```sh
-orch parse base.orch staging.orch --arg env=staging \
+orch resolve --json base.orch staging.orch --arg env=staging \
   | orchd sow --rootstock apple \
   | jq '.cuttings |= map(select(.service.disabled | not))' \   # their policy, not orchd's
   | my-secret-injector \                                       # their step
@@ -263,15 +265,17 @@ unchanged and remains the common path.
 Worked end to end on a real Mac:
 
 ```sh
-orch parse Orchfile \
+orch resolve --json Orchfile \
   | orchd --rootstock bare  sow \
   | jq '.cuttings |= map(select(.service.name != "worker"))' \   # a grower's own step
   | orchd --platform launchd --grove orch --user plant \
   | orchd --platform launchd --grove orch --user tend     # service running under launchd
 ```
 
-Two contracts to remember when piping by hand:
+Three contracts to remember when piping by hand:
 - `sow` is the only stage that takes `--rootstock`; `plant`/`tend` take `--platform`.
+- `grow` hands the parser `--arg ORCH_DATA=… --arg ORCH_PROJECT=…`; by hand,
+  pass them yourself if the Orchfile declares them.
 - `plant` bakes absolute paths into each artifact from its config, so `plant` and
   `tend` must be given the same `--grove` / `--scope` / `--state-dir`. The
   porcelain and any single flag set do this for you.

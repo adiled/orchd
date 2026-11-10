@@ -6,8 +6,10 @@ const contract = @import("contract");
 pub const Env = contract.Env;
 pub const Service = contract.Service;
 pub const ExecSet = contract.ExecSet;
+pub const VolumeMount = contract.VolumeMount;
 
 pub const Spec = struct {
+    schema_version: ?u32 = null,
     version: []const u8,
     args: Env = .{},
     services: []const Service = &.{},
@@ -24,14 +26,14 @@ pub fn parseSpec(arena: Allocator, bytes: []const u8) !Spec {
     return std.json.parseFromSliceLeaky(Spec, arena, bytes, .{ .ignore_unknown_fields = true });
 }
 
-test "a spec reads what orch parse prints, with defaults for what it leaves out" {
+test "a spec reads what orch resolve --json prints, with defaults for what it leaves out" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const spec = try parseSpec(arena.allocator(),
-        \\{"version":"1.0.0-rc","args":{"FOO":"bar"},"services":[
+        \\{"schema_version":1,"version":"1.0.0-rc","args":{"FOO":"bar"},"services":[
         \\ {"name":"api","mode":"container","image":"myapp:latest",
         \\  "publish":[{"host":8080,"container":80}],
-        \\  "volumes":[{"source":"/data","destination":"/app/data","is_named":false}],
+        \\  "volumes":[{"source":"/data","destination":"/app/data","is_named":false,"read_only":false}],
         \\  "env":{"DB_HOST":"localhost"},"requires":["postgres"],
         \\  "oneshot":false,"disabled":false,"recreate":"always",
         \\  "restart":{"policy":"on_failure","delay":"5s","start_limit_burst":3},
@@ -39,6 +41,7 @@ test "a spec reads what orch parse prints, with defaults for what it leaves out"
         \\ {"name":"web","mode":"host","run_command":"/usr/bin/nginx","oneshot":false,"disabled":true,
         \\  "recreate":"never","restart":{"policy":"no"},"timeouts":{},"resources":{},"logging":{}}]}
     );
+    try testing.expectEqual(1, spec.schema_version.?);
     try testing.expectEqualStrings("bar", spec.args.map.get("FOO").?);
     const api = spec.find("api").?;
     try testing.expectEqual(.container, api.mode);

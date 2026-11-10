@@ -106,6 +106,7 @@ test {
     _ = @import("exe.zig");
     _ = @import("settings.zig");
     _ = @import("spec.zig");
+    _ = @import("home.zig");
     _ = @import("rootstock.zig");
     _ = @import("bed.zig");
     _ = @import("platform.zig");

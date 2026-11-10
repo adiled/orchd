@@ -181,7 +181,7 @@ test "a container becomes one foreground run carrying its whole spec" {
     const a = arena.allocator();
     var s: Service = .{ .name = "web", .mode = .container, .image = "nginx:alpine", .entrypoint = "/docker-entrypoint.sh", .cmd = "nginx -g 'daemon off;'", .user = "101:101", .workdir = "/srv" };
     try s.env.map.put(a, "MODE", "env");
-    s.volumes = &.{ .{ .source = "site", .destination = "/usr/share/nginx/html", .is_named = true }, .{ .source = "./conf", .destination = "/etc/nginx/conf.d" } };
+    s.volumes = &.{ .{ .source = "site", .destination = "/usr/share/nginx/html", .is_named = true }, .{ .source = "/proj/conf", .destination = "/etc/nginx/conf.d" } };
     s.resources = .{ .memory = "256M", .cpus = 1.5, .tasks_max = 64 };
     var files: Env = .{};
     try files.map.put(a, "MODE", "file");
@@ -201,7 +201,7 @@ test "a container becomes one foreground run carrying its whole spec" {
     try testing.expectEqualDeep(@as([]const []const u8, &.{ "nginx", "-g", "daemon off;" }), spec.args);
     try testing.expectEqualDeep(@as([]const [2][]const u8, &.{ .{ "MODE", "env" }, .{ "FROM_FILE", "yes" } }), spec.env);
     try testing.expectEqualStrings("/data/hum/web/volumes/site", spec.mounts[0].host_path);
-    try testing.expectEqualStrings("/proj/./conf", spec.mounts[1].host_path);
+    try testing.expectEqualStrings("/proj/conf", spec.mounts[1].host_path);
     try testing.expectEqualStrings("/state/cri/hum-web", spec.log_dir);
     try testing.expectEqual(256 << 20, spec.memory_bytes.?);
     try testing.expectEqual(150_000, spec.cpu_quota_us.?);

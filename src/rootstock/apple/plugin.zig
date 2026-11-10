@@ -40,11 +40,6 @@ pub fn hostExecSet(service: Service) Refusal!ExecSet {
     };
 }
 
-pub fn volumeSource(arena: Allocator, project_dir: []const u8, vol: contract.VolumeMount) ![]const u8 {
-    if (vol.is_named or std.fs.path.isAbsolute(vol.source)) return vol.source;
-    return std.fs.path.join(arena, &.{ project_dir, vol.source });
-}
-
 pub const definition_label = "orchd.definition";
 
 pub fn keeps(service: Service) bool {
@@ -93,7 +88,7 @@ pub fn cliExecSet(arena: Allocator, envelope: Envelope, self: []const u8) (Refus
     std.mem.sort([]const u8, keys, {}, lessThan);
     for (keys) |k| try w.print(" --env {s}={s}", .{ k, s.env.map.get(k).? });
     for (s.env_files) |ef| try w.print(" --env-file {s}", .{ef});
-    for (s.volumes) |vol| try w.print(" --volume {s}:{s}", .{ try volumeSource(arena, envelope.project_dir, vol), vol.destination });
+    for (s.volumes) |vol| try w.print(" --volume {s}:{s}", .{ vol.source, vol.destination });
     for (s.publish) |p| {
         if (p.address) |addr| {
             try w.print(" --publish {s}:{d}:{d}", .{ addr, p.host, p.container });
@@ -126,15 +121,7 @@ pub fn cliExecSet(arena: Allocator, envelope: Envelope, self: []const u8) (Refus
 
 pub fn xpcExecSet(arena: Allocator, io: Io, envelope: Envelope) !ExecSet {
     if (envelope.service.image == null) return error.NoImage;
-    var service = envelope.service;
-    const volumes = try arena.alloc(contract.VolumeMount, service.volumes.len);
-    for (service.volumes, volumes) |v, *resolved| resolved.* = .{
-        .source = try volumeSource(arena, envelope.project_dir, v),
-        .destination = v.destination,
-        .is_named = v.is_named,
-    };
-    service.volumes = volumes;
-    return exec_set.build(arena, io, service, envelope.grove, try definitionOf(arena, envelope), keeps(envelope.service));
+    return exec_set.build(arena, io, envelope.service, envelope.grove, try definitionOf(arena, envelope), keeps(envelope.service));
 }
 
 pub fn explain(refusal: Refusal, service: Service, w: *Io.Writer) Io.Writer.Error!void {
@@ -171,7 +158,7 @@ test "the cli mode spells out the whole container" {
     const e = try envelopeFor(a,
         \\{"name":"postgres","mode":"container","image":"postgres:15","env":{"FOO":"bar","ALPHA":"1"},
         \\ "publish":[{"host":8080,"container":80},{"address":"127.0.0.1","host":5432,"container":5432}],
-        \\ "volumes":[{"source":"./pgdata","destination":"/data","is_named":false},{"source":"named-vol","destination":"/v","is_named":true}],
+        \\ "volumes":[{"source":"/proj/pgdata","destination":"/data","is_named":false},{"source":"named-vol","destination":"/v","is_named":true}],
         \\ "resources":{"memory":"512M","cpus":2.0}}
     );
     var always = e;
@@ -179,7 +166,7 @@ test "the cli mode spells out the whole container" {
     const set = try cliExecSet(a, always, "/x/self");
     try testing.expectEqualStrings(
         "container run --name orch-postgres --init --env ALPHA=1 --env FOO=bar" ++
-            " --volume /proj/./pgdata:/data --volume named-vol:/v" ++
+            " --volume /proj/pgdata:/data --volume named-vol:/v" ++
             " --publish 8080:80 --publish 127.0.0.1:5432:5432 --memory 512M --cpus 2 postgres:15",
         set.start,
     );
@@ -279,14 +266,14 @@ test "the xpc mode carries ports, and volume sources resolved against the projec
     const a = arena.allocator();
     const set = try xpcExecSet(a, testing.io, try envelopeFor(a,
         \\{"name":"web","mode":"container","image":"nginx:alpine","publish":[{"address":"127.0.0.1","host":18081,"container":80}],
-        \\ "volumes":[{"source":"./site","destination":"/srv","is_named":false},{"source":"store","destination":"/data","is_named":true}]}
+        \\ "volumes":[{"source":"/proj/site","destination":"/srv","is_named":false},{"source":"store","destination":"/data","is_named":true}]}
     ));
     const at = std.mem.indexOf(u8, set.start, " --spec ").? + " --spec ".len;
     const b64 = set.start[at .. std.mem.indexOfScalarPos(u8, set.start, at, ' ') orelse set.start.len];
     const json = try a.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(b64));
     try std.base64.standard.Decoder.decode(json, b64);
     const spec = try std.json.parseFromSliceLeaky(Service, a, json, .{ .ignore_unknown_fields = true });
-    try testing.expectEqualStrings("/proj/./site", spec.volumes[0].source);
+    try testing.expectEqualStrings("/proj/site", spec.volumes[0].source);
     try testing.expectEqualStrings("store", spec.volumes[1].source);
     try testing.expectEqual(18081, spec.publish[0].host);
 }

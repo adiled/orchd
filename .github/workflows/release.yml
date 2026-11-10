@@ -30,7 +30,7 @@ jobs:
       - uses: extractions/setup-just@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install orch, the parser orchd runs
-        run: cargo install the-orch --locked
+        run: cargo install the-orch --locked --version "~0.3"
       - run: just test
       - run: just dist
       - name: Pack and checksum
