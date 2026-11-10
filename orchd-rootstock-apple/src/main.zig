@@ -42,7 +42,7 @@ pub fn main(init: std.process.Init) !void {
     const wanted = init.environ_map.get("ORCHD_APPLE_MODE") orelse "";
 
     if (std.mem.eql(u8, command, "contract")) {
-        try writeOut(io, "1\n");
+        try writeOut(io, "1 2\n");
     } else if (std.mem.eql(u8, command, "check")) {
         switch (modeFrom(wanted)) {
             .cli => if (!quiet(io, &.{ "container", "ls" })) {
@@ -55,6 +55,10 @@ pub fn main(init: std.process.Init) !void {
         try cmdPrepare(arena, io);
     } else if (std.mem.eql(u8, command, "exec-set")) {
         try cmdExecSet(arena, io, modeFrom(wanted));
+    } else if (std.mem.eql(u8, command, "remove")) {
+        try cmdRemove(arena, io, modeFrom(wanted));
+    } else if (std.mem.eql(u8, command, "cli-start")) {
+        cmdCliStart(arena, io, positionals);
     } else if (std.mem.eql(u8, command, "list")) {
         try cmdList(allocator, io);
     } else if (std.mem.eql(u8, command, "stop")) {
@@ -205,18 +209,24 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const
     const id = positionals[1];
     const reference = positionals[2];
 
-    // Optional `--spec <base64>` anywhere after the image positional.
     var spec_b64: ?[]const u8 = null;
+    var definition: []const u8 = "";
+    var keep = false;
     var i: usize = 3;
     while (i < positionals.len) : (i += 1) {
-        if (std.mem.eql(u8, positionals[i], "--spec")) {
-            if (i + 1 >= positionals.len) {
-                std.debug.print("usage: orchd-rootstock-apple run <id> <image> [--spec <base64>]\n", .{});
-                std.process.exit(1);
-            }
-            spec_b64 = positionals[i + 1];
-            i += 1;
+        if (std.mem.eql(u8, positionals[i], "--keep")) {
+            keep = true;
+            continue;
         }
+        const is_spec = std.mem.eql(u8, positionals[i], "--spec");
+        const is_definition = std.mem.eql(u8, positionals[i], "--definition");
+        if (!is_spec and !is_definition) continue;
+        if (i + 1 >= positionals.len) {
+            std.debug.print("usage: orchd-rootstock-apple run <id> <image> [--spec <base64>] [--definition <hash>] [--keep]\n", .{});
+            std.process.exit(1);
+        }
+        if (is_spec) spec_b64 = positionals[i + 1] else definition = positionals[i + 1];
+        i += 1;
     }
 
     var arena_state = std.heap.ArenaAllocator.init(allocator);
@@ -247,7 +257,7 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, positionals: []const []const
         overrides = parsed.?.value;
     }
 
-    oci_mod.run(arena, allocator, io, id, reference, overrides) catch |err| {
+    oci_mod.run(arena, allocator, io, id, reference, overrides, definition, keep) catch |err| {
         std.debug.print("error: run failed ({s})\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -324,13 +334,79 @@ fn refuse(refusal: plugin.Refusal, service: types.Service) noreturn {
     std.process.exit(1);
 }
 
+fn cmdRemove(arena: std.mem.Allocator, io: std.Io, mode: plugin.Mode) !void {
+    const envelope = readEnvelope(arena, io);
+    if (plugin.isHost(envelope.service)) return;
+    const name = try std.fmt.allocPrint(arena, "{s}-{s}", .{ envelope.grove, envelope.service.name });
+    switch (mode) {
+        .cli => _ = quiet(io, &.{ "container", "delete", "--force", name }),
+        .xpc => {
+            const c = client_mod.Client.init();
+            defer c.deinit();
+            c.containerDelete(arena, name, true) catch {};
+        },
+    }
+}
+
+fn cmdCliStart(arena: std.mem.Allocator, io: std.Io, positionals: []const []const u8) noreturn {
+    const dashes = for (positionals, 0..) |p, i| {
+        if (std.mem.eql(u8, p, "--")) break i;
+    } else positionals.len;
+    if (dashes != 3 or positionals.len < dashes + 3) {
+        std.debug.print("usage: orchd-rootstock-apple cli-start <name> <definition> -- container run ...\n", .{});
+        std.process.exit(2);
+    }
+    const name = positionals[1];
+    const definition = positionals[2];
+    const run_argv = positionals[dashes + 1 ..];
+
+    if (cliKept(arena, io, name, definition)) {
+        std.debug.print("woke {s}, kept from its last run\n", .{name});
+        const err = std.process.replace(io, .{ .argv = &.{ "container", "start", "--attach", name } });
+        std.debug.print("container start {s}: {s}\n", .{ name, @errorName(err) });
+        std.process.exit(1);
+    }
+    _ = quiet(io, &.{ "container", "delete", "--force", name });
+    var argv: std.ArrayList([]const u8) = .empty;
+    argv.appendSlice(arena, run_argv[0..2]) catch std.process.exit(1);
+    const label = std.fmt.allocPrint(arena, "{s}={s}", .{ plugin.definition_label, definition }) catch std.process.exit(1);
+    argv.appendSlice(arena, &.{ "--label", label }) catch std.process.exit(1);
+    argv.appendSlice(arena, run_argv[2..]) catch std.process.exit(1);
+    const err = std.process.replace(io, .{ .argv = argv.items });
+    std.debug.print("{s} {s}: {s}\n", .{ run_argv[0], run_argv[1], @errorName(err) });
+    std.process.exit(1);
+}
+
+fn cliKept(arena: std.mem.Allocator, io: std.Io, name: []const u8, definition: []const u8) bool {
+    const out = std.process.run(arena, io, .{ .argv = &.{ "container", "inspect", name } }) catch return false;
+    if (!out.term.success()) return false;
+    const doc = std.json.parseFromSliceLeaky(std.json.Value, arena, out.stdout, .{}) catch return false;
+    const first = switch (doc) {
+        .array => |a| if (a.items.len > 0) a.items[0] else return false,
+        else => return false,
+    };
+    const config = switch (first) {
+        .object => |o| o.get("configuration") orelse return false,
+        else => return false,
+    };
+    const labels = switch (config) {
+        .object => |o| o.get("labels") orelse return false,
+        else => return false,
+    };
+    const found = switch (labels) {
+        .object => |o| o.get(plugin.definition_label) orelse return false,
+        else => return false,
+    };
+    return found == .string and std.mem.eql(u8, found.string, definition);
+}
+
 fn cmdExecSet(arena: std.mem.Allocator, io: std.Io, mode: plugin.Mode) !void {
     const envelope = readEnvelope(arena, io);
     const service = envelope.service;
     const set = if (plugin.isHost(service))
         plugin.hostExecSet(service) catch |r| refuse(r, service)
     else switch (mode) {
-        .cli => plugin.cliExecSet(arena, envelope) catch |err| switch (err) {
+        .cli => plugin.cliExecSet(arena, envelope, std.process.executablePathAlloc(io, arena) catch "orchd-rootstock-apple") catch |err| switch (err) {
             error.NoImage, error.NoRunCommand => |r| refuse(r, service),
             else => |e| return e,
         },

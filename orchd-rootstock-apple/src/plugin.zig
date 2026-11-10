@@ -63,7 +63,22 @@ pub fn volumeSource(arena: Allocator, project_dir: []const u8, vol: types.Volume
     return std.fs.path.join(arena, &.{ project_dir, vol.source });
 }
 
-pub fn cliExecSet(arena: Allocator, envelope: Envelope) (Refusal || Allocator.Error || error{WriteFailed})!types.ExecSet {
+pub const definition_label = "orchd.definition";
+
+pub fn keeps(service: types.Service) bool {
+    return !std.mem.eql(u8, service.recreate, "always");
+}
+
+pub fn definitionOf(arena: Allocator, envelope: Envelope) ![]const u8 {
+    var service = envelope.service;
+    service.recreate = "never";
+    const json = try std.json.Stringify.valueAlloc(arena, .{ .project_dir = envelope.project_dir, .service = service }, .{});
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(json, &digest, .{});
+    return std.fmt.allocPrint(arena, "{x}", .{&digest});
+}
+
+pub fn cliExecSet(arena: Allocator, envelope: Envelope, self: []const u8) (Refusal || Allocator.Error || error{WriteFailed})!types.ExecSet {
     const s = envelope.service;
     const image = s.image orelse return error.NoImage;
     const name = try std.fmt.allocPrint(arena, "{s}-{s}", .{ envelope.grove, s.name });
@@ -96,17 +111,24 @@ pub fn cliExecSet(arena: Allocator, envelope: Envelope) (Refusal || Allocator.Er
     try w.print(" {s}", .{image});
     if (s.cmd) |cmd| try w.print(" {s}", .{cmd});
 
+    const pull = try std.fmt.allocPrint(arena, "container image pull {s}", .{image});
+    const stop = try std.fmt.allocPrint(arena, "container stop {s}", .{name});
+    if (keeps(s)) return .{
+        .start = try std.fmt.allocPrint(arena, "'{s}' cli-start {s} {s} -- {s}", .{ self, name, try definitionOf(arena, envelope), start.written() }),
+        .pre_start = pull,
+        .stop = stop,
+    };
     return .{
         .start = start.written(),
-        .pre_start = try std.fmt.allocPrint(arena, "container image pull {s}", .{image}),
-        .stop = try std.fmt.allocPrint(arena, "container stop {s}", .{name}),
+        .pre_start = pull,
+        .stop = stop,
         .post_stop = try std.fmt.allocPrint(arena, "container delete --force {s}", .{name}),
     };
 }
 
 pub fn xpcExecSet(arena: Allocator, io: Io, envelope: Envelope) !types.ExecSet {
     if (envelope.service.image == null) return error.NoImage;
-    return exec_set.build(arena, io, envelope.service, envelope.grove);
+    return exec_set.build(arena, io, envelope.service, envelope.grove, try definitionOf(arena, envelope), keeps(envelope.service));
 }
 
 pub fn explain(refusal: Refusal, service: types.Service, w: *Io.Writer) Io.Writer.Error!void {
@@ -150,7 +172,9 @@ test "the cli mode spells out the whole container" {
         \\ "volumes":[{"source":"./pgdata","destination":"/data","is_named":false},{"source":"named-vol","destination":"/v","is_named":true}],
         \\ "resources":{"memory":"512M","cpus":2.0}}
     );
-    const set = try cliExecSet(a, e);
+    var always = e;
+    always.service.recreate = "always";
+    const set = try cliExecSet(a, always, "/x/self");
     try testing.expectEqualStrings(
         "container run --name orch-postgres --init --env ALPHA=1 --env FOO=bar" ++
             " --volume /proj/./pgdata:/data --volume named-vol:/v" ++
@@ -162,12 +186,12 @@ test "the cli mode spells out the whole container" {
     try testing.expectEqualStrings("container delete --force orch-postgres", set.post_stop.?);
 }
 
-test "the xpc mode drives this binary over XPC" {
+test "with RECREATE always, the xpc mode drives this binary over XPC and deletes on stop" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const set = try xpcExecSet(a, testing.io, try envelopeFor(a,
-        \\{"name":"postgres","mode":"container","image":"postgres:15"}
+        \\{"name":"postgres","mode":"container","image":"postgres:15","recreate":"always"}
     ));
     try testing.expect(std.mem.indexOf(u8, set.start, " run orch-postgres postgres:15") != null);
     try testing.expect(std.mem.indexOf(u8, set.start, " wait orch-postgres") != null);
@@ -191,7 +215,7 @@ test "a host service runs as it would bare, and a service without what it needs 
     )).service));
     try testing.expectError(error.NoImage, cliExecSet(a, try envelopeFor(a,
         \\{"name":"db","mode":"container"}
-    )));
+    ), "/x/self"));
 }
 
 test "an envelope from another contract is refused" {
@@ -200,4 +224,38 @@ test "an envelope from another contract is refused" {
     try testing.expectError(error.ContractMismatch, parseEnvelope(arena.allocator(),
         \\{"contract":2,"grove":"g","project_dir":"/p","data_dir":"/d","state_dir":"/s","service":{"name":"x","mode":"host"}}
     ));
+}
+
+test "with RECREATE never, the cli mode keeps the container and wakes it by its definition" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const e = try envelopeFor(a,
+        \\{"name":"db","mode":"container","image":"postgres:16","env":{"A":"1"}}
+    );
+    const set = try cliExecSet(a, e, "/x/self");
+    const definition = try definitionOf(a, e);
+    try testing.expectEqual(64, definition.len);
+    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "'/x/self' cli-start orch-db {s} -- container run --name orch-db --init --env A=1 postgres:16", .{definition}), set.start);
+    try testing.expectEqualStrings("container stop orch-db", set.stop.?);
+    try testing.expectEqual(null, set.post_stop);
+
+    var always = e;
+    always.service.recreate = "always";
+    try testing.expectEqualStrings(definition, try definitionOf(a, always));
+    var changed = e;
+    changed.service.image = "postgres:17";
+    try testing.expect(!std.mem.eql(u8, definition, try definitionOf(a, changed)));
+}
+
+test "with RECREATE never, the xpc mode asks run to keep, and does not delete on stop" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const set = try xpcExecSet(a, testing.io, try envelopeFor(a,
+        \\{"name":"db","mode":"container","image":"postgres:16"}
+    ));
+    try testing.expect(std.mem.indexOf(u8, set.start, " --definition ") != null);
+    try testing.expect(std.mem.indexOf(u8, set.start, " --keep && ") != null);
+    try testing.expectEqual(null, set.post_stop);
 }
