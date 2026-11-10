@@ -100,9 +100,10 @@ speaks to it.
 
 ## Take the parts
 
-orchd is one Zig package that publishes two modules: `contract` (the envelope,
-service and exec set a rootstock speaks) and `grpc` (a small gRPC client over
-nghttp2 on a unix socket, with protobuf as `grpc.pb`).
+orchd is one Zig package that publishes three modules: `contract` (the envelope,
+service and exec set a rootstock speaks), `grpc` (a small gRPC client over
+nghttp2 on a unix socket, with protobuf as `grpc.pb`), and `network` (a TCP port
+forwarder, a CNI client, and pinned network namespaces on Linux).
 
 ```sh
 zig fetch --save git+https://github.com/adiled/orchd

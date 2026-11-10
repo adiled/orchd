@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const pb = @import("grpc").pb;
+const resolv = @import("network").resolv;
 
 pub const method = struct {
     const runtime = "/runtime.v1.RuntimeService/";
@@ -31,11 +32,7 @@ fn networkMode(host_network: bool) u64 {
 
 pub const ContainerState = enum(u64) { created = 0, running = 1, exited = 2, unknown = 3, _ };
 
-pub const Dns = struct {
-    servers: []const []const u8 = &.{},
-    searches: []const []const u8 = &.{},
-    options: []const []const u8 = &.{},
-};
+pub const Dns = resolv.Dns;
 
 pub const Pod = struct {
     name: []const u8,
@@ -321,34 +318,6 @@ pub fn parseReadiness(bytes: []const u8) !Readiness {
     return out;
 }
 
-pub fn onlyLoopback(dns: Dns) bool {
-    for (dns.servers) |server| {
-        if (!std.mem.startsWith(u8, server, "127.") and !std.mem.eql(u8, server, "::1")) return false;
-    }
-    return dns.servers.len > 0;
-}
-
-pub fn parseResolvConf(arena: Allocator, content: []const u8) !Dns {
-    var servers: std.ArrayList([]const u8) = .empty;
-    var searches: std.ArrayList([]const u8) = .empty;
-    var options: std.ArrayList([]const u8) = .empty;
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        var words = std.mem.tokenizeAny(u8, line, " \t\r");
-        const key = words.next() orelse continue;
-        const into = if (std.mem.eql(u8, key, "nameserver"))
-            &servers
-        else if (std.mem.eql(u8, key, "search") or std.mem.eql(u8, key, "domain"))
-            &searches
-        else if (std.mem.eql(u8, key, "options"))
-            &options
-        else
-            continue;
-        while (words.next()) |word| try into.append(arena, word);
-    }
-    return .{ .servers = servers.items, .searches = searches.items, .options = options.items };
-}
-
 fn sub(bytes: []const u8, path: []const u32) ![]const u8 {
     var at = bytes;
     for (path) |number| at = (try find(at, number) orelse return error.Missing).asBytes();
@@ -403,12 +372,6 @@ test "a pod's status gives its IP on the pod network" {
     try response.message(1, status.bytes());
     try testing.expectEqualStrings("10.85.0.7", try parsePodIp(response.bytes()));
     try testing.expectEqualStrings("", try parsePodIp(""));
-}
-
-test "a host that resolves through a loopback stub is spotted" {
-    try testing.expect(onlyLoopback(.{ .servers = &.{"127.0.0.53"} }));
-    try testing.expect(!onlyLoopback(.{ .servers = &.{ "127.0.0.53", "10.0.0.2" } }));
-    try testing.expect(!onlyLoopback(.{}));
 }
 
 test "a container carries its argv, env, mounts, log, user and limits where CRI looks for them" {
@@ -523,13 +486,4 @@ test "pods listed by label come back as their ids, and a missing image reads as 
     var image: pb.Writer = .init(a);
     try image.message(1, try one(a, 1, "sha256:abc"));
     try testing.expect(try imagePresent(image.bytes()));
-}
-
-test "dns comes from the host's resolv.conf, as kubelet gives a pod on the host network" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const dns = try parseResolvConf(arena.allocator(), "# x\nnameserver 10.0.0.2\nnameserver 1.1.1.1\nsearch lan corp\noptions ndots:2 edns0\n");
-    try testing.expectEqualDeep(@as([]const []const u8, &.{ "10.0.0.2", "1.1.1.1" }), dns.servers);
-    try testing.expectEqualDeep(@as([]const []const u8, &.{ "lan", "corp" }), dns.searches);
-    try testing.expectEqualDeep(@as([]const []const u8, &.{ "ndots:2", "edns0" }), dns.options);
 }

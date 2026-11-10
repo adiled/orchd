@@ -2,7 +2,9 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
+const Environ = std.process.Environ;
 const grpc = @import("grpc");
+const network = @import("network");
 const cd = @import("containerd.zig");
 const image = @import("image.zig");
 const oci = @import("oci.zig");
@@ -32,8 +34,10 @@ const sigkill: u32 = 9;
 const Runner = struct {
     arena: Allocator,
     io: Io,
+    environ: *const Environ.Map,
     spec: plugin.RunSpec,
     log: *Io.Writer,
+    publisher: *?network.Publisher,
 
     fn say(r: Runner, comptime fmt: []const u8, args: anytype) void {
         r.log.print("containerd-run[{s}]: " ++ fmt ++ "\n", .{r.spec.container_id} ++ args) catch {};
@@ -114,7 +118,9 @@ const Runner = struct {
         const config = try r.readImage(conn);
         const chain = try image.chainId(a, config.diff_ids);
         const mounts = try cd.parsePrepareSnapshotResponse(a, try r.call(conn, "snapshots.prepare", cd.method.prepare_snapshot, try cd.prepareSnapshotRequest(a, r.spec.snapshotter, id, chain), .{}));
-        const spec_json = try oci.json(a, id, try r.processFor(config), r.spec.mounts, r.spec.resources);
+        const resolv = if (r.spec.host_network) try network.resolv.forHostNetwork(a, r.io) else try network.resolv.forOwnNetwork(a, r.io);
+        const net: oci.Net = .{ .netns = if (r.spec.host_network) null else try r.netnsPath(), .resolv = resolv.path };
+        const spec_json = try oci.json(a, id, try r.processFor(config), r.spec.mounts, r.spec.resources, net);
         const labels: []const [2][]const u8 = &.{.{ definition_label, r.spec.definition }};
         _ = try r.call(conn, "containers.create", cd.method.create_container, try cd.createContainerRequest(a, id, r.spec.image, spec_json, r.spec.snapshotter, r.spec.no_pivot_root, labels), .{});
         return mounts;
@@ -148,8 +154,47 @@ const Runner = struct {
         _ = try r.call(conn, "tasks.start", cd.method.start_task, try cd.startRequest(a, id), .{});
     }
 
+    fn netnsPath(r: Runner) ![:0]const u8 {
+        return network.netns.pathFor(r.arena, r.spec.container_id);
+    }
+
+    fn publish(r: Runner) !void {
+        if (r.spec.ports.len == 0) return;
+        var failure: ?network.Publisher.Failure = null;
+        r.publisher.* = network.Publisher.bind(r.arena, r.io, r.spec.ports, &failure) catch |err| {
+            if (failure) |f| r.say("PUBLISH {s}{s}{d}:{d}: {t}", .{ f.port.address, if (f.port.address.len > 0) ":" else "", f.port.host, f.port.container, f.err }) else r.say("PUBLISH: {t}", .{err});
+            return err;
+        };
+    }
+
+    fn unpublish(r: Runner) void {
+        if (r.publisher.*) |*p| p.close(r.arena);
+        r.publisher.* = null;
+    }
+
+    fn joinNetwork(r: Runner) ![]const u8 {
+        const path = try r.netnsPath();
+        r.leaveNetwork();
+        network.netns.create(path) catch |err| {
+            r.say("cannot make the tree's network namespace at {s}: {t}", .{ path, err });
+            return err;
+        };
+        return network.cni.add(r.arena, r.io, r.environ, r.spec.cni_dirs, .{ .container_id = r.spec.container_id, .netns = path }) catch |err| {
+            r.say("cni add on {s} (plugins in {s}): {t}", .{ network.cni.subnet, r.spec.cni_dirs, err });
+            return err;
+        };
+    }
+
+    fn leaveNetwork(r: Runner) void {
+        if (r.spec.host_network) return;
+        const path = r.netnsPath() catch return;
+        network.cni.del(r.arena, r.io, r.environ, r.spec.cni_dirs, .{ .container_id = r.spec.container_id, .netns = path });
+        network.netns.remove(path);
+    }
+
     fn keep(r: Runner) !u8 {
         const a = r.arena;
+        try r.publish();
         const conn = try r.connect();
         defer conn.close();
         const mounts = switch (r.spec.recreate) {
@@ -166,8 +211,10 @@ const Runner = struct {
                 break :blk try r.plant(conn);
             },
         };
+        const ip = if (r.spec.host_network) "" else try r.joinNetwork();
         try r.startTask(conn, mounts);
-        r.say("started {s}", .{r.spec.image});
+        if (r.publisher.*) |*p| try p.serve(ip);
+        r.say("started {s}{s}{s}", .{ r.spec.image, if (ip.len > 0) " at " else "", ip });
         const waited = try r.call(conn, "tasks.wait", cd.method.wait_task, try cd.waitRequest(a, r.spec.container_id), .{ .interrupt = &stop_requested });
         return @truncate(try cd.parseWaitResponse(waited));
     }
@@ -206,6 +253,7 @@ const Runner = struct {
             }
         }
         if (cd.deleteTaskRequest(a, id)) |req| _ = conn.*.unary(cd.method.delete_task, req, .{ .timeout = .fromSeconds(10) }) catch {} else |_| {}
+        r.leaveNetwork();
     }
 
     fn clearAll(r: Runner) void {
@@ -236,10 +284,13 @@ fn copy(path: [:0]const u8, to: posix.fd_t) void {
     }
 }
 
-pub fn run(arena: Allocator, io: Io, spec: plugin.RunSpec, log: *Io.Writer) u8 {
+pub fn run(arena: Allocator, io: Io, environ: *const Environ.Map, spec: plugin.RunSpec, log: *Io.Writer) u8 {
     listen();
-    const r: Runner = .{ .arena = arena, .io = io, .spec = spec, .log = log };
+    var publisher: ?network.Publisher = null;
+    const r: Runner = .{ .arena = arena, .io = io, .environ = environ, .spec = spec, .log = log, .publisher = &publisher };
+    defer r.unpublish();
     const code = r.keep() catch |err| {
+        r.unpublish();
         if (err == error.Interrupted) {
             const sig = stop_signal.load(.seq_cst);
             r.say("signal {d}, stopping", .{sig});
@@ -253,8 +304,9 @@ pub fn run(arena: Allocator, io: Io, spec: plugin.RunSpec, log: *Io.Writer) u8 {
     return code;
 }
 
-pub fn remove(arena: Allocator, io: Io, spec: plugin.RunSpec, log: *Io.Writer) void {
-    const r: Runner = .{ .arena = arena, .io = io, .spec = spec, .log = log };
+pub fn remove(arena: Allocator, io: Io, environ: *const Environ.Map, spec: plugin.RunSpec, log: *Io.Writer) void {
+    var publisher: ?network.Publisher = null;
+    const r: Runner = .{ .arena = arena, .io = io, .environ = environ, .spec = spec, .log = log, .publisher = &publisher };
     r.clearAll();
 }
 

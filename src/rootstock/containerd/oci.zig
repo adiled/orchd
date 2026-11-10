@@ -41,8 +41,14 @@ const base_mounts = [_]Mount{
     .{ .destination = "/dev/shm", .type = "tmpfs", .source = "shm", .options = &.{ "nosuid", "noexec", "nodev", "mode=1777", "size=65536k" } },
     .{ .destination = "/dev/mqueue", .type = "mqueue", .source = "mqueue", .options = &.{ "nosuid", "noexec", "nodev" } },
     .{ .destination = "/sys", .type = "sysfs", .source = "sysfs", .options = &.{ "nosuid", "noexec", "nodev", "ro" } },
-    .{ .destination = "/etc/resolv.conf", .type = "bind", .source = "/etc/resolv.conf", .options = &.{ "rbind", "ro" } },
 };
+
+pub const Net = struct {
+    netns: ?[]const u8 = null,
+    resolv: []const u8 = "/etc/resolv.conf",
+};
+
+const Namespace = struct { type: []const u8, path: ?[]const u8 = null };
 
 const Rlimit = struct { type: []const u8, hard: u64, soft: u64 };
 
@@ -62,7 +68,7 @@ const Spec = struct {
     hostname: []const u8,
     mounts: []const Mount,
     linux: struct {
-        namespaces: []const struct { type: []const u8 },
+        namespaces: []const Namespace,
         maskedPaths: []const []const u8,
         readonlyPaths: []const []const u8,
         resources: ?struct {
@@ -74,7 +80,7 @@ const Spec = struct {
     },
 };
 
-pub fn json(arena: Allocator, id: []const u8, process: Process, mounts: []const BindMount, res: Resources) ![]const u8 {
+pub fn json(arena: Allocator, id: []const u8, process: Process, mounts: []const BindMount, res: Resources, net: Net) ![]const u8 {
     var rlimits: std.ArrayList(Rlimit) = .empty;
     const nofile = res.nofile orelse 1024;
     try rlimits.append(arena, .{ .type = "RLIMIT_NOFILE", .hard = nofile, .soft = nofile });
@@ -82,6 +88,10 @@ pub fn json(arena: Allocator, id: []const u8, process: Process, mounts: []const 
 
     var all_mounts: std.ArrayList(Mount) = .empty;
     try all_mounts.appendSlice(arena, &base_mounts);
+    try all_mounts.append(arena, .{ .destination = "/etc/resolv.conf", .type = "bind", .source = net.resolv, .options = &.{ "rbind", "ro" } });
+    var namespaces: std.ArrayList(Namespace) = .empty;
+    try namespaces.appendSlice(arena, &.{ .{ .type = "pid" }, .{ .type = "ipc" }, .{ .type = "uts" }, .{ .type = "mount" } });
+    if (net.netns) |path| try namespaces.append(arena, .{ .type = "network", .path = path });
     for (mounts) |m| try all_mounts.append(arena, .{ .destination = m.destination, .type = "bind", .source = m.source, .options = &.{ "rbind", "rw" } });
 
     var spec: Spec = .{
@@ -96,7 +106,7 @@ pub fn json(arena: Allocator, id: []const u8, process: Process, mounts: []const 
         .hostname = id,
         .mounts = all_mounts.items,
         .linux = .{
-            .namespaces = &.{ .{ .type = "pid" }, .{ .type = "ipc" }, .{ .type = "uts" }, .{ .type = "mount" } },
+            .namespaces = namespaces.items,
             .maskedPaths = &.{ "/proc/kcore", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", "/sys/firmware" },
             .readonlyPaths = &.{ "/proc/asound", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger" },
         },
@@ -112,11 +122,11 @@ pub fn json(arena: Allocator, id: []const u8, process: Process, mounts: []const 
     return std.json.Stringify.valueAlloc(arena, spec, .{ .emit_null_optional_fields = false });
 }
 
-test "the spec runs the process in the host network, with its mounts and limits" {
+test "with no network given, the spec runs the process in the host network, with its mounts and limits" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const text = try json(a, "hum-web", .{ .args = &.{ "nginx", "-g", "daemon off;" }, .env = &.{"A=1"}, .cwd = "", .uid = 101, .gid = 101 }, &.{.{ .source = "/data/web", .destination = "/srv" }}, .{ .memory_bytes = 1 << 30, .cpu_quota_us = 150_000, .nproc = 64 });
+    const text = try json(a, "hum-web", .{ .args = &.{ "nginx", "-g", "daemon off;" }, .env = &.{"A=1"}, .cwd = "", .uid = 101, .gid = 101 }, &.{.{ .source = "/data/web", .destination = "/srv" }}, .{ .memory_bytes = 1 << 30, .cpu_quota_us = 150_000, .nproc = 64 }, .{});
     const doc = try std.json.parseFromSliceLeaky(std.json.Value, a, text, .{});
     const process = doc.object.get("process").?.object;
     try testing.expectEqualStrings("daemon off;", process.get("args").?.array.items[2].string);
@@ -137,7 +147,25 @@ test "the spec runs the process in the host network, with its mounts and limits"
 test "with no limits there is no resources block" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const text = try json(arena.allocator(), "x", .{ .args = &.{"true"}, .env = &.{}, .cwd = "/app" }, &.{}, .{});
+    const text = try json(arena.allocator(), "x", .{ .args = &.{"true"}, .env = &.{}, .cwd = "/app" }, &.{}, .{}, .{});
     try testing.expect(std.mem.indexOf(u8, text, "\"resources\"") == null);
     try testing.expect(std.mem.indexOf(u8, text, "\"cwd\":\"/app\"") != null);
+}
+
+test "a tree with its own network joins its pinned namespace, and resolves through the file it is given" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const text = try json(a, "hum-web", .{ .args = &.{"nginx"}, .env = &.{}, .cwd = "" }, &.{}, .{}, .{ .netns = "/run/orchd/netns/hum-web", .resolv = "/run/systemd/resolve/resolv.conf" });
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, a, text, .{});
+    const namespaces = doc.object.get("linux").?.object.get("namespaces").?.array.items;
+    const last = namespaces[namespaces.len - 1].object;
+    try testing.expectEqualStrings("network", last.get("type").?.string);
+    try testing.expectEqualStrings("/run/orchd/netns/hum-web", last.get("path").?.string);
+    try testing.expect(namespaces[0].object.get("path") == null);
+    var resolv: ?[]const u8 = null;
+    for (doc.object.get("mounts").?.array.items) |m| {
+        if (std.mem.eql(u8, m.object.get("destination").?.string, "/etc/resolv.conf")) resolv = m.object.get("source").?.string;
+    }
+    try testing.expectEqualStrings("/run/systemd/resolve/resolv.conf", resolv.?);
 }
